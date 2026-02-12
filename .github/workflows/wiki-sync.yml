@@ -1,0 +1,49 @@
+name: Sync Wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/schema-guide.md'
+      - 'docs/api-reference.md'
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  sync-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main repo
+        uses: actions/checkout@v4
+
+      - name: Generate wiki pages
+        shell: pwsh
+        run: ./tools/wiki-sync.ps1
+
+      - name: Push to wiki
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Clone the wiki repo
+          git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.wiki.git" wiki-repo
+
+          # Clear existing wiki content (except .git)
+          find wiki-repo -maxdepth 1 -not -name '.git' -not -name 'wiki-repo' -not -path 'wiki-repo' -delete 2>/dev/null || true
+
+          # Copy generated pages into wiki repo
+          cp wiki-out/*.md wiki-repo/
+
+          # Commit and push
+          cd wiki-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No wiki changes to commit."
+          else
+            git commit -m "Sync wiki from docs/ ($(date -u +%Y-%m-%d))"
+            git push
+            echo "Wiki updated successfully."
+          fi
