@@ -2,22 +2,23 @@ namespace Hexagon.Characters;
 
 /// <summary>
 /// Handles player connections and spawning. Attach this to a GameObject in your scene
-/// alongside HexagonFramework. Assign a PlayerPrefab with at least a HexPlayerComponent.
+/// alongside HexagonFramework.
 ///
 /// When a player connects:
-/// 1. Spawns the PlayerPrefab for them
+/// 1. Spawns the PlayerPrefab (or a default first-person player if no prefab is assigned)
 /// 2. Loads their character list
 /// 3. Fires IPlayerConnectedListener
-/// 4. Auto-loads their last character (or first available)
+/// 4. Auto-loads their last character (or sends character list to client)
 ///
-/// Schema devs can implement IPlayerConnectedListener to show a character selection
-/// UI instead of auto-loading.
+/// When no PlayerPrefab is set, the default player includes PlayerController (movement,
+/// camera, interaction), a citizen model with Dresser, configured for first-person RP.
 /// </summary>
 public sealed class HexGameManager : Component, Component.INetworkListener
 {
 	/// <summary>
-	/// Prefab to spawn for each connecting player. Must have a HexPlayerComponent
-	/// (one will be added automatically if missing).
+	/// Optional prefab to spawn for each connecting player. If null, a default first-person
+	/// player is created with PlayerController, citizen model, and Dresser.
+	/// If set, must have a HexPlayerComponent (one will be added automatically if missing).
 	/// </summary>
 	[Property] public GameObject PlayerPrefab { get; set; }
 
@@ -68,6 +69,7 @@ public sealed class HexGameManager : Component, Component.INetworkListener
 		{
 			playerGo = new GameObject( true, $"Player - {connection.DisplayName}" );
 			playerGo.WorldPosition = spawnPos;
+			HexPlayerSetup.BuildDefaultPlayer( playerGo );
 		}
 
 		// Ensure HexPlayerComponent exists

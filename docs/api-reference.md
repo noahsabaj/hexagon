@@ -200,30 +200,6 @@ IReadOnlySet<string> GetDirtyFields()
 | `Save` | Save this character to the database if dirty. |
 | `GetDirtyFields` | Get the list of fields that have changed since last save. |
 
-### HexGameManager (sealed) : Component, Component.INetworkListener
-
-Handles player connections and spawning. Attach this to a GameObject in your scene alongside HexagonFramework. Assign a PlayerPrefab with at least a HexPlayerComponent. When a player connects: 1. Spawns the PlayerPrefab for them 2. Loads their character list 3. Fires IPlayerConnectedListener 4. Auto-loads their last character (or first available) Schema devs can implement IPlayerConnectedListener to show a character selection UI instead of auto-loading.
-
-```csharp
-[Property] GameObject PlayerPrefab { get; set; }
-[Property] Vector3 SpawnPosition { get; set; }
-readonly Dictionary<ulong, HexPlayerComponent> Players
-static HexPlayerComponent GetPlayer( ulong steamId )
-static HexPlayerComponent GetPlayer( Connection connection )
-void OnActive( Connection connection )
-void OnDisconnected( Connection connection )
-```
-
-| Member | Description |
-|--------|-------------|
-| `PlayerPrefab` | Prefab to spawn for each connecting player. Must have a HexPlayerComponent (one will be added automatically if missing). |
-| `SpawnPosition` | World position to spawn players at. Override via IPlayerSpawnListener. |
-| `Players` | All currently connected players. |
-| `GetPlayer` | Get a player component by Steam ID. |
-| `GetPlayer` | Get a player component by Connection. |
-| `OnActive` |  |
-| `OnDisconnected` |  |
-
 ### HexCharacterData (abstract)
 
 Base class for character data. Schema devs extend this with [CharVar] properties to define their character fields. Usage: public class MyCharacter : HexCharacterData { [CharVar(Default = "John Doe", MinLength = 3, MaxLength = 64, Order = 1)] public string Name { get; set; } [CharVar(Default = "A mysterious stranger.", MinLength = 16, MaxLength = 512, Order = 2)] public string Description { get; set; } [CharVar(Order = 3)] public string Model { get; set; } [CharVar(Local = true)] public int Money { get; set; } } The framework auto-discovers the concrete subclass at startup and uses it for all character creation, persistence, and networking.
@@ -367,6 +343,56 @@ static HexCharacterData CreateDefaultData()
 | `ValidateCharacterData` | Validate character data against CharVar constraints. Returns null if valid, or an error message string if invalid. |
 | `SaveAll` | Save all active characters that have dirty data. |
 | `CreateDefaultData` | Create an instance of the schema's character data type with defaults applied. |
+
+### HexPlayerSetup (static)
+
+Static helper that builds a default player GameObject when no custom PlayerPrefab is assigned. Adds PlayerController (movement, camera, interaction), citizen model, and Dresser.
+
+```csharp
+static void BuildDefaultPlayer( GameObject playerGo )
+static void ApplyCharacterToPlayer( HexPlayerComponent player, HexCharacter character )
+```
+
+| Member | Description |
+|--------|-------------|
+| `BuildDefaultPlayer` | Configure a bare GameObject as a fully functional first-person player. Adds PlayerController, SkinnedModelRenderer (citizen), and Dresser. |
+| `ApplyCharacterToPlayer` | Apply character-specific data to an existing player (model, speeds). Called when a character loads or changes. |
+
+### HexModelHandler (sealed) : Component, ICharacterLoadedListener
+
+Listens for character load events and applies character model/speeds to the player. Added to the HexagonFramework GameObject during initialization.
+
+```csharp
+void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
+```
+
+| Member | Description |
+|--------|-------------|
+| `OnCharacterLoaded` | When a character loads, apply their model and speed settings. |
+
+### HexGameManager (sealed) : Component, Component.INetworkListener
+
+Handles player connections and spawning. Attach this to a GameObject in your scene alongside HexagonFramework. When a player connects: 1. Spawns the PlayerPrefab (or a default first-person player if no prefab is assigned) 2. Loads their character list 3. Fires IPlayerConnectedListener 4. Auto-loads their last character (or sends character list to client) When no PlayerPrefab is set, the default player includes PlayerController (movement, camera, interaction), a citizen model with Dresser, configured for first-person RP.
+
+```csharp
+[Property] GameObject PlayerPrefab { get; set; }
+[Property] Vector3 SpawnPosition { get; set; }
+readonly Dictionary<ulong, HexPlayerComponent> Players
+static HexPlayerComponent GetPlayer( ulong steamId )
+static HexPlayerComponent GetPlayer( Connection connection )
+void OnActive( Connection connection )
+void OnDisconnected( Connection connection )
+```
+
+| Member | Description |
+|--------|-------------|
+| `PlayerPrefab` | Optional prefab to spawn for each connecting player. If null, a default first-person player is created with PlayerController, citizen model, and Dresser. If set, must have a HexPlayerComponent (one will be added automatically if missing). |
+| `SpawnPosition` | World position to spawn players at. Override via IPlayerSpawnListener. |
+| `Players` | All currently connected players. |
+| `GetPlayer` | Get a player component by Steam ID. |
+| `GetPlayer` | Get a player component by Connection. |
+| `OnActive` |  |
+| `OnDisconnected` |  |
 
 ---
 
@@ -748,6 +774,56 @@ static void Unload( string inventoryId )
 | `SaveAll` | Save all dirty inventories and their items. |
 | `Unload` | Unload an inventory from memory (e.g. when a character disconnects). Saves first. |
 
+### HexInventory
+
+A grid-based inventory. Items occupy Width x Height cells at specific (X, Y) positions. Supports receiver-based networking - only players who should see this inventory receive its contents. Inventories are persisted to the database and restored when characters load.
+
+```csharp
+string Id { get; set; }
+int Width { get; set; }
+int Height { get; set; }
+string OwnerId { get; set; }
+string Type { get; set; }
+List<string> ItemIds { get; set; }
+bool CanItemFit( int x, int y, int w, int h, string excludeItemId )
+bool AddAt( Items.ItemInstance item, int x, int y )
+bool Add( Items.ItemInstance item )
+bool Remove( string itemId )
+bool Move( string itemId, int newX, int newY )
+bool Transfer( string itemId, HexInventory target, int? targetX, int? targetY )
+bool HasItem( string definitionId )
+int CountItem( string definitionId )
+bool IsFull
+int ItemCount
+void AddReceiver( Connection conn )
+void RemoveReceiver( Connection conn )
+IReadOnlySet<Connection> GetReceivers()
+void Save()
+```
+
+| Member | Description |
+|--------|-------------|
+| `Id` | Unique database ID for this inventory. |
+| `Width` | Grid width in cells. |
+| `Height` | Grid height in cells. |
+| `OwnerId` | The character ID that owns this inventory. Empty for world containers. |
+| `Type` | Inventory type identifier (e.g. "main", "bag", "container"). |
+| `ItemIds` | IDs of items in this inventory (for persistence). |
+| `CanItemFit` | Check if an item of given size can fit at position (x, y). |
+| `AddAt` | Add an item instance to this inventory at a specific position. Returns true if successful. |
+| `Add` | Add an item instance to the first available slot. Returns true if successful. |
+| `Remove` | Remove an item from this inventory. |
+| `Move` | Move an item within this inventory to a new position. |
+| `Transfer` | Transfer an item from this inventory to another. |
+| `HasItem` | Check if this inventory has an item with the given definition ID. |
+| `CountItem` | Count items with the given definition ID. |
+| `IsFull` | Check if the inventory is full (no 1x1 slot available). |
+| `ItemCount` | Number of items in the inventory. |
+| `AddReceiver` | Add a player as a receiver of this inventory's contents. They will receive the full inventory state. |
+| `RemoveReceiver` | Remove a player from this inventory's receivers. |
+| `GetReceivers` | Get all current receivers. |
+| `Save` | Save this inventory's metadata to the database. |
+
 ### InventorySnapshot
 
 Snapshot of an inventory's state for client-side caching.
@@ -827,56 +903,6 @@ void ReceiveVendorResult( bool success, string message )
 | `RequestUseItem` | Client requests to use an item from an inventory. |
 | `RequestBuyItem` | Client requests to buy an item from a vendor. |
 | `RequestSellItem` | Client requests to sell an item to a vendor. |
-
-### HexInventory
-
-A grid-based inventory. Items occupy Width x Height cells at specific (X, Y) positions. Supports receiver-based networking - only players who should see this inventory receive its contents. Inventories are persisted to the database and restored when characters load.
-
-```csharp
-string Id { get; set; }
-int Width { get; set; }
-int Height { get; set; }
-string OwnerId { get; set; }
-string Type { get; set; }
-List<string> ItemIds { get; set; }
-bool CanItemFit( int x, int y, int w, int h, string excludeItemId )
-bool AddAt( Items.ItemInstance item, int x, int y )
-bool Add( Items.ItemInstance item )
-bool Remove( string itemId )
-bool Move( string itemId, int newX, int newY )
-bool Transfer( string itemId, HexInventory target, int? targetX, int? targetY )
-bool HasItem( string definitionId )
-int CountItem( string definitionId )
-bool IsFull
-int ItemCount
-void AddReceiver( Connection conn )
-void RemoveReceiver( Connection conn )
-IReadOnlySet<Connection> GetReceivers()
-void Save()
-```
-
-| Member | Description |
-|--------|-------------|
-| `Id` | Unique database ID for this inventory. |
-| `Width` | Grid width in cells. |
-| `Height` | Grid height in cells. |
-| `OwnerId` | The character ID that owns this inventory. Empty for world containers. |
-| `Type` | Inventory type identifier (e.g. "main", "bag", "container"). |
-| `ItemIds` | IDs of items in this inventory (for persistence). |
-| `CanItemFit` | Check if an item of given size can fit at position (x, y). |
-| `AddAt` | Add an item instance to this inventory at a specific position. Returns true if successful. |
-| `Add` | Add an item instance to the first available slot. Returns true if successful. |
-| `Remove` | Remove an item from this inventory. |
-| `Move` | Move an item within this inventory to a new position. |
-| `Transfer` | Transfer an item from this inventory to another. |
-| `HasItem` | Check if this inventory has an item with the given definition ID. |
-| `CountItem` | Count items with the given definition ID. |
-| `IsFull` | Check if the inventory is full (no 1x1 slot available). |
-| `ItemCount` | Number of items in the inventory. |
-| `AddReceiver` | Add a player as a receiver of this inventory's contents. They will receive the full inventory state. |
-| `RemoveReceiver` | Remove a player from this inventory's receivers. |
-| `GetReceivers` | Get all current receivers. |
-| `Save` | Save this inventory's metadata to the database. |
 
 ---
 
@@ -1669,6 +1695,18 @@ static HexPlayerComponent GetLocalPlayer()
 | `OnCharacterLoaded` |  |
 | `OnCharacterUnloaded` |  |
 | `GetLocalPlayer` | Get the local player's HexPlayerComponent. |
+
+### HexUISetup (static)
+
+Static helper that auto-creates the full Hexagon UI hierarchy if not already present. Creates a ScreenPanel root with HexUIManager and all 9 default panels.
+
+```csharp
+static void EnsureUI( Scene scene )
+```
+
+| Member | Description |
+|--------|-------------|
+| `EnsureUI` | Ensure HexUIManager and all default panels exist in the scene. If a HexUIManager is already present, this is a no-op. |
 
 ---
 

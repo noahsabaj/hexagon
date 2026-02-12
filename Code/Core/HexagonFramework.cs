@@ -60,6 +60,10 @@ public sealed class HexagonFramework : Component
 		// Phase 6 - UI Bridge
 		GameObject.GetOrAddComponent<Inventory.HexInventoryComponent>();
 
+		// Phase 7 - Auto-setup
+		UI.HexUISetup.EnsureUI( Scene );
+		GameObject.GetOrAddComponent<Characters.HexModelHandler>();
+
 		IsInitialized = true;
 		HexEvents.Fire<IFrameworkInitListener>( x => x.OnFrameworkInit() );
 

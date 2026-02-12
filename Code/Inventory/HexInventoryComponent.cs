@@ -63,6 +63,7 @@ public sealed class HexInventoryComponent : Component
 	/// </summary>
 	public InventorySnapshot GetClientInventory( string id )
 	{
+		if ( string.IsNullOrEmpty( id ) ) return null;
 		return _clientInventories.GetValueOrDefault( id );
 	}
 
