@@ -315,8 +315,9 @@ Write-Host "  Generated: _Sidebar.md"
 # ============================================================
 
 $footerContent = @"
----
-[Hexagon](https://github.com/noahsabaj/hexagon) -- Roleplay framework for s&box | [Report Issue](https://github.com/noahsabaj/hexagon/issues) | API reference is auto-generated from source code
+<p align="center">
+<a href="https://github.com/noahsabaj/hexagon">Hexagon</a> | <a href="https://github.com/noahsabaj/hexagon/issues">Report Issue</a> | API docs auto-generated from source
+</p>
 "@
 
 $footerContent | Out-File -FilePath (Join-Path $OutDir "_Footer.md") -Encoding UTF8
