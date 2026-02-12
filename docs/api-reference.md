@@ -48,20 +48,6 @@ static T Reduce<TListener, T>( T initial, Func<TListener, T, T> reducer )
 | `CanAll` | Fires a Can-style permission hook. All listeners must return true for the action to proceed. If any listener returns false, the action is blocked. |
 | `Reduce` | Fires a hook that collects a value, passing it through each listener in sequence. Each listener can modify the value before passing it to the next. |
 
-### HexagonFramework (sealed) : Component
-
-The core bootstrap component for the Hexagon roleplay framework. Attach this to a persistent GameObject in your scene to initialize all systems.
-
-```csharp
-static HexagonFramework Instance { get; set; }
-static bool IsInitialized { get; set; }
-```
-
-| Member | Description |
-|--------|-------------|
-| `Instance` |  |
-| `IsInitialized` | Whether the framework has finished initialization. |
-
 ### IHexPlugin (interface)
 
 Interface for Hexagon plugins. Implement this alongside [HexPlugin] attribute to create a plugin that the framework auto-discovers and loads.
@@ -115,6 +101,20 @@ int Priority { get; set; }
 TypeDescription Type { get; set; }
 IHexPlugin Instance { get; set; }
 ```
+
+### HexagonFramework (sealed) : Component
+
+The core bootstrap component for the Hexagon roleplay framework. Attach this to a persistent GameObject in your scene to initialize all systems.
+
+```csharp
+static HexagonFramework Instance { get; set; }
+static bool IsInitialized { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `Instance` |  |
+| `IsInitialized` | Whether the framework has finished initialization. |
 
 ---
 
@@ -722,56 +722,6 @@ override void OnRemoved( ItemInstance item )
 
 ## Hexagon.Inventory
 
-### HexInventory
-
-A grid-based inventory. Items occupy Width x Height cells at specific (X, Y) positions. Supports receiver-based networking - only players who should see this inventory receive its contents. Inventories are persisted to the database and restored when characters load.
-
-```csharp
-string Id { get; set; }
-int Width { get; set; }
-int Height { get; set; }
-string OwnerId { get; set; }
-string Type { get; set; }
-List<string> ItemIds { get; set; }
-bool CanItemFit( int x, int y, int w, int h, string excludeItemId )
-bool AddAt( Items.ItemInstance item, int x, int y )
-bool Add( Items.ItemInstance item )
-bool Remove( string itemId )
-bool Move( string itemId, int newX, int newY )
-bool Transfer( string itemId, HexInventory target, int? targetX, int? targetY )
-bool HasItem( string definitionId )
-int CountItem( string definitionId )
-bool IsFull
-int ItemCount
-void AddReceiver( Connection conn )
-void RemoveReceiver( Connection conn )
-IReadOnlySet<Connection> GetReceivers()
-void Save()
-```
-
-| Member | Description |
-|--------|-------------|
-| `Id` | Unique database ID for this inventory. |
-| `Width` | Grid width in cells. |
-| `Height` | Grid height in cells. |
-| `OwnerId` | The character ID that owns this inventory. Empty for world containers. |
-| `Type` | Inventory type identifier (e.g. "main", "bag", "container"). |
-| `ItemIds` | IDs of items in this inventory (for persistence). |
-| `CanItemFit` | Check if an item of given size can fit at position (x, y). |
-| `AddAt` | Add an item instance to this inventory at a specific position. Returns true if successful. |
-| `Add` | Add an item instance to the first available slot. Returns true if successful. |
-| `Remove` | Remove an item from this inventory. |
-| `Move` | Move an item within this inventory to a new position. |
-| `Transfer` | Transfer an item from this inventory to another. |
-| `HasItem` | Check if this inventory has an item with the given definition ID. |
-| `CountItem` | Count items with the given definition ID. |
-| `IsFull` | Check if the inventory is full (no 1x1 slot available). |
-| `ItemCount` | Number of items in the inventory. |
-| `AddReceiver` | Add a player as a receiver of this inventory's contents. They will receive the full inventory state. |
-| `RemoveReceiver` | Remove a player from this inventory's receivers. |
-| `GetReceivers` | Get all current receivers. |
-| `Save` | Save this inventory's metadata to the database. |
-
 ### InventoryManager (static)
 
 Manages inventory lifecycle: creation, restoration, persistence, and dirty tracking.
@@ -877,6 +827,56 @@ void ReceiveVendorResult( bool success, string message )
 | `RequestUseItem` | Client requests to use an item from an inventory. |
 | `RequestBuyItem` | Client requests to buy an item from a vendor. |
 | `RequestSellItem` | Client requests to sell an item to a vendor. |
+
+### HexInventory
+
+A grid-based inventory. Items occupy Width x Height cells at specific (X, Y) positions. Supports receiver-based networking - only players who should see this inventory receive its contents. Inventories are persisted to the database and restored when characters load.
+
+```csharp
+string Id { get; set; }
+int Width { get; set; }
+int Height { get; set; }
+string OwnerId { get; set; }
+string Type { get; set; }
+List<string> ItemIds { get; set; }
+bool CanItemFit( int x, int y, int w, int h, string excludeItemId )
+bool AddAt( Items.ItemInstance item, int x, int y )
+bool Add( Items.ItemInstance item )
+bool Remove( string itemId )
+bool Move( string itemId, int newX, int newY )
+bool Transfer( string itemId, HexInventory target, int? targetX, int? targetY )
+bool HasItem( string definitionId )
+int CountItem( string definitionId )
+bool IsFull
+int ItemCount
+void AddReceiver( Connection conn )
+void RemoveReceiver( Connection conn )
+IReadOnlySet<Connection> GetReceivers()
+void Save()
+```
+
+| Member | Description |
+|--------|-------------|
+| `Id` | Unique database ID for this inventory. |
+| `Width` | Grid width in cells. |
+| `Height` | Grid height in cells. |
+| `OwnerId` | The character ID that owns this inventory. Empty for world containers. |
+| `Type` | Inventory type identifier (e.g. "main", "bag", "container"). |
+| `ItemIds` | IDs of items in this inventory (for persistence). |
+| `CanItemFit` | Check if an item of given size can fit at position (x, y). |
+| `AddAt` | Add an item instance to this inventory at a specific position. Returns true if successful. |
+| `Add` | Add an item instance to the first available slot. Returns true if successful. |
+| `Remove` | Remove an item from this inventory. |
+| `Move` | Move an item within this inventory to a new position. |
+| `Transfer` | Transfer an item from this inventory to another. |
+| `HasItem` | Check if this inventory has an item with the given definition ID. |
+| `CountItem` | Count items with the given definition ID. |
+| `IsFull` | Check if the inventory is full (no 1x1 slot available). |
+| `ItemCount` | Number of items in the inventory. |
+| `AddReceiver` | Add a player as a receiver of this inventory's contents. They will receive the full inventory state. |
+| `RemoveReceiver` | Remove a player from this inventory's receivers. |
+| `GetReceivers` | Get all current receivers. |
+| `Save` | Save this inventory's metadata to the database. |
 
 ---
 

@@ -15,7 +15,7 @@ public sealed class HexagonFramework : Component
 
 	protected override void OnStart()
 	{
-		if ( Instance != null && Instance != this )
+		if ( Instance != null && Instance.IsValid() && Instance != this )
 		{
 			Log.Warning( "HexagonFramework: Duplicate instance detected, destroying." );
 			GameObject.Destroy();

@@ -21,7 +21,8 @@
 					<label>@varInfo.Name</label>
 					@if ( varInfo.PropertyType == typeof( string ) )
 					{
-						<TextEntry class="hex-input" Value:bind="@GetStringBinding( varInfo.Name )"
+						<TextEntry class="hex-input" Value="@GetStringValue( varInfo.Name )"
+								   OnTextEdited="@((string val) => SetStringValue( varInfo.Name, val ))"
 								   Placeholder="@GetPlaceholder( varInfo )" />
 						@if ( varInfo.Attribute.MaxLength > 0 )
 						{
@@ -162,14 +163,15 @@
 			SelectedClass = classes[0].UniqueId;
 	}
 
-	private string GetStringBinding( string name )
+	private string GetStringValue( string name )
 	{
 		return _fieldValues.GetValueOrDefault( name, "" );
 	}
 
-	private string GetStringValue( string name )
+	private void SetStringValue( string name, string value )
 	{
-		return _fieldValues.GetValueOrDefault( name, "" );
+		_fieldValues[name] = value;
+		StateHasChanged();
 	}
 
 	private string GetPlaceholder( CharVarInfo varInfo )

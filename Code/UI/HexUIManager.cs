@@ -163,11 +163,11 @@ public sealed class HexUIManager : Component, ICharacterLoadedListener, ICharact
 		// In character select/create, always show cursor
 		if ( State == UIState.CharacterSelect || State == UIState.CharacterCreate || State == UIState.Dead )
 		{
-			Mouse.Visible = true;
+			Mouse.Visibility = MouseVisibility.Visible;
 			return;
 		}
 
-		Mouse.Visible = anyOpen;
+		Mouse.Visibility = anyOpen ? MouseVisibility.Visible : MouseVisibility.Auto;
 	}
 
 	private bool HasOpenOverlayPanel()

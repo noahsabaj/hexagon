@@ -1,3 +1,5 @@
+using Hexagon.Items.Bases;
+
 namespace Hexagon.Schema;
 
 /// <summary>
@@ -27,7 +29,7 @@ public class SkeletonPlugin : IHexPlugin
 
 	private void RegisterFactions()
 	{
-		var citizens = TypeLibrary.Create<FactionDefinition>();
+		var citizens = new FactionDefinition();
 		citizens.UniqueId = "citizen";
 		citizens.Name = "Citizens";
 		citizens.Description = "Regular citizens of the city.";
@@ -38,7 +40,7 @@ public class SkeletonPlugin : IHexPlugin
 		citizens.Order = 1;
 		FactionManager.Register( citizens );
 
-		var police = TypeLibrary.Create<FactionDefinition>();
+		var police = new FactionDefinition();
 		police.UniqueId = "police";
 		police.Name = "Civil Protection";
 		police.Description = "Law enforcement officers protecting the city.";
@@ -52,7 +54,7 @@ public class SkeletonPlugin : IHexPlugin
 
 	private void RegisterClasses()
 	{
-		var civilian = TypeLibrary.Create<ClassDefinition>();
+		var civilian = new ClassDefinition();
 		civilian.UniqueId = "civilian";
 		civilian.Name = "Civilian";
 		civilian.Description = "An ordinary citizen.";
@@ -61,7 +63,7 @@ public class SkeletonPlugin : IHexPlugin
 		civilian.Order = 1;
 		FactionManager.RegisterClass( civilian );
 
-		var officer = TypeLibrary.Create<ClassDefinition>();
+		var officer = new ClassDefinition();
 		officer.UniqueId = "officer";
 		officer.Name = "Officer";
 		officer.Description = "A Civil Protection officer.";
@@ -70,7 +72,7 @@ public class SkeletonPlugin : IHexPlugin
 		officer.Order = 1;
 		FactionManager.RegisterClass( officer );
 
-		var chief = TypeLibrary.Create<ClassDefinition>();
+		var chief = new ClassDefinition();
 		chief.UniqueId = "chief";
 		chief.Name = "Chief";
 		chief.Description = "The Chief of Civil Protection.";
@@ -83,7 +85,7 @@ public class SkeletonPlugin : IHexPlugin
 	private void RegisterItems()
 	{
 		// Pistol
-		var pistol = TypeLibrary.Create<WeaponItemDef>();
+		var pistol = new WeaponItemDef();
 		pistol.UniqueId = "weapon_pistol";
 		pistol.DisplayName = "Pistol";
 		pistol.Description = "A standard 9mm pistol.";
@@ -95,7 +97,7 @@ public class SkeletonPlugin : IHexPlugin
 		ItemManager.Register( pistol );
 
 		// Baton (melee — no ammo)
-		var baton = TypeLibrary.Create<WeaponItemDef>();
+		var baton = new WeaponItemDef();
 		baton.UniqueId = "weapon_baton";
 		baton.DisplayName = "Baton";
 		baton.Description = "A standard-issue police baton.";
@@ -107,7 +109,7 @@ public class SkeletonPlugin : IHexPlugin
 		ItemManager.Register( baton );
 
 		// Cash
-		var cash = TypeLibrary.Create<CurrencyItemDef>();
+		var cash = new CurrencyItemDef();
 		cash.UniqueId = "money_cash";
 		cash.DisplayName = "Cash";
 		cash.Description = "A stack of bills.";
@@ -118,7 +120,7 @@ public class SkeletonPlugin : IHexPlugin
 		ItemManager.Register( cash );
 
 		// Backpack
-		var backpack = TypeLibrary.Create<BagItemDef>();
+		var backpack = new BagItemDef();
 		backpack.UniqueId = "bag_backpack";
 		backpack.DisplayName = "Backpack";
 		backpack.Description = "A sturdy backpack for extra storage.";
@@ -130,7 +132,7 @@ public class SkeletonPlugin : IHexPlugin
 		ItemManager.Register( backpack );
 
 		// Police Uniform
-		var policeUniform = TypeLibrary.Create<OutfitItemDef>();
+		var policeUniform = new OutfitItemDef();
 		policeUniform.UniqueId = "outfit_police";
 		policeUniform.DisplayName = "Police Uniform";
 		policeUniform.Description = "A standard Civil Protection uniform.";
@@ -141,7 +143,7 @@ public class SkeletonPlugin : IHexPlugin
 		ItemManager.Register( policeUniform );
 
 		// Pistol Ammo
-		var ammo = TypeLibrary.Create<AmmoItemDef>();
+		var ammo = new AmmoItemDef();
 		ammo.UniqueId = "ammo_9mm";
 		ammo.DisplayName = "9mm Ammo";
 		ammo.Description = "A box of 9mm rounds.";

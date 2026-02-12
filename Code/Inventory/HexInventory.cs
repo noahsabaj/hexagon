@@ -303,7 +303,7 @@ public class HexInventory
 
 		foreach ( var itemId in ItemIds.ToList() )
 		{
-			var item = Items.ItemManager.GetInstance( itemId );
+			var item = Hexagon.Items.ItemManager.GetInstance( itemId );
 			if ( item != null )
 			{
 				_items[item.Id] = item;

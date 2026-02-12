@@ -80,7 +80,7 @@ public sealed class StorageComponent : Component, Component.IPressable
 		_inventory.AddReceiver( player.Connection );
 
 		// Send initial inventory snapshot to the player
-		Inventory.HexInventoryComponent.Instance?.SendSnapshotTo( _inventory, player.Connection );
+		Hexagon.Inventory.HexInventoryComponent.Instance?.SendSnapshotTo( _inventory, player.Connection );
 
 		HexEvents.Fire<IStorageOpenedListener>(
 			x => x.OnStorageOpened( player, this ) );
@@ -108,11 +108,11 @@ public sealed class StorageComponent : Component, Component.IPressable
 		_inventory.RemoveReceiver( player.Connection );
 
 		// Notify client that this inventory is no longer available
-		if ( Inventory.HexInventoryComponent.Instance != null )
+		if ( Hexagon.Inventory.HexInventoryComponent.Instance != null )
 		{
 			using ( Rpc.FilterInclude( player.Connection ) )
 			{
-				Inventory.HexInventoryComponent.Instance.ReceiveInventoryRemoved( _inventory.Id );
+				Hexagon.Inventory.HexInventoryComponent.Instance.ReceiveInventoryRemoved( _inventory.Id );
 			}
 		}
 

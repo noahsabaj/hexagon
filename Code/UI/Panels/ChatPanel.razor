@@ -87,7 +87,8 @@
 		StateHasChanged();
 
 		// Auto-scroll to bottom
-		MessageContainer?.ScrollToBottom();
+		if ( MessageContainer != null )
+			MessageContainer.PreferScrollToBottom = true;
 	}
 
 	// --- IChatFocusRequestListener ---
