@@ -1,0 +1,90 @@
+Scoreboard {
+	.scoreboard {
+		position: absolute;
+		top: 0;
+		left: 0;
+		width: 100%;
+		height: 100%;
+		align-items: flex-start;
+		justify-content: center;
+		padding-top: 80px;
+		z-index: 80;
+		pointer-events: none;
+	}
+
+	.scoreboard-container {
+		width: 600px;
+		max-height: 60%;
+		display: flex;
+		flex-direction: column;
+		padding: 16px;
+		pointer-events: all;
+	}
+
+	.scoreboard-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 12px;
+	}
+
+	.scoreboard-title {
+		font-size: 18px;
+		font-weight: 600;
+		color: #eee;
+	}
+
+	.player-count {
+		font-size: 12px;
+	}
+
+	.scoreboard-table {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.table-header {
+		display: flex;
+		padding: 6px 12px;
+		font-size: 11px;
+		font-weight: 600;
+		color: #888;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+	}
+
+	.table-body {
+		max-height: 350px;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.table-row {
+		display: flex;
+		padding: 8px 12px;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+		font-size: 13px;
+
+		&:hover {
+			background-color: rgba(255, 255, 255, 0.03);
+		}
+	}
+
+	.col-name {
+		flex: 2;
+		color: #eee;
+	}
+
+	.col-faction {
+		flex: 1.5;
+	}
+
+	.col-class {
+		flex: 1;
+	}
+
+	.col-player {
+		flex: 1.5;
+	}
+}

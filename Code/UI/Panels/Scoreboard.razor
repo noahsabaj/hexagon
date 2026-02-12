@@ -1,0 +1,81 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Characters;
+@using Hexagon.Factions;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+@implements IHexPanel
+
+<root class="scoreboard @(IsOpen ? "open" : "")" style="display: @(IsOpen ? "flex" : "none")">
+	<div class="scoreboard-container hex-panel">
+		<div class="scoreboard-header">
+			<span class="scoreboard-title">Players</span>
+			<span class="player-count text-muted">@GetPlayers().Count connected</span>
+		</div>
+
+		<div class="scoreboard-table">
+			<div class="table-header">
+				<div class="col-name">Character</div>
+				<div class="col-faction">Faction</div>
+				<div class="col-class">Class</div>
+				<div class="col-player">Player</div>
+			</div>
+
+			<div class="table-body hex-scrollable">
+				@foreach ( var player in GetPlayers() )
+				{
+					<div class="table-row">
+						<div class="col-name">@(player.HasActiveCharacter ? player.CharacterName : "(No Character)")</div>
+						<div class="col-faction text-muted">@GetFactionName( player.FactionId )</div>
+						<div class="col-class text-muted">@GetClassName( player.ClassId )</div>
+						<div class="col-player text-muted">@player.DisplayName</div>
+					</div>
+				}
+			</div>
+		</div>
+	</div>
+</root>
+
+@code
+{
+	public string PanelName => "Scoreboard";
+	public bool IsOpen { get; private set; }
+
+	public void Open()
+	{
+		IsOpen = true;
+		StateHasChanged();
+	}
+
+	public void Close()
+	{
+		IsOpen = false;
+		StateHasChanged();
+	}
+
+	private List<HexPlayerComponent> GetPlayers()
+	{
+		return Scene.GetAll<HexPlayerComponent>().ToList();
+	}
+
+	private string GetFactionName( string factionId )
+	{
+		if ( string.IsNullOrEmpty( factionId ) ) return "";
+		var faction = FactionManager.GetFaction( factionId );
+		return faction?.Name ?? factionId;
+	}
+
+	private string GetClassName( string classId )
+	{
+		if ( string.IsNullOrEmpty( classId ) ) return "";
+		var cls = FactionManager.GetClass( classId );
+		return cls?.Name ?? classId;
+	}
+
+	protected override int BuildHash()
+	{
+		return HashCode.Combine( IsOpen, GetPlayers().Count );
+	}
+}

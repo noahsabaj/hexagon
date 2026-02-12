@@ -1,0 +1,184 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Inventory;
+@using Hexagon.Items;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+@implements IHexPanel
+@implements IInventoryUpdatedListener
+
+<root class="inventory-panel hex-panel" style="display: @(IsOpen ? "flex" : "none")">
+	<div class="inv-header">
+		<span class="inv-title">Inventory</span>
+		<button class="hex-button small" onclick="@Close">X</button>
+	</div>
+
+	<div class="inv-grid" style="width: @(GridWidth)px; height: @(GridHeight)px;">
+		@for ( int y = 0; y < InvHeight; y++ )
+		{
+			@for ( int x = 0; x < InvWidth; x++ )
+			{
+				<div class="hex-grid-cell"
+					 style="width: @(CellSize)px; height: @(CellSize)px; left: @(x * CellSize)px; top: @(y * CellSize)px; position: absolute;" />
+			}
+		}
+
+		@if ( Snapshot != null )
+		{
+			@foreach ( var item in Snapshot.Items )
+			{
+				var def = ItemManager.GetDefinition( item.DefinitionId );
+				var w = def?.Width ?? 1;
+				var h = def?.Height ?? 1;
+
+				<div class="hex-grid-item"
+					 style="left: @(item.X * CellSize)px; top: @(item.Y * CellSize)px; width: @(w * CellSize - 2)px; height: @(h * CellSize - 2)px;"
+					 onmouseover="@(() => ShowTooltip( item ))"
+					 onmouseout="@HideTooltip"
+					 oncontextmenu="@(() => ShowContextMenu( item ))">
+					<span class="item-name">@(def?.DisplayName ?? "?")</span>
+				</div>
+			}
+		}
+	</div>
+
+	@if ( TooltipItem != null )
+	{
+		<div class="hex-tooltip" style="left: @(TooltipX)px; top: @(TooltipY)px;">
+			@{
+				var tooltipDef = ItemManager.GetDefinition( TooltipItem.DefinitionId );
+			}
+			<div class="tooltip-title">@(tooltipDef?.DisplayName ?? "Unknown")</div>
+			<div class="tooltip-desc">@(tooltipDef?.Description ?? "")</div>
+			<div class="tooltip-meta">@(tooltipDef?.Category ?? "") — @(tooltipDef?.Width ?? 1)x@(tooltipDef?.Height ?? 1)</div>
+		</div>
+	}
+
+	@if ( ContextItem != null )
+	{
+		<div class="hex-context-menu" style="left: @(ContextX)px; top: @(ContextY)px;">
+			<div class="context-item" onclick="@OnUseItem">Use</div>
+			@if ( ContextDef?.CanDrop == true )
+			{
+				<div class="context-item" onclick="@OnDropItem">Drop</div>
+			}
+			<div class="context-item" onclick="@CloseContextMenu">Cancel</div>
+		</div>
+	}
+</root>
+
+@code
+{
+	public string PanelName => "Inventory";
+	public bool IsOpen { get; private set; }
+
+	private int CellSize => Config.HexConfig.Get<int>( "ui.inventoryCellSize", 64 );
+	private string MainInventoryId { get; set; }
+	private InventorySnapshot Snapshot => HexInventoryComponent.Instance?.GetClientInventory( MainInventoryId );
+
+	private int InvWidth => Snapshot?.Width ?? 4;
+	private int InvHeight => Snapshot?.Height ?? 4;
+	private int GridWidth => InvWidth * CellSize;
+	private int GridHeight => InvHeight * CellSize;
+
+	// Tooltip state
+	private ItemSnapshot TooltipItem { get; set; }
+	private float TooltipX { get; set; }
+	private float TooltipY { get; set; }
+
+	// Context menu state
+	private ItemSnapshot ContextItem { get; set; }
+	private ItemDefinition ContextDef { get; set; }
+	private float ContextX { get; set; }
+	private float ContextY { get; set; }
+
+	public void Open()
+	{
+		IsOpen = true;
+		ContextItem = null;
+		TooltipItem = null;
+
+		// Determine main inventory ID from client cache
+		FindMainInventory();
+
+		StateHasChanged();
+	}
+
+	public void Close()
+	{
+		IsOpen = false;
+		ContextItem = null;
+		TooltipItem = null;
+		StateHasChanged();
+	}
+
+	public void OnInventoryUpdated( string inventoryId )
+	{
+		if ( inventoryId == MainInventoryId || string.IsNullOrEmpty( MainInventoryId ) )
+		{
+			FindMainInventory();
+			StateHasChanged();
+		}
+	}
+
+	private void FindMainInventory()
+	{
+		if ( HexInventoryComponent.Instance == null ) return;
+
+		foreach ( var kvp in HexInventoryComponent.Instance.ClientInventories )
+		{
+			if ( kvp.Value.Type == "main" )
+			{
+				MainInventoryId = kvp.Key;
+				return;
+			}
+		}
+	}
+
+	private void ShowTooltip( ItemSnapshot item )
+	{
+		TooltipItem = item;
+		TooltipX = Mouse.Position.x + 16;
+		TooltipY = Mouse.Position.y + 16;
+	}
+
+	private void HideTooltip()
+	{
+		TooltipItem = null;
+	}
+
+	private void ShowContextMenu( ItemSnapshot item )
+	{
+		ContextItem = item;
+		ContextDef = ItemManager.GetDefinition( item.DefinitionId );
+		ContextX = Mouse.Position.x;
+		ContextY = Mouse.Position.y;
+	}
+
+	private void CloseContextMenu()
+	{
+		ContextItem = null;
+		ContextDef = null;
+	}
+
+	private void OnUseItem()
+	{
+		if ( ContextItem == null || string.IsNullOrEmpty( MainInventoryId ) ) return;
+		HexInventoryComponent.Instance?.RequestUseItem( MainInventoryId, ContextItem.Id );
+		CloseContextMenu();
+	}
+
+	private void OnDropItem()
+	{
+		if ( ContextItem == null || string.IsNullOrEmpty( MainInventoryId ) ) return;
+		HexInventoryComponent.Instance?.RequestDropItem( MainInventoryId, ContextItem.Id );
+		CloseContextMenu();
+	}
+
+	protected override int BuildHash()
+	{
+		return HashCode.Combine( IsOpen, MainInventoryId, Snapshot?.Items?.Count ?? 0, ContextItem?.Id, TooltipItem?.Id );
+	}
+}

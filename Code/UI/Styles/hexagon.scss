@@ -1,0 +1,281 @@
+// =============================================================================
+// Hexagon Framework — Base UI Styles
+// Dark RP-themed palette with utility classes for all panels.
+// =============================================================================
+
+// --- Color Palette ---
+$bg-primary: #1a1a2e;
+$bg-secondary: #16213e;
+$bg-tertiary: #0f3460;
+$accent: #0f3460;
+$accent-highlight: #e94560;
+$accent-hover: #c93850;
+$text: #eeeeee;
+$text-muted: #888888;
+$text-dark: #555555;
+$success: #4caf50;
+$error: #f44336;
+$warning: #ff9800;
+$border-color: rgba(255, 255, 255, 0.08);
+$shadow: 0px 4px 16px rgba(0, 0, 0, 0.5);
+
+// --- Font Sizes ---
+$font-xs: 11px;
+$font-sm: 13px;
+$font-base: 15px;
+$font-lg: 18px;
+$font-xl: 22px;
+$font-2xl: 28px;
+$font-3xl: 36px;
+
+// --- Spacing ---
+$spacing-xs: 4px;
+$spacing-sm: 8px;
+$spacing-md: 12px;
+$spacing-lg: 16px;
+$spacing-xl: 24px;
+$spacing-2xl: 32px;
+
+// --- Border Radius ---
+$radius-sm: 4px;
+$radius-md: 8px;
+$radius-lg: 12px;
+
+// --- Standard Panel ---
+.hex-panel {
+	background-color: $bg-primary;
+	border: 1px solid $border-color;
+	border-radius: $radius-md;
+	box-shadow: $shadow;
+	color: $text;
+	font-size: $font-base;
+	font-family: Poppins, Roboto, sans-serif;
+}
+
+// --- Buttons ---
+.hex-button {
+	background-color: $accent;
+	color: $text;
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	border-radius: $radius-sm;
+	padding: $spacing-sm $spacing-lg;
+	font-size: $font-sm;
+	cursor: pointer;
+	transition: background-color 0.15s ease, transform 0.1s ease;
+	text-align: center;
+
+	&:hover {
+		background-color: $accent-highlight;
+	}
+
+	&:active {
+		transform: scale(0.97);
+	}
+
+	&:disabled, &.disabled {
+		background-color: rgba(255, 255, 255, 0.05);
+		color: $text-muted;
+		cursor: default;
+		pointer-events: none;
+	}
+
+	&.primary {
+		background-color: $accent-highlight;
+		font-weight: 600;
+
+		&:hover {
+			background-color: $accent-hover;
+		}
+	}
+
+	&.danger {
+		background-color: $error;
+
+		&:hover {
+			background-color: darken($error, 10%);
+		}
+	}
+
+	&.success {
+		background-color: $success;
+
+		&:hover {
+			background-color: darken($success, 10%);
+		}
+	}
+
+	&.small {
+		padding: $spacing-xs $spacing-sm;
+		font-size: $font-xs;
+	}
+}
+
+// --- Text Inputs ---
+.hex-input {
+	background-color: rgba(0, 0, 0, 0.3);
+	border: 1px solid $border-color;
+	border-radius: $radius-sm;
+	padding: $spacing-sm $spacing-md;
+	color: $text;
+	font-size: $font-sm;
+	outline: none;
+
+	&:focus-visible {
+		border-color: $accent-highlight;
+	}
+
+	&::placeholder {
+		color: $text-dark;
+	}
+}
+
+// --- Full-screen Overlay ---
+.hex-overlay {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	background-color: rgba(0, 0, 0, 0.7);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+// --- Scrollbar ---
+.hex-scrollable {
+	overflow-y: scroll;
+
+	&::-webkit-scrollbar {
+		width: 6px;
+	}
+
+	&::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	&::-webkit-scrollbar-thumb {
+		background-color: rgba(255, 255, 255, 0.15);
+		border-radius: 3px;
+	}
+}
+
+// --- Inventory Grid ---
+.hex-grid {
+	display: flex;
+	flex-wrap: wrap;
+	position: relative;
+}
+
+.hex-grid-cell {
+	border: 1px solid rgba(255, 255, 255, 0.05);
+	background-color: rgba(0, 0, 0, 0.2);
+	box-sizing: border-box;
+}
+
+.hex-grid-item {
+	position: absolute;
+	background-color: rgba(15, 52, 96, 0.6);
+	border: 1px solid rgba(255, 255, 255, 0.15);
+	border-radius: $radius-sm;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	overflow: hidden;
+	font-size: $font-xs;
+	color: $text;
+
+	&:hover {
+		border-color: $accent-highlight;
+		background-color: rgba(233, 69, 96, 0.2);
+	}
+}
+
+// --- Context Menu ---
+.hex-context-menu {
+	position: absolute;
+	background-color: $bg-secondary;
+	border: 1px solid $border-color;
+	border-radius: $radius-sm;
+	box-shadow: $shadow;
+	min-width: 120px;
+	z-index: 1000;
+	padding: $spacing-xs 0;
+
+	.context-item {
+		padding: $spacing-sm $spacing-md;
+		color: $text;
+		font-size: $font-sm;
+		cursor: pointer;
+
+		&:hover {
+			background-color: rgba(233, 69, 96, 0.2);
+		}
+	}
+}
+
+// --- Tooltip ---
+.hex-tooltip {
+	position: absolute;
+	background-color: $bg-secondary;
+	border: 1px solid $border-color;
+	border-radius: $radius-sm;
+	box-shadow: $shadow;
+	padding: $spacing-sm $spacing-md;
+	max-width: 250px;
+	z-index: 999;
+	pointer-events: none;
+
+	.tooltip-title {
+		font-size: $font-base;
+		font-weight: 600;
+		color: $text;
+		margin-bottom: $spacing-xs;
+	}
+
+	.tooltip-desc {
+		font-size: $font-xs;
+		color: $text-muted;
+		margin-bottom: $spacing-xs;
+	}
+
+	.tooltip-meta {
+		font-size: $font-xs;
+		color: $text-dark;
+	}
+}
+
+// --- Utility Classes ---
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+.text-muted { color: $text-muted; }
+.text-accent { color: $accent-highlight; }
+.text-success { color: $success; }
+.text-error { color: $error; }
+.text-warning { color: $warning; }
+
+.flex { display: flex; }
+.flex-column { flex-direction: column; }
+.flex-row { flex-direction: row; }
+.flex-wrap { flex-wrap: wrap; }
+.flex-grow { flex-grow: 1; }
+.items-center { align-items: center; }
+.justify-center { justify-content: center; }
+.justify-between { justify-content: space-between; }
+.gap-xs { gap: $spacing-xs; }
+.gap-sm { gap: $spacing-sm; }
+.gap-md { gap: $spacing-md; }
+.gap-lg { gap: $spacing-lg; }
+
+.p-sm { padding: $spacing-sm; }
+.p-md { padding: $spacing-md; }
+.p-lg { padding: $spacing-lg; }
+.p-xl { padding: $spacing-xl; }
+.m-sm { margin: $spacing-sm; }
+.m-md { margin: $spacing-md; }
+.mt-sm { margin-top: $spacing-sm; }
+.mt-md { margin-top: $spacing-md; }
+.mt-lg { margin-top: $spacing-lg; }
+.mb-sm { margin-bottom: $spacing-sm; }
+.mb-md { margin-bottom: $spacing-md; }

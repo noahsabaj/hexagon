@@ -1,0 +1,178 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Inventory;
+@using Hexagon.Items;
+@using Hexagon.Currency;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+@implements IHexPanel
+@implements IVendorCatalogReceivedListener
+@implements IVendorResultListener
+
+<root class="vendor-panel hex-overlay" style="display: @(IsOpen ? "flex" : "none")">
+	<div class="vendor-container hex-panel">
+		<div class="vendor-header">
+			<span class="vendor-title">@VendorName</span>
+			<div class="tab-buttons">
+				<button class="hex-button small @(ActiveTab == "buy" ? "primary" : "")" onclick="@(() => ActiveTab = "buy")">Buy</button>
+				<button class="hex-button small @(ActiveTab == "sell" ? "primary" : "")" onclick="@(() => ActiveTab = "sell")">Sell</button>
+			</div>
+			<button class="hex-button small" onclick="@Close">X</button>
+		</div>
+
+		@if ( !string.IsNullOrEmpty( FeedbackMessage ) )
+		{
+			<div class="feedback @(FeedbackSuccess ? "text-success" : "text-error")">
+				@FeedbackMessage
+			</div>
+		}
+
+		<div class="vendor-list hex-scrollable">
+			@if ( ActiveTab == "buy" )
+			{
+				@if ( Catalog == null || Catalog.Count == 0 )
+				{
+					<div class="empty-state text-muted">This vendor has nothing for sale.</div>
+				}
+				else
+				{
+					@foreach ( var entry in Catalog.Where( e => e.BuyPrice > 0 ) )
+					{
+						<div class="vendor-item">
+							<div class="item-info">
+								<div class="item-name">@entry.DisplayName</div>
+								<div class="item-category text-muted">@entry.Category</div>
+							</div>
+							<div class="item-price">@CurrencyManager.Format( entry.BuyPrice )</div>
+							<button class="hex-button small primary" onclick="@(() => BuyItem( entry.DefinitionId ))">Buy</button>
+						</div>
+					}
+				}
+			}
+			else
+			{
+				@{
+					var sellableItems = GetSellableItems();
+				}
+				@if ( sellableItems.Count == 0 )
+				{
+					<div class="empty-state text-muted">You have nothing this vendor will buy.</div>
+				}
+				else
+				{
+					@foreach ( var (item, vendorEntry) in sellableItems )
+					{
+						var def = ItemManager.GetDefinition( item.DefinitionId );
+						<div class="vendor-item">
+							<div class="item-info">
+								<div class="item-name">@(def?.DisplayName ?? "?")</div>
+								<div class="item-category text-muted">@(def?.Category ?? "")</div>
+							</div>
+							<div class="item-price text-success">@CurrencyManager.Format( vendorEntry.SellPrice )</div>
+							<button class="hex-button small" onclick="@(() => SellItem( item.Id ))">Sell</button>
+						</div>
+					}
+				}
+			}
+		</div>
+	</div>
+</root>
+
+@code
+{
+	public string PanelName => "Vendor";
+	public bool IsOpen { get; private set; }
+
+	private string VendorId { get; set; } = "";
+	private string VendorName { get; set; } = "Vendor";
+	private List<VendorCatalogEntry> Catalog { get; set; } = new();
+	private string ActiveTab { get; set; } = "buy";
+	private string FeedbackMessage { get; set; } = "";
+	private bool FeedbackSuccess { get; set; }
+
+	public void Open()
+	{
+		IsOpen = true;
+		FeedbackMessage = "";
+		ActiveTab = "buy";
+		StateHasChanged();
+	}
+
+	public void Close()
+	{
+		IsOpen = false;
+		FeedbackMessage = "";
+		Catalog = new();
+		StateHasChanged();
+	}
+
+	public void OnVendorCatalogReceived( string vendorId, string vendorName, List<VendorCatalogEntry> items )
+	{
+		VendorId = vendorId;
+		VendorName = vendorName;
+		Catalog = items ?? new();
+		FeedbackMessage = "";
+
+		if ( !IsOpen )
+			Open();
+
+		StateHasChanged();
+	}
+
+	public void OnVendorResult( bool success, string message )
+	{
+		FeedbackSuccess = success;
+		FeedbackMessage = message;
+		StateHasChanged();
+	}
+
+	private void BuyItem( string definitionId )
+	{
+		HexInventoryComponent.Instance?.RequestBuyItem( VendorId, definitionId );
+	}
+
+	private void SellItem( string itemInstanceId )
+	{
+		HexInventoryComponent.Instance?.RequestSellItem( VendorId, itemInstanceId );
+	}
+
+	private List<(ItemSnapshot item, VendorCatalogEntry entry)> GetSellableItems()
+	{
+		var result = new List<(ItemSnapshot, VendorCatalogEntry)>();
+		if ( HexInventoryComponent.Instance == null || Catalog == null ) return result;
+
+		// Find player's main inventory
+		InventorySnapshot playerInv = null;
+		foreach ( var kvp in HexInventoryComponent.Instance.ClientInventories )
+		{
+			if ( kvp.Value.Type == "main" )
+			{
+				playerInv = kvp.Value;
+				break;
+			}
+		}
+
+		if ( playerInv == null ) return result;
+
+		// Match items to vendor catalog
+		var sellEntries = Catalog.Where( e => e.SellPrice > 0 )
+			.ToDictionary( e => e.DefinitionId );
+
+		foreach ( var item in playerInv.Items )
+		{
+			if ( sellEntries.TryGetValue( item.DefinitionId, out var entry ) )
+			{
+				result.Add( (item, entry) );
+			}
+		}
+
+		return result;
+	}
+
+	protected override int BuildHash()
+	{
+		return HashCode.Combine( IsOpen, VendorId, Catalog?.Count ?? 0, ActiveTab, FeedbackMessage );
+	}
+}

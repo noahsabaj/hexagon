@@ -1,0 +1,259 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Characters;
+@using Hexagon.Factions;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+@implements IHexPanel
+
+<root class="character-create hex-overlay" style="display: @(IsOpen ? "flex" : "none")">
+	<div class="create-container hex-panel">
+		<div class="header">
+			<h2>Create Character</h2>
+		</div>
+
+		<div class="form hex-scrollable">
+			@foreach ( var varInfo in GetCreationVars() )
+			{
+				<div class="form-field">
+					<label>@varInfo.Name</label>
+					@if ( varInfo.PropertyType == typeof( string ) )
+					{
+						<TextEntry class="hex-input" Value:bind="@GetStringBinding( varInfo.Name )"
+								   Placeholder="@GetPlaceholder( varInfo )" />
+						@if ( varInfo.Attribute.MaxLength > 0 )
+						{
+							<span class="field-hint text-muted">
+								@GetStringValue( varInfo.Name ).Length / @varInfo.Attribute.MaxLength
+							</span>
+						}
+					}
+				</div>
+			}
+
+			<div class="form-field">
+				<label>Faction</label>
+				<div class="faction-list">
+					@foreach ( var faction in GetFactions() )
+					{
+						<div class="faction-option @(SelectedFaction == faction.UniqueId ? "selected" : "")"
+							 onclick="@(() => SelectFaction( faction.UniqueId ))">
+							<div class="faction-name">@faction.Name</div>
+							<div class="faction-desc text-muted">@TruncateText( faction.Description, 60 )</div>
+						</div>
+					}
+				</div>
+			</div>
+
+			@if ( GetClassesForFaction().Count > 0 )
+			{
+				<div class="form-field">
+					<label>Class</label>
+					<div class="faction-list">
+						@foreach ( var cls in GetClassesForFaction() )
+						{
+							<div class="faction-option @(SelectedClass == cls.UniqueId ? "selected" : "")"
+								 onclick="@(() => SelectedClass = cls.UniqueId)">
+								<div class="faction-name">@cls.Name</div>
+							</div>
+						}
+					</div>
+				</div>
+			}
+
+			@if ( !string.IsNullOrEmpty( ErrorMessage ) )
+			{
+				<div class="error-message text-error">@ErrorMessage</div>
+			}
+
+			@if ( !string.IsNullOrEmpty( SuccessMessage ) )
+			{
+				<div class="success-message text-success">@SuccessMessage</div>
+			}
+		</div>
+
+		<div class="footer">
+			<button class="hex-button" onclick="@GoBack">Back</button>
+			<button class="hex-button primary" onclick="@SubmitCreate"
+					disabled="@IsSubmitting">Create</button>
+		</div>
+	</div>
+</root>
+
+@code
+{
+	public string PanelName => "CharacterCreate";
+	public bool IsOpen { get; private set; }
+
+	private string SelectedFaction { get; set; } = "";
+	private string SelectedClass { get; set; } = "";
+	private string ErrorMessage { get; set; } = "";
+	private string SuccessMessage { get; set; } = "";
+	private bool IsSubmitting { get; set; }
+
+	private readonly Dictionary<string, string> _fieldValues = new();
+
+	private HexPlayerComponent LocalPlayer => HexUIManager.GetLocalPlayer();
+
+	public void Open()
+	{
+		IsOpen = true;
+		ErrorMessage = "";
+		SuccessMessage = "";
+		IsSubmitting = false;
+		_fieldValues.Clear();
+		SelectedFaction = "";
+		SelectedClass = "";
+
+		// Set defaults
+		var factions = GetFactions();
+		if ( factions.Count > 0 )
+			SelectedFaction = factions[0].UniqueId;
+
+		// Subscribe to result
+		var player = LocalPlayer;
+		if ( player != null )
+		{
+			player.OnCharacterCreateResult -= OnCreateResult;
+			player.OnCharacterCreateResult += OnCreateResult;
+		}
+
+		StateHasChanged();
+	}
+
+	public void Close()
+	{
+		IsOpen = false;
+		var player = LocalPlayer;
+		if ( player != null )
+		{
+			player.OnCharacterCreateResult -= OnCreateResult;
+		}
+		StateHasChanged();
+	}
+
+	private List<CharVarInfo> GetCreationVars()
+	{
+		return CharacterManager.CharVars.Values
+			.Where( v => v.Attribute.ShowInCreation )
+			.OrderBy( v => v.Attribute.Order )
+			.ToList();
+	}
+
+	private List<FactionDefinition> GetFactions()
+	{
+		return FactionManager.GetDefaultFactions();
+	}
+
+	private List<ClassDefinition> GetClassesForFaction()
+	{
+		if ( string.IsNullOrEmpty( SelectedFaction ) ) return new();
+		return FactionManager.GetClassesForFaction( SelectedFaction );
+	}
+
+	private void SelectFaction( string factionId )
+	{
+		SelectedFaction = factionId;
+		SelectedClass = "";
+		var classes = GetClassesForFaction();
+		if ( classes.Count > 0 )
+			SelectedClass = classes[0].UniqueId;
+	}
+
+	private string GetStringBinding( string name )
+	{
+		return _fieldValues.GetValueOrDefault( name, "" );
+	}
+
+	private string GetStringValue( string name )
+	{
+		return _fieldValues.GetValueOrDefault( name, "" );
+	}
+
+	private string GetPlaceholder( CharVarInfo varInfo )
+	{
+		if ( varInfo.Attribute.Default is string defaultStr )
+			return defaultStr;
+		return $"Enter {varInfo.Name}...";
+	}
+
+	private void SubmitCreate()
+	{
+		if ( IsSubmitting ) return;
+
+		ErrorMessage = "";
+		SuccessMessage = "";
+
+		// Build JSON payload
+		var values = new Dictionary<string, object>();
+
+		foreach ( var varInfo in GetCreationVars() )
+		{
+			var value = _fieldValues.GetValueOrDefault( varInfo.Name, "" );
+
+			// Validation
+			if ( varInfo.PropertyType == typeof( string ) )
+			{
+				if ( varInfo.Attribute.MinLength > 0 && value.Length < varInfo.Attribute.MinLength )
+				{
+					ErrorMessage = $"{varInfo.Name} must be at least {varInfo.Attribute.MinLength} characters.";
+					return;
+				}
+				if ( varInfo.Attribute.MaxLength > 0 && value.Length > varInfo.Attribute.MaxLength )
+				{
+					ErrorMessage = $"{varInfo.Name} must be at most {varInfo.Attribute.MaxLength} characters.";
+					return;
+				}
+			}
+
+			values[varInfo.Name] = value;
+		}
+
+		values["Faction"] = SelectedFaction;
+		values["Class"] = SelectedClass;
+
+		IsSubmitting = true;
+
+		var json = Json.Serialize( values );
+		LocalPlayer?.RequestCreateCharacter( json );
+	}
+
+	private void OnCreateResult( bool success, string message )
+	{
+		IsSubmitting = false;
+
+		if ( success )
+		{
+			SuccessMessage = message;
+			ErrorMessage = "";
+
+			// Go back to character select after a brief moment
+			HexUIManager.Instance?.SetState( UIState.CharacterSelect );
+		}
+		else
+		{
+			ErrorMessage = message;
+			SuccessMessage = "";
+		}
+
+		StateHasChanged();
+	}
+
+	private void GoBack()
+	{
+		HexUIManager.Instance?.SetState( UIState.CharacterSelect );
+	}
+
+	private string TruncateText( string text, int max )
+	{
+		if ( string.IsNullOrEmpty( text ) ) return "";
+		return text.Length > max ? text[..max] + "..." : text;
+	}
+
+	protected override int BuildHash()
+	{
+		return HashCode.Combine( IsOpen, SelectedFaction, SelectedClass, ErrorMessage, SuccessMessage, IsSubmitting );
+	}
+}

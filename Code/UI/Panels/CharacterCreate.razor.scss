@@ -1,0 +1,106 @@
+CharacterCreate {
+	.character-create {
+		z-index: 100;
+	}
+
+	.create-container {
+		width: 480px;
+		max-height: 80%;
+		display: flex;
+		flex-direction: column;
+		padding: 24px;
+	}
+
+	.header {
+		margin-bottom: 16px;
+
+		h2 {
+			font-size: 22px;
+			font-weight: 600;
+			color: #eee;
+			margin: 0;
+		}
+	}
+
+	.form {
+		flex-grow: 1;
+		max-height: 500px;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+
+	.form-field {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+
+		label {
+			font-size: 13px;
+			color: #ccc;
+			font-weight: 500;
+		}
+
+		.field-hint {
+			font-size: 11px;
+			text-align: right;
+		}
+	}
+
+	.faction-list {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.faction-option {
+		padding: 8px 12px;
+		background-color: rgba(0, 0, 0, 0.3);
+		border: 1px solid rgba(255, 255, 255, 0.05);
+		border-radius: 4px;
+		cursor: pointer;
+		transition: border-color 0.15s ease;
+
+		&:hover {
+			border-color: rgba(233, 69, 96, 0.4);
+		}
+
+		&.selected {
+			border-color: #e94560;
+			background-color: rgba(233, 69, 96, 0.1);
+		}
+	}
+
+	.faction-name {
+		font-size: 14px;
+		font-weight: 500;
+		color: #eee;
+	}
+
+	.faction-desc {
+		font-size: 11px;
+		margin-top: 2px;
+	}
+
+	.error-message {
+		padding: 8px 12px;
+		background-color: rgba(244, 67, 54, 0.1);
+		border: 1px solid rgba(244, 67, 54, 0.3);
+		border-radius: 4px;
+		font-size: 13px;
+	}
+
+	.success-message {
+		padding: 8px 12px;
+		background-color: rgba(76, 175, 80, 0.1);
+		border: 1px solid rgba(76, 175, 80, 0.3);
+		border-radius: 4px;
+		font-size: 13px;
+	}
+
+	.footer {
+		margin-top: 16px;
+		display: flex;
+		justify-content: space-between;
+	}
+}

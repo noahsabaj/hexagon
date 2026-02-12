@@ -1,0 +1,31 @@
+DeathScreen {
+	.death-screen {
+		z-index: 90;
+		background-color: rgba(0, 0, 0, 0.8);
+	}
+
+	.death-content {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 16px;
+	}
+
+	.death-title {
+		font-size: 48px;
+		font-weight: 700;
+		color: #e94560;
+		text-shadow: 0 2px 8px rgba(233, 69, 96, 0.5);
+		letter-spacing: 4px;
+	}
+
+	.death-subtitle {
+		font-size: 16px;
+	}
+
+	.respawn-button {
+		padding: 12px 32px;
+		font-size: 16px;
+		margin-top: 8px;
+	}
+}

@@ -1,0 +1,119 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Chat;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+@implements IHexPanel
+@implements IChatMessageReceivedListener
+@implements IChatFocusRequestListener
+
+<root class="chat-panel" style="display: @(IsOpen ? "flex" : "none")">
+	<div class="chat-messages hex-scrollable" @ref="MessageContainer">
+		@foreach ( var msg in Messages )
+		{
+			<div class="chat-message">
+				@if ( !string.IsNullOrEmpty( msg.SenderName ) )
+				{
+					<span class="sender" style="color: rgba(@((int)(msg.Color.r * 255)), @((int)(msg.Color.g * 255)), @((int)(msg.Color.b * 255)), 1)">
+						@msg.SenderName:
+					</span>
+				}
+				<span class="message-text" style="color: rgba(@((int)(msg.Color.r * 255)), @((int)(msg.Color.g * 255)), @((int)(msg.Color.b * 255)), 1)">
+					@msg.Text
+				</span>
+			</div>
+		}
+	</div>
+
+	<div class="chat-input-area" style="display: @(IsInputFocused ? "flex" : "none")">
+		<TextEntry class="hex-input chat-input" @ref="ChatInput"
+				   Value:bind="@InputText"
+				   Placeholder="Type a message..."
+				   onsubmit="@OnSubmitMessage" />
+	</div>
+</root>
+
+@code
+{
+	public string PanelName => "Chat";
+	public bool IsOpen { get; private set; }
+
+	private Panel MessageContainer { get; set; }
+	private TextEntry ChatInput { get; set; }
+
+	private struct ChatMessage
+	{
+		public string SenderName;
+		public string Text;
+		public Color Color;
+		public DateTime Time;
+	}
+
+	private readonly List<ChatMessage> Messages = new();
+	private string InputText { get; set; } = "";
+	private bool IsInputFocused { get; set; }
+	private int MaxHistory => Config.HexConfig.Get<int>( "ui.chatMaxHistory", 100 );
+
+	public void Open()
+	{
+		IsOpen = true;
+		StateHasChanged();
+	}
+
+	public void Close()
+	{
+		IsOpen = false;
+		IsInputFocused = false;
+		StateHasChanged();
+	}
+
+	// --- IChatMessageReceivedListener ---
+	public void OnChatMessageReceived( string senderName, string chatClassName, string formattedMessage, Color color )
+	{
+		Messages.Add( new ChatMessage
+		{
+			SenderName = senderName,
+			Text = formattedMessage,
+			Color = color,
+			Time = DateTime.Now
+		} );
+
+		// Cap history
+		while ( Messages.Count > MaxHistory )
+			Messages.RemoveAt( 0 );
+
+		StateHasChanged();
+
+		// Auto-scroll to bottom
+		MessageContainer?.ScrollToBottom();
+	}
+
+	// --- IChatFocusRequestListener ---
+	public void OnChatFocusRequested()
+	{
+		IsInputFocused = true;
+		StateHasChanged();
+
+		ChatInput?.Focus();
+	}
+
+	private void OnSubmitMessage()
+	{
+		var text = InputText?.Trim();
+		if ( !string.IsNullOrEmpty( text ) )
+		{
+			HexChatComponent.Instance?.SendMessage( text );
+		}
+
+		InputText = "";
+		IsInputFocused = false;
+		StateHasChanged();
+	}
+
+	protected override int BuildHash()
+	{
+		return HashCode.Combine( IsOpen, Messages.Count, IsInputFocused );
+	}
+}

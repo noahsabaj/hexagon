@@ -1,0 +1,196 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Inventory;
+@using Hexagon.Items;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+@implements IHexPanel
+@implements IInventoryUpdatedListener
+@implements IInventoryRemovedListener
+
+<root class="storage-panel hex-overlay" style="display: @(IsOpen ? "flex" : "none")">
+	<div class="storage-container hex-panel">
+		<div class="storage-header">
+			<span class="storage-title">Storage</span>
+			<button class="hex-button small" onclick="@Close">X</button>
+		</div>
+
+		<div class="storage-grids">
+			<!-- Player Inventory (left) -->
+			<div class="grid-section">
+				<div class="grid-label text-muted">Your Inventory</div>
+				@{ var playerSnap = GetPlayerInventory(); }
+				@if ( playerSnap != null )
+				{
+					<div class="inv-grid" style="width: @(playerSnap.Width * CellSize)px; height: @(playerSnap.Height * CellSize)px;">
+						@for ( int y = 0; y < playerSnap.Height; y++ )
+						{
+							@for ( int x = 0; x < playerSnap.Width; x++ )
+							{
+								<div class="hex-grid-cell"
+									 style="width: @(CellSize)px; height: @(CellSize)px; left: @(x * CellSize)px; top: @(y * CellSize)px; position: absolute;" />
+							}
+						}
+						@foreach ( var item in playerSnap.Items )
+						{
+							var def = ItemManager.GetDefinition( item.DefinitionId );
+							var w = def?.Width ?? 1;
+							var h = def?.Height ?? 1;
+							<div class="hex-grid-item"
+								 style="left: @(item.X * CellSize)px; top: @(item.Y * CellSize)px; width: @(w * CellSize - 2)px; height: @(h * CellSize - 2)px;"
+								 onclick="@(() => TransferToContainer( item ))">
+								<span class="item-name">@(def?.DisplayName ?? "?")</span>
+							</div>
+						}
+					</div>
+				}
+			</div>
+
+			<!-- Container Inventory (right) -->
+			<div class="grid-section">
+				<div class="grid-label text-muted">Container</div>
+				@{ var containerSnap = GetContainerInventory(); }
+				@if ( containerSnap != null )
+				{
+					<div class="inv-grid" style="width: @(containerSnap.Width * CellSize)px; height: @(containerSnap.Height * CellSize)px;">
+						@for ( int y = 0; y < containerSnap.Height; y++ )
+						{
+							@for ( int x = 0; x < containerSnap.Width; x++ )
+							{
+								<div class="hex-grid-cell"
+									 style="width: @(CellSize)px; height: @(CellSize)px; left: @(x * CellSize)px; top: @(y * CellSize)px; position: absolute;" />
+							}
+						}
+						@foreach ( var item in containerSnap.Items )
+						{
+							var def = ItemManager.GetDefinition( item.DefinitionId );
+							var w = def?.Width ?? 1;
+							var h = def?.Height ?? 1;
+							<div class="hex-grid-item"
+								 style="left: @(item.X * CellSize)px; top: @(item.Y * CellSize)px; width: @(w * CellSize - 2)px; height: @(h * CellSize - 2)px;"
+								 onclick="@(() => TransferToPlayer( item ))">
+								<span class="item-name">@(def?.DisplayName ?? "?")</span>
+							</div>
+						}
+					</div>
+				}
+			</div>
+		</div>
+	</div>
+</root>
+
+@code
+{
+	public string PanelName => "Storage";
+	public bool IsOpen { get; private set; }
+
+	private int CellSize => Config.HexConfig.Get<int>( "ui.inventoryCellSize", 64 );
+	private string PlayerInventoryId { get; set; }
+	private string ContainerInventoryId { get; set; }
+
+	public void Open()
+	{
+		IsOpen = true;
+		FindInventories();
+		StateHasChanged();
+	}
+
+	public void Close()
+	{
+		IsOpen = false;
+		ContainerInventoryId = null;
+		StateHasChanged();
+	}
+
+	public void OnInventoryUpdated( string inventoryId )
+	{
+		// If we receive a new container-type inventory, auto-open
+		if ( !IsOpen && HexInventoryComponent.Instance != null )
+		{
+			var snap = HexInventoryComponent.Instance.GetClientInventory( inventoryId );
+			if ( snap?.Type == "container" )
+			{
+				ContainerInventoryId = inventoryId;
+				FindPlayerInventory();
+				IsOpen = true;
+			}
+		}
+
+		if ( inventoryId == PlayerInventoryId || inventoryId == ContainerInventoryId )
+		{
+			StateHasChanged();
+		}
+	}
+
+	public void OnInventoryRemoved( string inventoryId )
+	{
+		if ( inventoryId == ContainerInventoryId )
+		{
+			Close();
+		}
+	}
+
+	private void FindInventories()
+	{
+		FindPlayerInventory();
+
+		// Container should already be set by OnInventoryUpdated
+		if ( string.IsNullOrEmpty( ContainerInventoryId ) )
+		{
+			// Find any container type inventory
+			if ( HexInventoryComponent.Instance == null ) return;
+			foreach ( var kvp in HexInventoryComponent.Instance.ClientInventories )
+			{
+				if ( kvp.Value.Type == "container" )
+				{
+					ContainerInventoryId = kvp.Key;
+					break;
+				}
+			}
+		}
+	}
+
+	private void FindPlayerInventory()
+	{
+		if ( HexInventoryComponent.Instance == null ) return;
+		foreach ( var kvp in HexInventoryComponent.Instance.ClientInventories )
+		{
+			if ( kvp.Value.Type == "main" )
+			{
+				PlayerInventoryId = kvp.Key;
+				return;
+			}
+		}
+	}
+
+	private InventorySnapshot GetPlayerInventory()
+	{
+		return HexInventoryComponent.Instance?.GetClientInventory( PlayerInventoryId );
+	}
+
+	private InventorySnapshot GetContainerInventory()
+	{
+		return HexInventoryComponent.Instance?.GetClientInventory( ContainerInventoryId );
+	}
+
+	private void TransferToContainer( ItemSnapshot item )
+	{
+		if ( string.IsNullOrEmpty( PlayerInventoryId ) || string.IsNullOrEmpty( ContainerInventoryId ) ) return;
+		HexInventoryComponent.Instance?.RequestTransferItem( PlayerInventoryId, item.Id, ContainerInventoryId, 0, 0 );
+	}
+
+	private void TransferToPlayer( ItemSnapshot item )
+	{
+		if ( string.IsNullOrEmpty( PlayerInventoryId ) || string.IsNullOrEmpty( ContainerInventoryId ) ) return;
+		HexInventoryComponent.Instance?.RequestTransferItem( ContainerInventoryId, item.Id, PlayerInventoryId, 0, 0 );
+	}
+
+	protected override int BuildHash()
+	{
+		var playerCount = GetPlayerInventory()?.Items?.Count ?? 0;
+		var containerCount = GetContainerInventory()?.Items?.Count ?? 0;
+		return HashCode.Combine( IsOpen, PlayerInventoryId, ContainerInventoryId, playerCount, containerCount );
+	}
+}

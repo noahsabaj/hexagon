@@ -1,0 +1,56 @@
+StoragePanel {
+	.storage-panel {
+		z-index: 60;
+	}
+
+	.storage-container {
+		padding: 16px;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.storage-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 12px;
+	}
+
+	.storage-title {
+		font-size: 18px;
+		font-weight: 600;
+		color: #eee;
+	}
+
+	.storage-grids {
+		display: flex;
+		flex-direction: row;
+		gap: 24px;
+	}
+
+	.grid-section {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.grid-label {
+		font-size: 12px;
+		margin-bottom: 6px;
+		text-align: center;
+	}
+
+	.inv-grid {
+		position: relative;
+		background-color: rgba(0, 0, 0, 0.2);
+		border: 1px solid rgba(255, 255, 255, 0.05);
+		border-radius: 4px;
+	}
+
+	.item-name {
+		font-size: 10px;
+		text-align: center;
+		padding: 2px;
+		word-wrap: break-word;
+		pointer-events: none;
+	}
+}

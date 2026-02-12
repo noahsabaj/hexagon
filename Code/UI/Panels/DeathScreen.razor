@@ -1,0 +1,77 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Characters;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+@implements IHexPanel
+
+<root class="death-screen hex-overlay" style="display: @(IsOpen ? "flex" : "none")">
+	<div class="death-content">
+		<div class="death-title">YOU DIED</div>
+		<div class="death-subtitle text-muted">
+			@if ( RespawnTimer > 0 )
+			{
+				<span>Respawn available in @RespawnTimer.ToString("F0")s</span>
+			}
+			else
+			{
+				<span>You can respawn now</span>
+			}
+		</div>
+		<button class="hex-button primary respawn-button"
+				disabled="@(RespawnTimer > 0)"
+				onclick="@OnRespawn">
+			Respawn
+		</button>
+	</div>
+</root>
+
+@code
+{
+	public string PanelName => "DeathScreen";
+	public bool IsOpen { get; private set; }
+
+	private float RespawnTimer { get; set; }
+	private float RespawnDelay => Config.HexConfig.Get<float>( "ui.deathRespawnTime", 5f );
+	private RealTimeSince _openedAt;
+
+	public void Open()
+	{
+		IsOpen = true;
+		_openedAt = 0;
+		RespawnTimer = RespawnDelay;
+		StateHasChanged();
+	}
+
+	public void Close()
+	{
+		IsOpen = false;
+		StateHasChanged();
+	}
+
+	protected override void OnUpdate()
+	{
+		if ( !IsOpen ) return;
+
+		RespawnTimer = MathF.Max( 0, RespawnDelay - _openedAt );
+		StateHasChanged();
+	}
+
+	private void OnRespawn()
+	{
+		if ( RespawnTimer > 0 ) return;
+
+		var localPlayer = HexUIManager.GetLocalPlayer();
+		if ( localPlayer == null ) return;
+
+		HexEvents.Fire<IDeathScreenRespawnListener>(
+			x => x.OnRespawnRequested( localPlayer ) );
+	}
+
+	protected override int BuildHash()
+	{
+		return HashCode.Combine( IsOpen, (int)RespawnTimer );
+	}
+}

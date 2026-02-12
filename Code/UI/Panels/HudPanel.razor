@@ -1,0 +1,76 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Characters;
+@using Hexagon.Factions;
+@using Hexagon.Currency;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+@implements IHexPanel
+
+<root class="hud-panel" style="display: @(IsOpen ? "flex" : "none")">
+	<div class="hud-info">
+		<div class="hud-name">@GetCharacterName()</div>
+		<div class="hud-details">
+			@{
+				var factionName = GetFactionName();
+				var money = GetMoney();
+			}
+			@if ( !string.IsNullOrEmpty( factionName ) )
+			{
+				<span class="hud-faction">@factionName</span>
+			}
+			<span class="hud-money">@money</span>
+		</div>
+	</div>
+</root>
+
+@code
+{
+	public string PanelName => "HUD";
+	public bool IsOpen { get; private set; }
+
+	private HexPlayerComponent LocalPlayer => HexUIManager.GetLocalPlayer();
+
+	public void Open()
+	{
+		IsOpen = true;
+		StateHasChanged();
+	}
+
+	public void Close()
+	{
+		IsOpen = false;
+		StateHasChanged();
+	}
+
+	private string GetCharacterName()
+	{
+		return LocalPlayer?.CharacterName ?? "";
+	}
+
+	private string GetFactionName()
+	{
+		var factionId = LocalPlayer?.FactionId;
+		if ( string.IsNullOrEmpty( factionId ) ) return "";
+		var faction = FactionManager.GetFaction( factionId );
+		return faction?.Name ?? factionId;
+	}
+
+	private string GetMoney()
+	{
+		var moneyVal = LocalPlayer?.GetPrivateVar<int>( "Money" ) ?? 0;
+		return CurrencyManager.Format( moneyVal );
+	}
+
+	protected override int BuildHash()
+	{
+		return HashCode.Combine(
+			IsOpen,
+			LocalPlayer?.CharacterName,
+			LocalPlayer?.FactionId,
+			LocalPlayer?.GetPrivateVar<int>( "Money" )
+		);
+	}
+}

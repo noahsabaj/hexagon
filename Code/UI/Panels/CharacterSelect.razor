@@ -1,0 +1,169 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Characters;
+@using Hexagon.Factions;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+@implements IHexPanel
+
+<root class="character-select hex-overlay" style="display: @(IsOpen ? "flex" : "none")">
+	<div class="select-container hex-panel">
+		<div class="header">
+			<h2>Select Character</h2>
+		</div>
+
+		<div class="character-list hex-scrollable">
+			@if ( Characters.Count == 0 )
+			{
+				<div class="empty-state">
+					<p class="text-muted">No characters found. Create one to get started!</p>
+				</div>
+			}
+			else
+			{
+				@foreach ( var character in Characters )
+				{
+					<div class="character-card @(SelectedId == character.Id ? "selected" : "")"
+						 onclick="@(() => SelectCharacter( character.Id ))">
+						<div class="card-info">
+							<div class="card-name">@character.Name</div>
+							<div class="card-details text-muted">
+								@if ( !string.IsNullOrEmpty( character.Faction ) )
+								{
+									var faction = FactionManager.GetFaction( character.Faction );
+									<span>@(faction?.Name ?? character.Faction)</span>
+								}
+								@if ( !string.IsNullOrEmpty( character.Class ) )
+								{
+									var cls = FactionManager.GetClass( character.Class );
+									<span> — @(cls?.Name ?? character.Class)</span>
+								}
+							</div>
+							<div class="card-desc text-muted">@TruncateDescription( character.Description )</div>
+						</div>
+						<div class="card-actions">
+							<button class="hex-button primary" onclick="@(() => LoadCharacter( character.Id ))">Play</button>
+							<button class="hex-button danger small" onclick="@(() => ConfirmDelete( character.Id ))">Delete</button>
+						</div>
+					</div>
+				}
+			}
+		</div>
+
+		<div class="footer">
+			<button class="hex-button primary" onclick="@CreateNew">Create New Character</button>
+		</div>
+
+		@if ( ShowDeleteConfirm )
+		{
+			<div class="delete-confirm">
+				<p>Are you sure you want to delete this character?</p>
+				<div class="confirm-buttons">
+					<button class="hex-button danger" onclick="@DoDelete">Delete</button>
+					<button class="hex-button" onclick="@CancelDelete">Cancel</button>
+				</div>
+			</div>
+		}
+	</div>
+</root>
+
+@code
+{
+	public string PanelName => "CharacterSelect";
+	public bool IsOpen { get; private set; }
+
+	private List<CharacterListEntry> Characters => LocalPlayer?.ClientCharacterList ?? new();
+	private string SelectedId { get; set; }
+	private bool ShowDeleteConfirm { get; set; }
+	private string DeleteTargetId { get; set; }
+
+	private HexPlayerComponent LocalPlayer => HexUIManager.GetLocalPlayer();
+
+	public void Open()
+	{
+		IsOpen = true;
+
+		// Request fresh character list
+		LocalPlayer?.RequestCharacterList();
+
+		// Subscribe to updates
+		var player = LocalPlayer;
+		if ( player != null )
+		{
+			player.OnCharacterListReceived -= OnListReceived;
+			player.OnCharacterListReceived += OnListReceived;
+		}
+
+		StateHasChanged();
+	}
+
+	public void Close()
+	{
+		IsOpen = false;
+		ShowDeleteConfirm = false;
+
+		var player = LocalPlayer;
+		if ( player != null )
+		{
+			player.OnCharacterListReceived -= OnListReceived;
+		}
+
+		StateHasChanged();
+	}
+
+	private void OnListReceived()
+	{
+		StateHasChanged();
+	}
+
+	private void SelectCharacter( string id )
+	{
+		SelectedId = id;
+	}
+
+	private void LoadCharacter( string id )
+	{
+		LocalPlayer?.RequestLoadCharacter( id );
+	}
+
+	private void CreateNew()
+	{
+		HexUIManager.Instance?.SetState( UIState.CharacterCreate );
+	}
+
+	private void ConfirmDelete( string id )
+	{
+		DeleteTargetId = id;
+		ShowDeleteConfirm = true;
+	}
+
+	private void DoDelete()
+	{
+		if ( !string.IsNullOrEmpty( DeleteTargetId ) )
+		{
+			LocalPlayer?.RequestDeleteCharacter( DeleteTargetId );
+		}
+
+		ShowDeleteConfirm = false;
+		DeleteTargetId = null;
+	}
+
+	private void CancelDelete()
+	{
+		ShowDeleteConfirm = false;
+		DeleteTargetId = null;
+	}
+
+	private string TruncateDescription( string desc )
+	{
+		if ( string.IsNullOrEmpty( desc ) ) return "";
+		return desc.Length > 80 ? desc[..80] + "..." : desc;
+	}
+
+	protected override int BuildHash()
+	{
+		return HashCode.Combine( IsOpen, Characters.Count, SelectedId, ShowDeleteConfirm );
+	}
+}
