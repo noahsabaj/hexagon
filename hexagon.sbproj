@@ -1,6 +1,6 @@
 {
   "Title": "Hexagon",
-  "Type": "game",
+  "Type": "library",
   "Org": "local",
   "Ident": "hexagon",
   "Schema": 1,
