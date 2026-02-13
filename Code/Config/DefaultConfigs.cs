@@ -57,5 +57,14 @@ internal static class DefaultConfigs
 		// Gameplay
 		HexConfig.Add( "gameplay.walkSpeed", 200f, "Default walk speed", "Gameplay" );
 		HexConfig.Add( "gameplay.runSpeed", 320f, "Default run speed", "Gameplay" );
+
+		// Recognition
+		HexConfig.Add( "recognition.enabled", true, "Enable recognizable names system", "Recognition" );
+		HexConfig.Add( "recognition.scoreboard", true, "Hide unrecognized names on scoreboard", "Recognition" );
+
+		// Weapon Raise/Lower
+		HexConfig.Add( "weapon.raiseTime", 0.5f, "Seconds to hold R to toggle raise/lower", "Weapon" );
+		HexConfig.Add( "weapon.alwaysRaised", false, "Disable raise/lower system globally", "Weapon" );
+		HexConfig.Add( "weapon.fireDelay", 0.5f, "Delay after raising before can fire", "Weapon" );
 	}
 }

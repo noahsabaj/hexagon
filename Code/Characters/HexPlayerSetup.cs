@@ -39,6 +39,9 @@ public static class HexPlayerSetup
 		var dresser = body.AddComponent<Dresser>();
 		dresser.Source = Dresser.ClothingSource.OwnerConnection;
 		dresser.BodyTarget = renderer;
+
+		// Add weapon raise/lower component
+		playerGo.AddComponent<Interaction.WeaponRaiseComponent>();
 	}
 
 	/// <summary>

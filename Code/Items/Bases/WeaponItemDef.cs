@@ -27,6 +27,16 @@ public class WeaponItemDef : ItemDefinition
 	/// </summary>
 	[Property] public bool TwoHanded { get; set; }
 
+	/// <summary>
+	/// If true, this weapon skips raise/lower (e.g., toolgun, physgun).
+	/// </summary>
+	[Property] public bool AlwaysRaised { get; set; } = false;
+
+	/// <summary>
+	/// If true, this weapon can fire even when lowered (e.g., fists).
+	/// </summary>
+	[Property] public bool FireWhenLowered { get; set; } = false;
+
 	public override Dictionary<string, ItemAction> GetActions()
 	{
 		var actions = base.GetActions();

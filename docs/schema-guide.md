@@ -219,6 +219,54 @@ HexCharacterData data = character.Data;
 string faction = data.Faction;
 ```
 
+### Recognizable Names
+
+Hexagon includes an anti-metagaming system where characters appear as **"Unknown"** until introduced. Recognition is **one-way** — A recognizing B does NOT mean B recognizes A. Recognition persists across sessions.
+
+#### How It Works
+
+- Characters start unknown to each other
+- Players introduce themselves via `/introduce` command or the Introduce Menu (F3)
+- Factions with `IsGloballyRecognized = true` bypass recognition (e.g., police uniforms)
+
+#### Server-Side API
+
+```csharp
+// Check if observer recognizes target
+bool knows = RecognitionManager.DoesRecognize( observer.Character, target.Character );
+
+// Manually add recognition (e.g., from a plugin)
+RecognitionManager.Recognize( observer.Character, target.Character.Id );
+
+// Introduce to all nearby players
+int count = RecognitionManager.IntroduceToRange( player, 300f );
+
+// Introduce to a specific player
+bool newlyRecognized = RecognitionManager.IntroduceToTarget( player, targetPlayer );
+
+// Get display name as seen by observer
+string name = RecognitionManager.GetDisplayName( observerPlayer, targetPlayer );
+```
+
+#### Client-Side Check
+
+```csharp
+// Check if local player recognizes a target (for UI)
+bool recognized = localPlayer.DoesRecognizeLocal( targetPlayer );
+```
+
+#### Hooks
+
+- `ICanRecognizeListener` — return false to block recognition (e.g., disguise system)
+- `ICharacterRecognizedListener` — fired after a character is recognized
+
+#### Configuration
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `recognition.enabled` | bool | true | Master toggle for recognizable names |
+| `recognition.scoreboard` | bool | true | Hide unrecognized names on scoreboard |
+
 ---
 
 ## 4. Factions & Classes
@@ -477,6 +525,45 @@ new ItemAction
     OnCanRun = ( player, item ) => true                    // Visibility/availability check
 }
 ```
+
+### Action Bar / Timed Actions
+
+Hexagon provides a **progress bar system** for timed actions like lockpicking, searching, and crafting. The server controls the action; the client shows a centered progress bar.
+
+#### Basic Timed Action
+
+```csharp
+// Show a 3-second progress bar, then run callback
+ActionBarManager.SetAction( player, "Searching container...", 3f, ( p ) =>
+{
+    // Action completed — open the container
+    inventory.AddReceiver( p.Connection );
+} );
+```
+
+#### Stared Action (Must Keep Looking)
+
+```csharp
+// Cancel if player looks away from the target or moves too far
+ActionBarManager.DoStaredAction( player, doorGameObject, "Lockpicking...", 5f,
+    callback: ( p ) => { door.SetLocked( false ); },
+    onCancel: () => { ChatManager.SendSystemMessage( player, "Lockpicking cancelled." ); },
+    maxDistance: 130f
+);
+```
+
+#### Cancel
+
+```csharp
+ActionBarManager.CancelAction( player );
+```
+
+#### Hooks
+
+- `ICanStartActionListener` — return false to block an action from starting
+- `IActionCompletedListener` — fired when an action completes successfully
+- `IActionCancelledListener` — fired when an action is cancelled
+- `IActionBarUpdatedListener` — client-side, fired when the progress bar state changes
 
 ---
 
@@ -944,6 +1031,51 @@ Buy/sell NPCs with item catalogs. Place this component on an NPC model in your s
 When a player presses the vendor, their client opens the `VendorPanel` showing available items.
 
 **Hooks:** `ICanBuyItemListener`, `ICanSellItemListener`, `IItemBoughtListener`, `IItemSoldListener`, `IVendorOpenedListener`.
+
+### Weapon Raise/Lower
+
+Weapons default to **lowered** (cannot fire). Players **hold R** for a configurable duration to toggle between raised and lowered states. This prevents instant combat and encourages roleplay.
+
+#### How It Works
+
+- `WeaponRaiseComponent` is auto-added to every player via `HexPlayerSetup`
+- **Hold R** (configurable `weapon.raiseTime`) to toggle raise/lower
+- When raised, there's a short `weapon.fireDelay` before firing is allowed
+- `[Sync] IsWeaponRaised` replicates to all players for animations
+- When lowered: holdtype set to 0 (passive), `CanFire = false`
+
+#### Weapon Exemptions
+
+On `WeaponItemDef`:
+- `AlwaysRaised = true` — weapon skips raise/lower entirely (toolgun, physgun)
+- `FireWhenLowered = true` — weapon can fire even when lowered (fists)
+
+#### Schema Integration
+
+```csharp
+// In your weapon's fire logic:
+var raise = player.GetComponent<WeaponRaiseComponent>();
+if ( raise != null && !raise.CanFire )
+    return; // Weapon is lowered or raise delay hasn't elapsed
+
+// Programmatic control:
+raise.SetRaised( true );
+raise.ToggleRaised();
+```
+
+#### Hooks
+
+- `ICanRaiseWeaponListener` — return false to prevent raising
+- `IWeaponRaisedListener` — fired when raise state changes
+- `ICanFireWeaponListener` — additional permission check for firing
+
+#### Configuration
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `weapon.raiseTime` | float | 0.5 | Seconds to hold R to toggle |
+| `weapon.alwaysRaised` | bool | false | Disable raise/lower globally |
+| `weapon.fireDelay` | float | 0.5 | Delay after raising before can fire |
 
 ---
 

@@ -56,6 +56,12 @@ public class FactionDefinition : GameResource
 	[Property] public int StartingMoney { get; set; } = -1;
 
 	/// <summary>
+	/// If true, members of this faction are always recognized by everyone.
+	/// Useful for factions with distinctive uniforms (e.g., police, military).
+	/// </summary>
+	[Property] public bool IsGloballyRecognized { get; set; } = false;
+
+	/// <summary>
 	/// Called when the asset is loaded. Registers with FactionManager.
 	/// </summary>
 	protected override void PostLoad()

@@ -1,0 +1,49 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Characters;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+
+<root class="action-bar" style="display: @(HasAction ? "flex" : "none")">
+	<div class="action-text">@ActionText</div>
+	<div class="action-bar-track">
+		<div class="action-bar-fill" style="width: @((int)(Progress * 100))%"></div>
+	</div>
+</root>
+
+@code
+{
+	private bool HasAction => !string.IsNullOrEmpty( ActionText ) && ActionEndTime > ActionStartTime;
+	private string ActionText { get; set; } = "";
+	private float ActionStartTime { get; set; }
+	private float ActionEndTime { get; set; }
+
+	private float Progress
+	{
+		get
+		{
+			if ( !HasAction ) return 0f;
+			var total = ActionEndTime - ActionStartTime;
+			if ( total <= 0 ) return 0f;
+			var elapsed = Time.Now - ActionStartTime;
+			return Math.Clamp( elapsed / total, 0f, 1f );
+		}
+	}
+
+	protected override void OnUpdate()
+	{
+		var player = HexUIManager.GetLocalPlayer();
+		if ( player == null ) return;
+
+		ActionText = player.ActionText;
+		ActionStartTime = player.ActionStartTime;
+		ActionEndTime = player.ActionEndTime;
+	}
+
+	protected override int BuildHash()
+	{
+		return HashCode.Combine( HasAction, ActionText, (int)(Progress * 100) );
+	}
+}

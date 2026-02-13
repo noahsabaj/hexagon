@@ -39,6 +39,7 @@ public sealed class HexagonFramework : Component
 		// Phase 2 - Characters & Factions
 		Factions.FactionManager.Initialize();
 		Characters.CharacterManager.Initialize();
+		Characters.RecognitionManager.Initialize();
 
 		// Phase 3 - Items & Inventory
 		Items.ItemManager.Initialize();
@@ -50,6 +51,7 @@ public sealed class HexagonFramework : Component
 		Chat.ChatManager.Initialize();
 		Commands.CommandManager.Initialize();
 		Attributes.AttributeManager.Initialize();
+		Interaction.ActionBarManager.Initialize();
 		GameObject.GetOrAddComponent<Chat.HexChatComponent>();
 
 		// Phase 5 - World Systems
@@ -76,6 +78,9 @@ public sealed class HexagonFramework : Component
 
 		// Character auto-save tick
 		Characters.CharacterManager.Update();
+
+		// Tick action bar (stared actions, completions)
+		Interaction.ActionBarManager.Update();
 	}
 
 	protected override void OnDestroy()

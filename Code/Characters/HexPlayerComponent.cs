@@ -34,6 +34,7 @@ public sealed class HexPlayerComponent : Component
 	[Sync] public string CharacterDescription { get; set; } = "";
 	[Sync] public string FactionId { get; set; } = "";
 	[Sync] public string ClassId { get; set; } = "";
+	[Sync] public string CharacterId { get; set; } = "";
 	[Sync] public bool HasActiveCharacter { get; set; }
 	[Sync] public bool IsDead { get; set; }
 
@@ -65,6 +66,33 @@ public sealed class HexPlayerComponent : Component
 	/// Fired on the client when a character creation result is received.
 	/// </summary>
 	public event Action<bool, string> OnCharacterCreateResult;
+
+	// --- Action Bar Client State ---
+
+	/// <summary>
+	/// Client-side: start time of the current action bar.
+	/// </summary>
+	public float ActionStartTime { get; private set; }
+
+	/// <summary>
+	/// Client-side: end time of the current action bar.
+	/// </summary>
+	public float ActionEndTime { get; private set; }
+
+	/// <summary>
+	/// Client-side: text label for the current action bar.
+	/// </summary>
+	public string ActionText { get; private set; } = "";
+
+	/// <summary>
+	/// Client-side: fired when action bar state changes.
+	/// </summary>
+	public event Action OnActionBarChanged;
+
+	// --- Recognition Client State ---
+
+	private HashSet<string> _recognizedIds = new();
+	private bool _recognitionDataReceived;
 
 	// --- Server-bound RPCs (client calls these) ---
 
@@ -282,6 +310,7 @@ public sealed class HexPlayerComponent : Component
 		}
 
 		HasActiveCharacter = true;
+		CharacterId = Character.Id;
 		FactionId = Character.Data.Faction ?? "";
 		ClassId = Character.Data.Class ?? "";
 
@@ -326,6 +355,9 @@ public sealed class HexPlayerComponent : Component
 		privateVars["Flags"] = Character.Data.Flags ?? "";
 
 		ReceivePrivateData( Json.Serialize( privateVars ) );
+
+		// Sync recognition data
+		RecognitionManager.SyncRecognitionToClient( this );
 	}
 
 	[Rpc.Owner]
@@ -354,8 +386,160 @@ public sealed class HexPlayerComponent : Component
 		}
 	}
 
+	// --- Action Bar RPCs ---
+
+	/// <summary>
+	/// Server sends action bar state to the owning client.
+	/// </summary>
+	[Rpc.Owner]
+	internal void ReceiveActionBar( float startTime, float endTime, string text )
+	{
+		ActionStartTime = startTime;
+		ActionEndTime = endTime;
+		ActionText = text;
+		OnActionBarChanged?.Invoke();
+	}
+
+	/// <summary>
+	/// Server clears the action bar on the owning client.
+	/// </summary>
+	[Rpc.Owner]
+	internal void ReceiveActionBarReset()
+	{
+		ActionStartTime = 0;
+		ActionEndTime = 0;
+		ActionText = "";
+		OnActionBarChanged?.Invoke();
+	}
+
+	// --- Recognition RPCs ---
+
+	/// <summary>
+	/// Server sends updated recognition data to the owning client.
+	/// </summary>
+	[Rpc.Owner]
+	internal void ReceiveRecognitionData( string json )
+	{
+		try
+		{
+			_recognizedIds = Json.Deserialize<HashSet<string>>( json ) ?? new();
+		}
+		catch
+		{
+			_recognizedIds = new();
+		}
+
+		_recognitionDataReceived = true;
+	}
+
+	/// <summary>
+	/// Client-side: check if this player recognizes a target player.
+	/// </summary>
+	public bool DoesRecognizeLocal( HexPlayerComponent target )
+	{
+		if ( target == null || !target.HasActiveCharacter ) return true;
+		if ( target == this ) return true;
+
+		// If recognition data was never synced, feature is likely disabled
+		if ( !_recognitionDataReceived ) return true;
+
+		// Check if target's faction is globally recognized
+		if ( !string.IsNullOrEmpty( target.FactionId ) )
+		{
+			var faction = Factions.FactionManager.GetFaction( target.FactionId );
+			if ( faction != null && faction.IsGloballyRecognized )
+				return true;
+		}
+
+		return _recognizedIds.Contains( target.CharacterId );
+	}
+
+	// --- Introduce RPC ---
+
+	/// <summary>
+	/// Client requests to introduce themselves. Level: 0=look-at, 1=whisper, 2=talk, 3=yell.
+	/// </summary>
+	[Rpc.Host]
+	public void RequestIntroduce( int level )
+	{
+		var caller = Rpc.Caller;
+		if ( caller == null ) return;
+
+		var player = HexGameManager.GetPlayer( caller );
+		if ( player == null || player != this ) return;
+
+		if ( player.Character == null )
+		{
+			Chat.ChatManager.SendSystemMessage( player, "You have no active character." );
+			return;
+		}
+
+		switch ( level )
+		{
+			case 0:
+			{
+				// Look-at target
+				var pc = player.GameObject.GetComponent<PlayerController>();
+				if ( pc == null ) break;
+
+				var from = pc.EyePosition;
+				var to = from + pc.EyeAngles.Forward * 200f;
+				var tr = player.Scene.Trace.Ray( from, to )
+					.IgnoreGameObjectHierarchy( player.GameObject )
+					.Run();
+
+				if ( tr.Hit && tr.GameObject != null )
+				{
+					var targetPlayer = tr.GameObject.GetComponent<HexPlayerComponent>();
+					if ( targetPlayer != null && targetPlayer.Character != null )
+					{
+						if ( RecognitionManager.IntroduceToTarget( player, targetPlayer ) )
+							Chat.ChatManager.SendSystemMessage( player, "You introduced yourself." );
+						else
+							Chat.ChatManager.SendSystemMessage( player, "They already know who you are." );
+					}
+					else
+					{
+						Chat.ChatManager.SendSystemMessage( player, "You must be looking at a player." );
+					}
+				}
+				else
+				{
+					Chat.ChatManager.SendSystemMessage( player, "You must be looking at a player." );
+				}
+				break;
+			}
+			case 1:
+			{
+				var range = Config.HexConfig.Get<float>( "chat.whisperRange", 100f );
+				var count = RecognitionManager.IntroduceToRange( player, range );
+				Chat.ChatManager.SendSystemMessage( player, $"You introduced yourself to {count} nearby people." );
+				break;
+			}
+			case 2:
+			{
+				var range = Config.HexConfig.Get<float>( "chat.icRange", 300f );
+				var count = RecognitionManager.IntroduceToRange( player, range );
+				Chat.ChatManager.SendSystemMessage( player, $"You introduced yourself to {count} nearby people." );
+				break;
+			}
+			case 3:
+			{
+				var range = Config.HexConfig.Get<float>( "chat.yellRange", 600f );
+				var count = RecognitionManager.IntroduceToRange( player, range );
+				Chat.ChatManager.SendSystemMessage( player, $"You introduced yourself to {count} nearby people." );
+				break;
+			}
+		}
+	}
+
+	// --- Lifecycle ---
+
 	protected override void OnDestroy()
 	{
+		// Clean up action bar
+		Interaction.ActionBarManager.RemovePlayer( SteamId );
+
 		// Save character on player disconnect
 		if ( !IsProxy && Character != null )
 		{

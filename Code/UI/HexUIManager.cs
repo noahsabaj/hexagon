@@ -147,6 +147,12 @@ public sealed class HexUIManager : Component, ICharacterLoadedListener, ICharact
 			HexEvents.Fire<IChatFocusRequestListener>( x => x.OnChatFocusRequested() );
 		}
 
+		// F3 — Toggle introduce menu
+		if ( Input.Pressed( "Slot3" ) && State == UIState.Gameplay )
+		{
+			TogglePanel( "IntroduceMenu" );
+		}
+
 		// ESC — Close topmost panel
 		if ( Input.Pressed( "Menu" ) )
 		{

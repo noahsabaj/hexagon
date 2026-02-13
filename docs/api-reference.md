@@ -207,6 +207,8 @@ void SetFaction( string factionId )
 void SetClass( string classId )
 void Ban( TimeSpan? duration )
 void Unban()
+HashSet<string> GetRecognizedIds()
+void AddRecognized( string characterId )
 void MarkDirty( string fieldName )
 void Save()
 IReadOnlySet<string> GetDirtyFields()
@@ -233,6 +235,8 @@ IReadOnlySet<string> GetDirtyFields()
 | `SetClass` | Set this character's class within their current faction. |
 | `Ban` | Ban this character. Pass null duration for permanent ban. |
 | `Unban` | Unban this character. |
+| `GetRecognizedIds` | Get the set of character IDs this character recognizes. |
+| `AddRecognized` | Add a character ID to this character's recognition list. |
 | `MarkDirty` | Mark a field as dirty (changed since last save). Call this after modifying character data properties directly. |
 | `Save` | Save this character to the database if dirty. |
 | `GetDirtyFields` | Get the list of fields that have changed since last save. |
@@ -343,6 +347,7 @@ Component attached to each player's GameObject. Holds the networked character da
 [Sync] string CharacterDescription { get; set; }
 [Sync] string FactionId { get; set; }
 [Sync] string ClassId { get; set; }
+[Sync] string CharacterId { get; set; }
 [Sync] bool HasActiveCharacter { get; set; }
 [Sync] bool IsDead { get; set; }
 HexCharacter Character { get; set; }
@@ -350,11 +355,17 @@ Connection Connection { get; set; }
 List<CharacterListEntry> ClientCharacterList { get; set; }
 event Action OnCharacterListReceived
 event Action<bool, string
+float ActionStartTime { get; set; }
+float ActionEndTime { get; set; }
+string ActionText { get; set; }
+event Action OnActionBarChanged
 [Rpc.Host] void RequestCharacterList()
 [Rpc.Host] void RequestLoadCharacter( string characterId )
 [Rpc.Host] void RequestCreateCharacter( string json )
 [Rpc.Host] void RequestDeleteCharacter( string characterId )
 T GetPrivateVar<T>( string name, T defaultValue )
+bool DoesRecognizeLocal( HexPlayerComponent target )
+[Rpc.Host] void RequestIntroduce( int level )
 ```
 
 | Member | Description |
@@ -366,6 +377,7 @@ T GetPrivateVar<T>( string name, T defaultValue )
 | `CharacterDescription` |  |
 | `FactionId` |  |
 | `ClassId` |  |
+| `CharacterId` |  |
 | `HasActiveCharacter` |  |
 | `IsDead` |  |
 | `Character` | The active character for this player. Only valid on the server. |
@@ -373,11 +385,17 @@ T GetPrivateVar<T>( string name, T defaultValue )
 | `ClientCharacterList` | Client-side character list received from the server. |
 | `OnCharacterListReceived` | Fired on the client when the character list is received from the server. |
 | `string` | Fired on the client when a character creation result is received. |
+| `ActionStartTime` | Client-side: start time of the current action bar. |
+| `ActionEndTime` | Client-side: end time of the current action bar. |
+| `ActionText` | Client-side: text label for the current action bar. |
+| `OnActionBarChanged` | Client-side: fired when action bar state changes. |
 | `RequestCharacterList` | Client requests their character list from the server. |
 | `RequestLoadCharacter` | Client requests to load a specific character. |
 | `RequestCreateCharacter` | Client requests to create a new character from JSON data. |
 | `RequestDeleteCharacter` | Client requests to delete a character. |
 | `GetPrivateVar` | Client-side: get a private CharVar value that was synced from the server. |
+| `DoesRecognizeLocal` | Client-side: check if this player recognizes a target player. |
+| `RequestIntroduce` | Client requests to introduce themselves. Level: 0=look-at, 1=whisper, 2=talk, 3=yell. |
 
 ### HexPlayerSetup (static)
 
@@ -392,6 +410,30 @@ static void ApplyCharacterToPlayer( HexPlayerComponent player, HexCharacter char
 |--------|-------------|
 | `BuildDefaultPlayer` | Configure a bare GameObject as a fully functional first-person player. Adds PlayerController, SkinnedModelRenderer (citizen), and Dresser. |
 | `ApplyCharacterToPlayer` | Apply character-specific data to an existing player (model, speeds). Called when a character loads or changes. |
+
+### RecognitionManager (static)
+
+Manages the recognizable names system. Characters are "Unknown" to others until formally introduced. Recognition is one-way and persists across sessions. Factions with IsGloballyRecognized are always known (e.g., police uniforms).
+
+```csharp
+static bool DoesRecognize( HexCharacter observer, HexCharacter target )
+static bool Recognize( HexCharacter observer, string targetCharacterId )
+static int IntroduceToRange( HexPlayerComponent player, float range )
+static bool IntroduceToTarget( HexPlayerComponent player, HexPlayerComponent target )
+static string GetDisplayName( HexPlayerComponent observer, HexPlayerComponent target )
+static string GetDisplayNameForChat( HexPlayerComponent observer, HexPlayerComponent target )
+static string FormatForListener( HexPlayerComponent observer, HexPlayerComponent speaker, string formatted )
+```
+
+| Member | Description |
+|--------|-------------|
+| `DoesRecognize` | Server-side: check if observer recognizes target. |
+| `Recognize` | Server-side: add target to observer's recognition list. Returns true if newly recognized, false if already known. |
+| `IntroduceToRange` | Server-side: introduce a character to all players within range. Returns the number of players who newly recognized the introducer. |
+| `IntroduceToTarget` | Server-side: introduce to a specific player. Returns true if the target newly recognized the introducer. |
+| `GetDisplayName` | Server-side: get the display name for a target as seen by an observer. Returns "Unknown" if not recognized. |
+| `GetDisplayNameForChat` | Server-side: get a chat-friendly display name with truncated description for unknowns. |
+| `FormatForListener` | Server-side: format a pre-formatted message replacing the speaker's real name with the recognition-aware name for a specific listener. |
 
 ---
 
@@ -435,6 +477,7 @@ string Description { get; set; }
 [Property] int MaxPlayers { get; set; }
 [Property] int Order { get; set; }
 [Property] int StartingMoney { get; set; }
+[Property] bool IsGloballyRecognized { get; set; }
 ```
 
 | Member | Description |
@@ -448,6 +491,7 @@ string Description { get; set; }
 | `MaxPlayers` | Maximum active players in this faction (0 = unlimited). |
 | `Order` | Sort order in character creation UI. Lower = appears first. |
 | `StartingMoney` | Starting money for characters created in this faction. If -1, uses the global currency.startingAmount config. |
+| `IsGloballyRecognized` | If true, members of this faction are always recognized by everyone. Useful for factions with distinctive uniforms (e.g., police, military). |
 
 ### FactionManager (static)
 
@@ -726,6 +770,8 @@ Base definition for weapon items. Handles equip/unequip lifecycle and ammo track
 [Property] int ClipSize { get; set; }
 [Property] Model WeaponModel { get; set; }
 [Property] bool TwoHanded { get; set; }
+[Property] bool AlwaysRaised { get; set; }
+[Property] bool FireWhenLowered { get; set; }
 override Dictionary<string, ItemAction> GetActions()
 int GetClipAmmo( ItemInstance item )
 void SetClipAmmo( ItemInstance item, int amount )
@@ -738,6 +784,8 @@ override void OnInstanced( ItemInstance item )
 | `ClipSize` | Maximum ammo this weapon can hold in its magazine. |
 | `WeaponModel` | Model used when the weapon is held (viewmodel or world attachment). |
 | `TwoHanded` | Whether this weapon is two-handed (prevents offhand use). |
+| `AlwaysRaised` | If true, this weapon skips raise/lower (e.g., toolgun, physgun). |
+| `FireWhenLowered` | If true, this weapon can fire even when lowered (e.g., fists). |
 | `GetActions` |  |
 | `GetClipAmmo` | Get the current ammo in this weapon's clip. |
 | `SetClipAmmo` | Set the current ammo in this weapon's clip. |
@@ -1803,6 +1851,18 @@ interface ICanCharacterCreate
 interface ICharacterCreatedListener
 {
     void OnCharacterCreated( HexPlayerComponent player, HexCharacter character );
+}
+
+// Permission hook: can a character be recognized? Return false to block (e.g., disguise system).
+interface ICanRecognizeListener
+{
+    bool CanRecognize( HexCharacter observer, HexCharacter target );
+}
+
+// Fired after a character is recognized by another through introduction.
+interface ICharacterRecognizedListener
+{
+    void OnCharacterRecognized( HexPlayerComponent introducer, HexPlayerComponent recognizer );
 }
 
 ```

@@ -336,6 +336,77 @@ internal static class BuiltInCommands
 			}
 		} );
 
+		// --- Introduce (player command, no permission required) ---
+
+		CommandManager.Register( new HexCommand
+		{
+			Name = "introduce",
+			Description = "Introduce yourself to nearby players.",
+			Permission = "",
+			Arguments = new[] { Arg.Optional( Arg.String( "range" ), "" ) },
+			OnRun = ( caller, ctx ) =>
+			{
+				if ( !caller.HasActiveCharacter )
+					return "You have no active character.";
+
+				var range = ctx.Get<string>( "range" )?.ToLower() ?? "";
+
+				switch ( range )
+				{
+					case "whisper":
+					{
+						var r = Config.HexConfig.Get<float>( "chat.whisperRange", 100f );
+						var count = RecognitionManager.IntroduceToRange( caller, r );
+						return $"You introduced yourself to {count} nearby people.";
+					}
+					case "nearby":
+					case "talk":
+					case "":
+					{
+						// Default: talk range if text provided, look-at if truly empty
+						if ( string.IsNullOrEmpty( range ) )
+						{
+							// Look-at target
+							var pc = caller.GameObject.GetComponent<PlayerController>();
+							if ( pc == null ) return "No player controller found.";
+
+							var from = pc.EyePosition;
+							var to = from + pc.EyeAngles.Forward * 200f;
+							var tr = caller.Scene.Trace.Ray( from, to )
+								.IgnoreGameObjectHierarchy( caller.GameObject )
+								.Run();
+
+							if ( !tr.Hit || tr.GameObject == null )
+								return "You must be looking at a player.";
+
+							var target = tr.GameObject.GetComponent<HexPlayerComponent>();
+							if ( target == null || target.Character == null )
+								return "You must be looking at a player.";
+
+							if ( RecognitionManager.IntroduceToTarget( caller, target ) )
+								return "You introduced yourself.";
+							else
+								return "They already know who you are.";
+						}
+						else
+						{
+							var r = Config.HexConfig.Get<float>( "chat.icRange", 300f );
+							var count = RecognitionManager.IntroduceToRange( caller, r );
+							return $"You introduced yourself to {count} nearby people.";
+						}
+					}
+					case "yell":
+					{
+						var r = Config.HexConfig.Get<float>( "chat.yellRange", 600f );
+						var count = RecognitionManager.IntroduceToRange( caller, r );
+						return $"You introduced yourself to {count} nearby people.";
+					}
+					default:
+						return "Usage: /introduce [whisper|nearby|yell]";
+				}
+			}
+		} );
+
 		// --- Vendors ---
 
 		CommandManager.Register( new HexCommand

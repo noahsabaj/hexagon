@@ -156,14 +156,44 @@ public static class ChatManager
 		{
 			var color = chatClass.Color;
 
-			using ( Rpc.FilterInclude( recipients ) )
+			// Recognition-aware per-recipient formatting for IC-type chats
+			var recognitionEnabled = Config.HexConfig.Get<bool>( "recognition.enabled", true );
+			var isRecognitionChat = chatClass.Range > 0
+				&& chatClass is not OOCChat
+				&& chatClass is not LOOCChat;
+
+			if ( recognitionEnabled && isRecognitionChat )
 			{
-				HexChatComponent.Instance.ReceiveMessage(
-					sender.CharacterName,
-					chatClass.Name,
-					formatted,
-					color.r, color.g, color.b
-				);
+				foreach ( var conn in recipients )
+				{
+					var listener = HexGameManager.GetPlayer( conn );
+					if ( listener == null ) continue;
+
+					var personalName = Characters.RecognitionManager.GetDisplayNameForChat( listener, sender );
+					var personalFormatted = Characters.RecognitionManager.FormatForListener( listener, sender, formatted );
+
+					using ( Rpc.FilterInclude( conn ) )
+					{
+						HexChatComponent.Instance.ReceiveMessage(
+							personalName,
+							chatClass.Name,
+							personalFormatted,
+							color.r, color.g, color.b
+						);
+					}
+				}
+			}
+			else
+			{
+				using ( Rpc.FilterInclude( recipients ) )
+				{
+					HexChatComponent.Instance.ReceiveMessage(
+						sender.CharacterName,
+						chatClass.Name,
+						formatted,
+						color.r, color.g, color.b
+					);
+				}
 			}
 		}
 

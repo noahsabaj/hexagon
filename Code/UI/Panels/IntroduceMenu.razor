@@ -1,0 +1,54 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Characters;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+@implements IHexPanel
+
+<root class="introduce-menu @(IsOpen ? "open" : "")" style="display: @(IsOpen ? "flex" : "none")">
+	<div class="introduce-container hex-panel">
+		<div class="introduce-title">Introduce Yourself</div>
+		<div class="introduce-options">
+			<button class="introduce-option" onclick="@(() => Introduce(0))">Look At Target</button>
+			<button class="introduce-option" onclick="@(() => Introduce(1))">Whisper Range</button>
+			<button class="introduce-option" onclick="@(() => Introduce(2))">Talk Range</button>
+			<button class="introduce-option" onclick="@(() => Introduce(3))">Yell Range</button>
+		</div>
+	</div>
+</root>
+
+@code
+{
+	public string PanelName => "IntroduceMenu";
+	public bool IsOpen { get; private set; }
+
+	public void Open()
+	{
+		IsOpen = true;
+		StateHasChanged();
+	}
+
+	public void Close()
+	{
+		IsOpen = false;
+		StateHasChanged();
+	}
+
+	private void Introduce( int level )
+	{
+		var player = HexUIManager.GetLocalPlayer();
+		if ( player == null ) return;
+
+		player.RequestIntroduce( level );
+
+		Close();
+		HexUIManager.Instance?.ClosePanel( "IntroduceMenu" );
+	}
+
+	protected override int BuildHash()
+	{
+		return HashCode.Combine( IsOpen );
+	}
+}

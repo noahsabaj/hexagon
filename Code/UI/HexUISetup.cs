@@ -36,5 +36,7 @@ public static class HexUISetup
 		go.AddComponent<VendorPanel>();
 		go.AddComponent<Scoreboard>();
 		go.AddComponent<DeathScreen>();
+		go.AddComponent<ActionBar>();
+		go.AddComponent<IntroduceMenu>();
 	}
 }

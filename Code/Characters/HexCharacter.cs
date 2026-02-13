@@ -211,6 +211,35 @@ public class HexCharacter
 		MarkDirty( nameof( Data.IsBanned ) );
 	}
 
+	// --- Recognition ---
+
+	/// <summary>
+	/// Get the set of character IDs this character recognizes.
+	/// </summary>
+	public HashSet<string> GetRecognizedIds()
+	{
+		var raw = Data.Data?.GetValueOrDefault( "recognized" );
+		if ( raw == null ) return new HashSet<string>();
+
+		var str = raw.ToString();
+		if ( string.IsNullOrEmpty( str ) ) return new HashSet<string>();
+
+		return new HashSet<string>( str.Split( ',', StringSplitOptions.RemoveEmptyEntries ) );
+	}
+
+	/// <summary>
+	/// Add a character ID to this character's recognition list.
+	/// </summary>
+	public void AddRecognized( string characterId )
+	{
+		var ids = GetRecognizedIds();
+		if ( !ids.Add( characterId ) ) return;
+
+		Data.Data ??= new();
+		Data.Data["recognized"] = string.Join( ",", ids );
+		MarkDirty( "Data" );
+	}
+
 	// --- Persistence ---
 
 	/// <summary>

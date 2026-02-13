@@ -27,7 +27,7 @@
 				@foreach ( var player in GetPlayers() )
 				{
 					<div class="table-row">
-						<div class="col-name">@(player.HasActiveCharacter ? player.CharacterName : "(No Character)")</div>
+						<div class="col-name">@GetCharacterDisplayName( player )</div>
 						<div class="col-faction text-muted">@GetFactionName( player.FactionId )</div>
 						<div class="col-class text-muted">@GetClassName( player.ClassId )</div>
 						<div class="col-player text-muted">@player.DisplayName</div>
@@ -72,6 +72,17 @@
 		if ( string.IsNullOrEmpty( classId ) ) return "";
 		var cls = FactionManager.GetClass( classId );
 		return cls?.Name ?? classId;
+	}
+
+	private string GetCharacterDisplayName( HexPlayerComponent player )
+	{
+		if ( !player.HasActiveCharacter ) return "(No Character)";
+
+		var localPlayer = HexUIManager.GetLocalPlayer();
+		if ( localPlayer != null && localPlayer.DoesRecognizeLocal( player ) )
+			return player.CharacterName;
+
+		return "Unknown";
 	}
 
 	protected override int BuildHash()
