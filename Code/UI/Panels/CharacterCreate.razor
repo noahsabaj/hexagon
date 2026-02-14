@@ -8,8 +8,7 @@
 @inherits PanelComponent
 @implements IHexPanel
 
-<root style="display: @(IsOpen ? "flex" : "none")">
-	<div class="character-create-overlay">
+<root class="@(IsOpen ? "open" : "")">
 	<div class="create-container hex-panel">
 		<div class="header">
 			<h2>Create Character</h2>
@@ -81,7 +80,6 @@
 			<button class="hex-button primary" onclick="@SubmitCreate"
 					disabled="@IsSubmitting">Create</button>
 		</div>
-	</div>
 	</div>
 </root>
 
