@@ -58,38 +58,33 @@ The framework handles:
 
 1. Create a new **s&box Game** project in the s&box editor.
 2. Add **Hexagon** as a library reference in your project settings.
-3. Set up your scene with the following components:
+3. Add a single `HexagonFramework` component to any GameObject in your scene.
 
 **Minimal scene setup:**
 
 ```
 Scene
-  +-- Hexagon (GameObject)
-  |     +-- HexagonFramework (Component)
-  |     +-- HexGameManager (Component)
-  +-- NetworkHelper (Component) -- s&box built-in, creates lobby on Play
-  +-- CameraComponent -- required by PlayerController
-  +-- DirectionalLight
-  +-- Floor/Ground -- something to stand on
+  +-- HexagonFramework (Component)   <-- the only component you need
+  +-- Main Camera
+  +-- Directional Light
+  +-- Map
 ```
 
-That's it. No PlayerPrefab, no ScreenPanel, no manual panel placement needed.
-
-The `HexagonFramework` component bootstraps all Hexagon systems on `OnStart()`. The `HexGameManager` handles player spawning and tracks connected players.
+That's it. One component. Everything else is auto-created: player spawning, UI panels, chat, networking -- all of it.
 
 **What happens automatically:**
 
-- **Player setup**: When no `PlayerPrefab` is assigned on HexGameManager, Hexagon creates a default first-person player with `PlayerController` (WASD movement, mouse look, USE key interaction), a citizen model, and a `Dresser` that auto-applies the player's Steam avatar clothing.
-- **UI setup**: On initialization, Hexagon auto-creates a `ScreenPanel` root with `HexUIManager` and all 9 default panels (CharacterSelect, CharacterCreate, HUD, Chat, Inventory, Storage, Vendor, Scoreboard, DeathScreen).
-- **Character model**: When a character loads, `HexModelHandler` applies any custom model and walk/run speeds from config.
+- **All systems**: `HexagonFramework` bootstraps everything on startup -- `HexGameManager` (player connections), `HexChatComponent` (chat RPCs), `HexInventoryComponent` (inventory sync), `HexModelHandler` (clothing/model), and a `ScreenPanel` with all default UI panels.
+- **Player setup**: Players connect as invisible networking objects. When a character is loaded, Hexagon builds the full player body with `PlayerController` (WASD movement, mouse look, USE key), a citizen model, and a `Dresser` that auto-applies Steam avatar clothing.
+- **UI setup**: Auto-creates `HexUIManager` and all default panels (CharacterSelect, CharacterCreate, HUD, Chat, Inventory, Storage, Vendor, Scoreboard, DeathScreen, and more).
 
 **Custom player prefab (optional):**
 
-If you want full control over the player GameObject, create a prefab with at least a `HexPlayerComponent` and assign it to `HexGameManager.PlayerPrefab`. When a prefab is assigned, the default player setup is skipped entirely.
+If you want full control over the player body, manually add `HexGameManager` to the HexagonFramework GameObject and assign a prefab to `HexGameManager.PlayerPrefab`. Since `HexagonFramework` uses `GetOrAddComponent`, it won't duplicate it.
 
 **Custom UI (optional):**
 
-If you place a `HexUIManager` in your scene manually, the auto-creation is skipped. You can also replace individual panels by disabling the defaults and adding your own `IHexPanel` implementations.
+To override a default panel, create your own `PanelComponent` implementing `IHexPanel` with the same `PanelName` (e.g. `"CharacterSelect"`) on any GameObject in your scene. The framework automatically detects the override and disables its default -- no configuration needed.
 
 ### Minimum Required Code
 

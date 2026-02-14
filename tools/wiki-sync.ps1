@@ -18,28 +18,28 @@ New-Item -ItemType Directory -Path $OutDir | Out-Null
 # Section number -> (filename without .md, display title for sidebar)
 # Sections 1+2 merge into Schema-Guide
 $SchemaSectionMap = [ordered]@{
-    "1"  = @{ File = "Schema-Guide"; Title = "Getting Started" }
-    "2"  = @{ File = "Schema-Guide"; Title = $null }  # merged with 1
-    "3"  = @{ File = "Characters"; Title = "Characters" }
-    "4"  = @{ File = "Factions-and-Classes"; Title = "Factions & Classes" }
-    "5"  = @{ File = "Items"; Title = "Items" }
-    "6"  = @{ File = "Inventory"; Title = "Inventory" }
-    "7"  = @{ File = "Plugins"; Title = "Plugins" }
-    "8"  = @{ File = "Chat"; Title = "Chat" }
-    "9"  = @{ File = "Commands"; Title = "Commands" }
-    "10" = @{ File = "Permissions"; Title = "Permissions" }
-    "11" = @{ File = "Currency"; Title = "Currency" }
-    "12" = @{ File = "Attributes"; Title = "Attributes" }
-    "13" = @{ File = "World-Interaction"; Title = "World Interaction" }
-    "14" = @{ File = "UI-Customization"; Title = "UI Customization" }
-    "15" = @{ File = "Configuration"; Title = "Configuration" }
-    "16" = @{ File = "Events-and-Hooks"; Title = "Events & Hooks" }
-    "17" = @{ File = "Logging"; Title = "Logging" }
-    "18" = @{ File = "Complete-Example"; Title = "Complete Example" }
+    "1"  = @{ File = "Schema-Guide"; Title = "Getting Started"; Desc = "Project setup, scene configuration, your first schema" }
+    "2"  = @{ File = "Schema-Guide"; Title = $null; Desc = $null }  # merged with 1
+    "3"  = @{ File = "Characters"; Title = "Characters"; Desc = "Multi-character system with custom [CharVar] data fields" }
+    "4"  = @{ File = "Factions-and-Classes"; Title = "Factions & Classes"; Desc = "Data-driven faction/class definitions as GameResource assets" }
+    "5"  = @{ File = "Items"; Title = "Items"; Desc = "Item definitions (weapons, bags, outfits, ammo, currency) with virtual methods" }
+    "6"  = @{ File = "Inventory"; Title = "Inventory"; Desc = "Grid-based inventory with drag-drop and container nesting" }
+    "7"  = @{ File = "Plugins"; Title = "Plugins"; Desc = "Extend the framework with [HexPlugin] classes or s&box addon packages" }
+    "8"  = @{ File = "Chat"; Title = "Chat"; Desc = "Pluggable chat classes (IC, OOC, whisper, yell, /me, /it, /roll)" }
+    "9"  = @{ File = "Commands"; Title = "Commands"; Desc = "Typed argument parsing with permission checks" }
+    "10" = @{ File = "Permissions"; Title = "Permissions"; Desc = "Flag-based character permissions with extensible hooks" }
+    "11" = @{ File = "Currency"; Title = "Currency"; Desc = "Configurable money system with physical currency items" }
+    "12" = @{ File = "Attributes"; Title = "Attributes"; Desc = "Character stats with boost/debuff system" }
+    "13" = @{ File = "World-Interaction"; Title = "World Interaction"; Desc = "Doors, storage containers, vendors (IPressable interface)" }
+    "14" = @{ File = "UI-Customization"; Title = "UI Customization"; Desc = "Override default panels or add your own" }
+    "15" = @{ File = "Configuration"; Title = "Configuration"; Desc = "Server-side config options" }
+    "16" = @{ File = "Events-and-Hooks"; Title = "Events & Hooks"; Desc = "Fire, permission-gate, and value-reduce event patterns" }
+    "17" = @{ File = "Logging"; Title = "Logging"; Desc = "Date-partitioned server logs for admin review" }
+    "18" = @{ File = "Complete-Example"; Title = "Complete Example"; Desc = "Full HL2RP-style schema reference" }
 }
 
 # API reference namespace mapping is discovered dynamically from api-reference.md headers.
-# No hardcoded namespace list — adding/removing namespaces in Code/ is automatically reflected.
+# No hardcoded namespace list --adding/removing namespaces in Code/ is automatically reflected.
 
 # --- Helper functions ---
 
@@ -208,7 +208,7 @@ foreach ($ns in $apiChunks.Keys) {
 # Generate Home.md
 # ============================================================
 
-# Build Home.md with static schema guide + dynamic API links
+# Build Home.md --landing page with quick start, described guide links, and API summary
 $homeLines = [System.Collections.Generic.List[string]]::new()
 $homeLines.Add("# Hexagon")
 $homeLines.Add("")
@@ -216,16 +216,28 @@ $homeLines.Add("**Hexagon** is a roleplay framework library for s&box (Source 2,
 $homeLines.Add("")
 $homeLines.Add("A **schema** is a separate s&box Game project that references the Hexagon library to create a specific RP gamemode. Hexagon provides the underlying systems; your schema defines the content, rules, and flavor of your server.")
 $homeLines.Add("")
+$homeLines.Add("## Quick Start")
+$homeLines.Add("")
+$homeLines.Add("Add ``HexagonFramework`` to any GameObject in your scene. That's it -- one component, everything auto-initializes.")
+$homeLines.Add("")
+$homeLines.Add("``````")
+$homeLines.Add("Scene")
+$homeLines.Add("  +-- HexagonFramework (Component)")
+$homeLines.Add("  +-- Main Camera")
+$homeLines.Add("  +-- Directional Light")
+$homeLines.Add("  +-- Map")
+$homeLines.Add("``````")
+$homeLines.Add("")
+$homeLines.Add("Then define your character data, factions, items, and plugins. See **[[Getting Started|Schema-Guide]]** for the full walkthrough.")
+$homeLines.Add("")
 $homeLines.Add("## Schema Developer Guide")
 $homeLines.Add("")
-$homeLines.Add("Start here if you're building a schema.")
-$homeLines.Add("")
 
-# Schema guide links (from SchemaSectionMap — these are hand-authored sections)
+# Schema guide links with descriptions
 foreach ($sectionNum in $SchemaSectionMap.Keys) {
     $mapping = $SchemaSectionMap[$sectionNum]
     if ($null -eq $mapping.Title) { continue }
-    $homeLines.Add("- [[$($mapping.Title)|$($mapping.File)]]")
+    $homeLines.Add("- **[[$($mapping.Title)|$($mapping.File)]]** -- $($mapping.Desc)")
 }
 
 $homeLines.Add("")
