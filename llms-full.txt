@@ -1,0 +1,4445 @@
+﻿# Hexagon -- Complete Documentation
+
+> This file contains the full Hexagon framework documentation for LLM consumption.
+> Hexagon is a roleplay framework library for s&box (Source 2, C#).
+> Source: https://github.com/noahsabaj/hexagon
+
+---
+
+# Hexagon Schema Developer Guide
+
+A comprehensive guide for building roleplay gamemodes ("schemas") on the Hexagon framework for s&box (Source 2, C#).
+
+---
+
+## Table of Contents
+
+1. [Introduction](#1-introduction)
+2. [Getting Started](#2-getting-started)
+3. [Character Data](#3-character-data)
+4. [Factions & Classes](#4-factions--classes)
+5. [Items](#5-items)
+6. [Inventory](#6-inventory)
+7. [Plugins](#7-plugins)
+8. [Chat](#8-chat)
+9. [Commands](#9-commands)
+10. [Permissions](#10-permissions)
+11. [Currency](#11-currency)
+12. [Attributes](#12-attributes)
+13. [World Interaction](#13-world-interaction)
+14. [UI Customization](#14-ui-customization)
+15. [Configuration](#15-configuration)
+16. [Events & Hooks](#16-events--hooks)
+17. [Logging](#17-logging)
+18. [Complete Example](#18-complete-example)
+
+---
+
+## 1. Introduction
+
+**Hexagon** is a roleplay framework library for s&box (Source 2, C#). It is the successor to NutScript and Helix from Garry's Mod, rebuilt from the ground up for s&box's Scene/Component architecture.
+
+A **schema** is a separate s&box Game project that references the Hexagon library to create a specific RP gamemode. Hexagon provides the underlying systems; your schema defines the content, rules, and flavor of your server.
+
+The framework handles:
+
+- **Characters** -- multi-character system with custom data fields
+- **Factions & Classes** -- organizational groups with per-faction classes
+- **Items & Inventory** -- grid-based inventory with item definitions and instances
+- **Chat** -- class-based chat routing (IC, OOC, yell, whisper, etc.)
+- **Commands** -- typed argument parsing, permission-gated commands
+- **Permissions** -- flag-based character permissions with extensible checks
+- **Currency** -- money management with hooks and physical currency items
+- **Attributes** -- character stats with a boost/debuff system
+- **Doors** -- lockable doors with ownership hierarchies
+- **Storage** -- world containers backed by persistent inventories
+- **Vendors** -- buy/sell NPCs with item catalogs
+- **UI** -- full default Razor panel set (all overridable)
+- **Logging** -- date-partitioned server logs for admin review
+- **Persistence** -- automatic database-backed saving (FileSystem.Data + in-memory cache)
+
+---
+
+## 2. Getting Started
+
+### Project Setup
+
+1. Create a new **s&box Game** project in the s&box editor.
+2. Add **Hexagon** as a library reference in your project settings.
+3. Add a single `HexagonFramework` component to any GameObject in your scene.
+
+**Minimal scene setup:**
+
+```
+Scene
+  +-- HexagonFramework (Component)   <-- the only component you need
+  +-- Main Camera
+  +-- Directional Light
+  +-- Map
+```
+
+That's it. One component. Everything else is auto-created: player spawning, UI panels, chat, networking -- all of it.
+
+**What happens automatically:**
+
+- **All systems**: `HexagonFramework` bootstraps everything on startup -- `HexGameManager` (player connections), `HexChatComponent` (chat RPCs), `HexInventoryComponent` (inventory sync), `HexModelHandler` (clothing/model), and a `ScreenPanel` with all default UI panels.
+- **Player setup**: Players connect as invisible networking objects. When a character is loaded, Hexagon builds the full player body with `PlayerController` (WASD movement, mouse look, USE key), a citizen model, and a `Dresser` that auto-applies Steam avatar clothing.
+- **UI setup**: Auto-creates `HexUIManager` and all default panels (CharacterSelect, CharacterCreate, HUD, Chat, Inventory, Storage, Vendor, Scoreboard, DeathScreen, and more).
+
+**Custom player prefab (optional):**
+
+If you want full control over the player body, manually add `HexGameManager` to the HexagonFramework GameObject and assign a prefab to `HexGameManager.PlayerPrefab`. Since `HexagonFramework` uses `GetOrAddComponent`, it won't duplicate it.
+
+**Custom UI (optional):**
+
+To override a default panel, create your own `PanelComponent` implementing `IHexPanel` with the same `PanelName` (e.g. `"CharacterSelect"`) on any GameObject in your scene. The framework automatically detects the override and disables its default -- no configuration needed.
+
+### Minimum Required Code
+
+At minimum, your schema needs two things:
+
+1. **A `HexCharacterData` subclass** -- defines what data your characters store.
+2. **A `[HexPlugin]` class** (recommended) -- registers factions, items, config, and hooks.
+
+```csharp
+// MyCharacter.cs
+namespace MySchema;
+
+public class MyCharacter : HexCharacterData
+{
+    [CharVar( Default = "John Doe", MinLength = 3, MaxLength = 64, Order = 1, ShowInCreation = true )]
+    public string Name { get; set; }
+
+    [CharVar( Default = "A mysterious stranger.", MinLength = 16, MaxLength = 512, Order = 2, ShowInCreation = true )]
+    public string Description { get; set; }
+
+    [CharVar( Order = 3, ShowInCreation = true )]
+    public string Model { get; set; }
+
+    [CharVar( Local = true, Default = 0 )]
+    public int Money { get; set; }
+}
+```
+
+```csharp
+// MyPlugin.cs
+namespace MySchema;
+
+[HexPlugin( "My Schema", Description = "My custom RP schema", Author = "Me", Version = "1.0", Priority = 50 )]
+public class MyPlugin : IHexPlugin
+{
+    public void OnPluginLoaded()
+    {
+        // Register factions, items, config, attach hooks, etc.
+    }
+
+    public void OnPluginUnloaded() { }
+}
+```
+
+Once your scene loads and `HexagonFramework` initializes, Hexagon discovers your `HexCharacterData` subclass via `TypeLibrary` and your `[HexPlugin]` class automatically.
+
+---
+
+## 3. Character Data
+
+Characters are the core of any RP framework. In Hexagon, a character is not the same as a player -- a single player can own multiple characters.
+
+### Defining Character Data
+
+Subclass `HexCharacterData` and add `[CharVar]` properties to define the fields your characters store:
+
+```csharp
+public class MyCharacter : HexCharacterData
+{
+    [CharVar( Default = "John Doe", MinLength = 3, MaxLength = 64, Order = 1, ShowInCreation = true )]
+    public string Name { get; set; }
+
+    [CharVar( Default = "A mysterious stranger.", MinLength = 16, MaxLength = 512, Order = 2, ShowInCreation = true )]
+    public string Description { get; set; }
+
+    [CharVar( Order = 3, ShowInCreation = true )]
+    public string Model { get; set; }
+
+    [CharVar( Local = true, Default = 0 )]
+    public int Money { get; set; }
+}
+```
+
+### CharVar Attribute Options
+
+| Option | Type | Description |
+|---|---|---|
+| `Default` | `object` | Default value assigned to new characters. |
+| `MinLength` | `int` | Minimum string length (validated on creation). |
+| `MaxLength` | `int` | Maximum string length (validated on creation). |
+| `Local` | `bool` | Only synced to the owning player, not broadcast to others. Use for private data like money. |
+| `NoNetworking` | `bool` | Server-only. Never sent to any client. Use for internal tracking data. |
+| `ReadOnly` | `bool` | Cannot be changed via `SetVar()`. Only settable during creation. |
+| `Order` | `int` | Display order in the character creation UI. |
+| `ShowInCreation` | `bool` | Whether this field appears as an input in the character creation panel. |
+
+### Base Class Fields
+
+`HexCharacterData` already provides these fields -- you do not need to redefine them:
+
+- `Id` -- unique character identifier (string)
+- `SteamId` -- owning player's Steam ID (ulong)
+- `Slot` -- character slot number (int)
+- `Faction` -- faction ID the character belongs to (string)
+- `Class` -- class ID within the faction (string)
+- `Flags` -- permission flags string (string)
+- `Data` -- generic dictionary for arbitrary key/value storage (Dictionary<string, object>)
+- `CreatedAt` -- creation timestamp (DateTime)
+- `LastPlayedAt` -- last played timestamp (DateTime)
+- `IsBanned` -- whether the character is banned (bool)
+- `BanExpiry` -- when the ban expires (DateTime?)
+
+### Three-Layer Architecture
+
+Hexagon uses three layers for characters:
+
+1. **`HexCharacterData`** -- pure data class, serialized to the database.
+2. **`HexCharacter`** -- runtime wrapper around `HexCharacterData`. Provides `GetVar`/`SetVar` and manages networking.
+3. **`HexPlayerComponent`** -- the Component on the player's GameObject. Bridges the character to the scene. Contains the `Character` property.
+
+### Runtime Access
+
+```csharp
+// Get a player's active character
+HexCharacter character = player.Character;
+
+// Read/write character variables
+string name = character.GetVar<string>( "Name" );
+character.SetVar( "Name", "Jane Doe" );
+
+// Read/write the generic Data dictionary
+character.SetData( "walkSpeed", 200f );
+float speed = character.GetData<float>( "walkSpeed" );
+
+// Access the underlying data object
+HexCharacterData data = character.Data;
+string faction = data.Faction;
+```
+
+### Recognizable Names
+
+Hexagon includes an anti-metagaming system where characters appear as **"Unknown"** until introduced. Recognition is **one-way** — A recognizing B does NOT mean B recognizes A. Recognition persists across sessions.
+
+#### How It Works
+
+- Characters start unknown to each other
+- Players introduce themselves via `/introduce` command or the Introduce Menu (F3)
+- Factions with `IsGloballyRecognized = true` bypass recognition (e.g., police uniforms)
+
+#### Server-Side API
+
+```csharp
+// Check if observer recognizes target
+bool knows = RecognitionManager.DoesRecognize( observer.Character, target.Character );
+
+// Manually add recognition (e.g., from a plugin)
+RecognitionManager.Recognize( observer.Character, target.Character.Id );
+
+// Introduce to all nearby players
+int count = RecognitionManager.IntroduceToRange( player, 300f );
+
+// Introduce to a specific player
+bool newlyRecognized = RecognitionManager.IntroduceToTarget( player, targetPlayer );
+
+// Get display name as seen by observer
+string name = RecognitionManager.GetDisplayName( observerPlayer, targetPlayer );
+```
+
+#### Client-Side Check
+
+```csharp
+// Check if local player recognizes a target (for UI)
+bool recognized = localPlayer.DoesRecognizeLocal( targetPlayer );
+```
+
+#### Hooks
+
+- `ICanRecognizeListener` — return false to block recognition (e.g., disguise system)
+- `ICharacterRecognizedListener` — fired after a character is recognized
+
+#### Configuration
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `recognition.enabled` | bool | true | Master toggle for recognizable names |
+| `recognition.scoreboard` | bool | true | Hide unrecognized names on scoreboard |
+
+---
+
+## 4. Factions & Classes
+
+Factions organize characters into groups. Classes are sub-roles within a faction.
+
+### Two Registration Methods
+
+**1. Asset files** -- Create `.faction` and `.class` asset files in the s&box editor. They are auto-registered when the framework initializes.
+
+**2. Programmatic** -- Register in your plugin's `OnPluginLoaded()`:
+
+```csharp
+private void RegisterFactions()
+{
+    var citizens = TypeLibrary.Create<FactionDefinition>();
+    citizens.UniqueId = "citizen";
+    citizens.Name = "Citizens";
+    citizens.Description = "Regular citizens of the city.";
+    citizens.IsDefault = true;
+    citizens.MaxPlayers = 0; // 0 = unlimited
+    citizens.Color = new Color( 0.29f, 0.565f, 0.886f );
+    citizens.StartingMoney = 100;
+    citizens.Order = 1;
+    FactionManager.Register( citizens );
+
+    var police = TypeLibrary.Create<FactionDefinition>();
+    police.UniqueId = "police";
+    police.Name = "Civil Protection";
+    police.Description = "Law enforcement officers.";
+    police.IsDefault = false;
+    police.MaxPlayers = 4;
+    police.Color = new Color( 0.886f, 0.29f, 0.29f );
+    police.StartingMoney = 200;
+    police.Order = 2;
+    FactionManager.Register( police );
+}
+```
+
+### Registering Classes
+
+```csharp
+private void RegisterClasses()
+{
+    var civilian = TypeLibrary.Create<ClassDefinition>();
+    civilian.UniqueId = "civilian";
+    civilian.Name = "Civilian";
+    civilian.Description = "An ordinary citizen.";
+    civilian.FactionId = "citizen"; // links to the parent faction
+    civilian.MaxPlayers = 0;
+    civilian.Order = 1;
+    FactionManager.RegisterClass( civilian );
+
+    var officer = TypeLibrary.Create<ClassDefinition>();
+    officer.UniqueId = "officer";
+    officer.Name = "Officer";
+    officer.Description = "A Civil Protection officer.";
+    officer.FactionId = "police";
+    officer.MaxPlayers = 0;
+    officer.Order = 1;
+    FactionManager.RegisterClass( officer );
+
+    var chief = TypeLibrary.Create<ClassDefinition>();
+    chief.UniqueId = "chief";
+    chief.Name = "Chief";
+    chief.Description = "The Chief of Civil Protection.";
+    chief.FactionId = "police";
+    chief.MaxPlayers = 1; // only one chief allowed
+    chief.Order = 2;
+    FactionManager.RegisterClass( chief );
+}
+```
+
+### FactionDefinition Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `UniqueId` | `string` | Unique identifier (used in code and database). |
+| `Name` | `string` | Display name. |
+| `Description` | `string` | Description shown in UI. |
+| `IsDefault` | `bool` | If true, new characters can select this faction by default. |
+| `MaxPlayers` | `int` | Maximum concurrent players. 0 = unlimited. |
+| `Color` | `Color` | Faction color for UI elements. |
+| `StartingMoney` | `int` | Money given to new characters joining this faction. |
+| `Order` | `int` | Sort order in UI. |
+
+### Query APIs
+
+```csharp
+FactionDefinition faction = FactionManager.GetFaction( "citizen" );
+List<FactionDefinition> all = FactionManager.GetAllFactions();
+List<FactionDefinition> defaults = FactionManager.GetDefaultFactions();
+List<ClassDefinition> classes = FactionManager.GetClassesForFaction( "police" );
+bool canJoin = FactionManager.CanJoinFaction( "police" ); // checks MaxPlayers
+```
+
+### Class Loadouts
+
+Classes can define a **loadout** -- a list of items automatically granted to characters. Configure when the loadout is applied using `LoadoutMode`:
+
+- **`OnCreate`** (default) -- items given once when the character is first created.
+- **`OnLoad`** -- items given every time the character loads (including creation).
+
+```csharp
+var officer = TypeLibrary.Create<ClassDefinition>();
+officer.UniqueId = "officer";
+officer.Name = "Officer";
+officer.FactionId = "police";
+officer.LoadoutMode = LoadoutMode.OnCreate;
+officer.Loadout = new List<LoadoutEntry>
+{
+    new LoadoutEntry { ItemDefinitionId = "weapon_pistol", Count = 1 },
+    new LoadoutEntry { ItemDefinitionId = "ammo_9mm", Count = 2 },
+    new LoadoutEntry { ItemDefinitionId = "outfit_police", Count = 1 }
+};
+FactionManager.RegisterClass( officer );
+```
+
+With asset files, configure the `Loadout` and `LoadoutMode` properties in the `.class` asset editor.
+
+**Hooks:**
+
+- `ICanApplyLoadoutListener` -- return false to block a loadout from being applied.
+- `ILoadoutAppliedListener` -- fired after loadout items are granted.
+
+```csharp
+public interface ICanApplyLoadoutListener
+{
+    bool CanApplyLoadout( HexPlayerComponent player, HexCharacter character, ClassDefinition classDef );
+}
+
+public interface ILoadoutAppliedListener
+{
+    void OnLoadoutApplied( HexPlayerComponent player, HexCharacter character, List<ItemInstance> items );
+}
+```
+
+---
+
+## 5. Items
+
+The item system has two distinct layers:
+
+- **`ItemDefinition`** (template) -- defines an item type: its name, size, category, and behavior.
+- **`ItemInstance`** (database-backed) -- a specific item owned by a character, created from a definition.
+
+Think of `ItemDefinition` as a blueprint and `ItemInstance` as a manufactured copy.
+
+### Built-In Item Types
+
+Hexagon ships with several `ItemDefinition` subclasses for common RP item types:
+
+| Class | Key Properties | Behavior |
+|---|---|---|
+| `WeaponItemDef` | `AmmoType`, `ClipSize`, `WeaponModel`, `TwoHanded` | Equip/unequip actions. |
+| `BagItemDef` | `BagWidth`, `BagHeight` | Creates a nested inventory when used. Open action. |
+| `OutfitItemDef` | `OutfitModel`, `Bodygroups`, `Slot` | Wear/take off actions. Applies clothing to the character model. |
+| `CurrencyItemDef` | `DefaultAmount` | Adds to character money on use. Pick up action. |
+| `AmmoItemDef` | `AmmoType`, `AmmoAmount` | Loads into compatible weapons. Use action. |
+| `ConsumableItemDef` | `UseTime`, `UseSound`, `ConsumeVerb` | Timed or instant consumption. Override `OnConsume` for effects. |
+
+### Registering Items
+
+```csharp
+// Weapon
+var pistol = TypeLibrary.Create<WeaponItemDef>();
+pistol.UniqueId = "weapon_pistol";
+pistol.DisplayName = "Pistol";
+pistol.Description = "A standard 9mm pistol.";
+pistol.Width = 1;
+pistol.Height = 2;
+pistol.Category = "Weapons";
+pistol.ClipSize = 12;
+pistol.AmmoType = "9mm";
+ItemManager.Register( pistol );
+
+// Bag
+var backpack = TypeLibrary.Create<BagItemDef>();
+backpack.UniqueId = "bag_backpack";
+backpack.DisplayName = "Backpack";
+backpack.Description = "A sturdy backpack for extra storage.";
+backpack.Width = 1;
+backpack.Height = 2;
+backpack.Category = "Storage";
+backpack.BagWidth = 6;
+backpack.BagHeight = 4;
+ItemManager.Register( backpack );
+
+// Outfit
+var uniform = TypeLibrary.Create<OutfitItemDef>();
+uniform.UniqueId = "outfit_police";
+uniform.DisplayName = "Police Uniform";
+uniform.Description = "A standard Civil Protection uniform.";
+uniform.Width = 1;
+uniform.Height = 2;
+uniform.Category = "Clothing";
+uniform.Slot = "torso";
+ItemManager.Register( uniform );
+
+// Currency
+var cash = TypeLibrary.Create<CurrencyItemDef>();
+cash.UniqueId = "money_cash";
+cash.DisplayName = "Cash";
+cash.Description = "A stack of bills.";
+cash.Width = 1;
+cash.Height = 1;
+cash.Category = "Currency";
+cash.DefaultAmount = 100;
+ItemManager.Register( cash );
+
+// Ammo
+var ammo = TypeLibrary.Create<AmmoItemDef>();
+ammo.UniqueId = "ammo_9mm";
+ammo.DisplayName = "9mm Ammo";
+ammo.Description = "A box of 9mm rounds.";
+ammo.Width = 1;
+ammo.Height = 1;
+ammo.Category = "Ammo";
+ammo.AmmoType = "9mm";
+ammo.AmmoAmount = 12;
+ItemManager.Register( ammo );
+
+// Consumable
+var medkit = TypeLibrary.Create<ConsumableItemDef>();
+medkit.UniqueId = "consumable_medkit";
+medkit.DisplayName = "Medkit";
+medkit.Description = "A first-aid kit. Restores health.";
+medkit.Width = 1;
+medkit.Height = 1;
+medkit.Category = "Medical";
+medkit.UseTime = 3f;
+medkit.ConsumeVerb = "Healing...";
+ItemManager.Register( medkit );
+```
+
+**Note:** Use `DisplayName` (not `Name`) for the item's display name.
+
+### Creating Item Instances
+
+```csharp
+ItemInstance item = ItemManager.CreateInstance( "weapon_pistol", characterId );
+```
+
+This creates a new database-backed instance of the "weapon_pistol" definition, owned by the specified character.
+
+### Consumable Items
+
+`ConsumableItemDef` provides a base class for food, drinks, medical supplies, and other items consumed on use. It supports both instant and timed consumption with an action bar.
+
+**Creating a custom consumable:**
+
+```csharp
+public class MedkitDef : ConsumableItemDef
+{
+    [Property] public int HealAmount { get; set; } = 50;
+
+    public override bool OnConsume( HexPlayerComponent player, ItemInstance item )
+    {
+        // Apply healing effect
+        var health = AttributeManager.GetAttribute( player.Character, "health" );
+        AttributeManager.SetAttribute( player.Character, "health", health + HealAmount );
+        return true; // true = destroy the item, false = keep it
+    }
+}
+```
+
+**ConsumableItemDef properties:**
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `UseTime` | `float` | 0 | Seconds to consume. 0 = instant. |
+| `UseSound` | `string` | "" | Sound to play when consumption starts. |
+| `ConsumeVerb` | `string` | "Using" | Action bar text (e.g. "Eating...", "Drinking..."). |
+
+If `UseTime > 0`, the framework uses `ActionBarManager.DoStaredAction` -- the player must stay still and looking at their target for the duration. If they move or look away, consumption is cancelled.
+
+**Hook:** `IItemConsumedListener` fires after successful consumption:
+
+```csharp
+public interface IItemConsumedListener
+{
+    void OnItemConsumed( HexPlayerComponent player, ItemInstance item );
+}
+```
+
+### Custom Item Behavior
+
+To create items with custom behavior, subclass one of the built-in types (or `ItemDefinition` directly) and override the virtual methods:
+
+```csharp
+public class HealingItemDef : ItemDefinition
+{
+    public int HealAmount { get; set; } = 25;
+
+    public override List<ItemAction> GetActions()
+    {
+        return new List<ItemAction>
+        {
+            new ItemAction
+            {
+                Name = "Use",
+                Icon = "healing",
+                OnCanRun = ( player, item ) => player.Character != null,
+                OnRun = ( player, item ) =>
+                {
+                    // Heal the character
+                    var health = AttributeManager.GetAttribute( player.Character, "health" );
+                    AttributeManager.SetAttribute( player.Character, "health", health + HealAmount );
+                    return true; // consume the item
+                }
+            }
+        };
+    }
+
+    public override void OnInstanced( ItemInstance instance )
+    {
+        // Called when a new instance is created from this definition
+    }
+
+    public override void OnRemoved( ItemInstance instance )
+    {
+        // Called when an instance is deleted
+    }
+}
+```
+
+### Virtual Methods on ItemDefinition
+
+| Method | Description |
+|---|---|
+| `GetActions()` | Returns the list of context-menu actions for this item type. |
+| `OnUse( player, item )` | Called when the item is used. |
+| `OnEquip( player, item )` | Called when the item is equipped. |
+| `OnUnequip( player, item )` | Called when the item is unequipped. |
+| `OnDrop( player, item )` | Called when the item is dropped into the world. |
+| `OnPickup( player, item )` | Called when the item is picked up from the world. |
+| `OnCanUse( player, item )` | Return false to prevent usage. |
+| `OnInstanced( item )` | Called when a new instance is created from this definition. |
+| `OnRemoved( item )` | Called when an instance is permanently deleted. |
+| `OnTransferred( item, from, to )` | Called when an item moves between inventories. |
+
+### ItemAction Structure
+
+```csharp
+new ItemAction
+{
+    Name = "Eat",                                          // Display name
+    Icon = "food",                                         // Icon identifier
+    OnRun = ( player, item ) => { /* do stuff */ return true; },  // Action logic; return true to consume
+    OnCanRun = ( player, item ) => true                    // Visibility/availability check
+}
+```
+
+### Action Bar / Timed Actions
+
+Hexagon provides a **progress bar system** for timed actions like lockpicking, searching, and crafting. The server controls the action; the client shows a centered progress bar.
+
+#### Basic Timed Action
+
+```csharp
+// Show a 3-second progress bar, then run callback
+ActionBarManager.SetAction( player, "Searching container...", 3f, ( p ) =>
+{
+    // Action completed — open the container
+    inventory.AddReceiver( p.Connection );
+} );
+```
+
+#### Stared Action (Must Keep Looking)
+
+```csharp
+// Cancel if player looks away from the target or moves too far
+ActionBarManager.DoStaredAction( player, doorGameObject, "Lockpicking...", 5f,
+    callback: ( p ) => { door.SetLocked( false ); },
+    onCancel: () => { ChatManager.SendSystemMessage( player, "Lockpicking cancelled." ); },
+    maxDistance: 130f
+);
+```
+
+#### Cancel
+
+```csharp
+ActionBarManager.CancelAction( player );
+```
+
+#### Hooks
+
+- `ICanStartActionListener` — return false to block an action from starting
+- `IActionCompletedListener` — fired when an action completes successfully
+- `IActionCancelledListener` — fired when an action is cancelled
+- `IActionBarUpdatedListener` — client-side, fired when the progress bar state changes
+
+---
+
+## 6. Inventory
+
+Hexagon uses a **grid-based inventory** system. Items occupy `Width x Height` cells in a 2D grid.
+
+### Creating Inventories
+
+```csharp
+// Create a default-sized inventory for a character (uses config values)
+var inv = InventoryManager.CreateDefault( characterId );
+
+// Create a custom-sized inventory
+var inv = InventoryManager.Create( 6, 4, characterId, "main" );
+```
+
+### Adding Items
+
+```csharp
+// Auto-find an empty slot that fits the item
+inv.Add( item );
+
+// Place at a specific grid position
+inv.AddAt( item, 0, 0 );
+
+// Find a slot before adding (useful for validation)
+var slot = inv.FindEmptySlot( def.Width, def.Height );
+if ( slot.HasValue )
+{
+    inv.AddAt( item, slot.Value.X, slot.Value.Y );
+}
+```
+
+### Querying
+
+```csharp
+bool has = inv.HasItem( "weapon_pistol" );       // has at least one?
+int count = inv.CountItem( "weapon_pistol" );     // how many?
+ItemInstance found = inv.FindItem( "weapon_pistol" ); // get first match
+bool full = inv.IsFull;                           // no empty space at all?
+int total = inv.ItemCount;                        // total items in inventory
+```
+
+### Transferring Items
+
+```csharp
+inv.Transfer( itemId, targetInventory );
+```
+
+### Loading Character Inventories
+
+```csharp
+List<HexInventory> inventories = InventoryManager.LoadForCharacter( characterId );
+```
+
+### Receiver Networking
+
+Inventories use a **receiver system** for selective networking. Only players added as receivers can see the inventory contents. This prevents leaking other players' inventory data.
+
+```csharp
+// Grant visibility (typically done in OnCharacterLoaded)
+inv.AddReceiver( player.Connection );
+
+// Revoke visibility (typically done in OnCharacterUnloaded or when closing storage)
+inv.RemoveReceiver( player.Connection );
+```
+
+Dirty inventories are automatically flushed to receivers each frame by `HexInventoryComponent`.
+
+---
+
+## 7. Plugins
+
+Plugins are the primary extension point for Hexagon. Your schema itself is a plugin.
+
+### Defining a Plugin
+
+```csharp
+[HexPlugin( "My Plugin", Description = "Does stuff", Author = "Me", Version = "1.0", Priority = 50 )]
+public class MyPlugin : IHexPlugin
+{
+    public void OnPluginLoaded()
+    {
+        // Register items, factions, commands, config, etc.
+    }
+
+    public void OnPluginUnloaded()
+    {
+        // Cleanup (optional)
+    }
+}
+```
+
+### Priority
+
+The `Priority` value controls load order. **Lower numbers load first.**
+
+| Priority | Use Case |
+|---|---|
+| 1-49 | Core/foundation plugins that other plugins depend on. |
+| 50 | Recommended for schemas. |
+| 100 | Default. Use for optional addon plugins. |
+| 100+ | Plugins that need to override schema behavior. |
+
+### Adding Event Hooks
+
+Listener interfaces must live on **Components** so that `Scene.GetAll<T>()` can discover them. The standard pattern is to create a hooks Component and attach it to the `HexagonFramework` GameObject:
+
+```csharp
+[HexPlugin( "My Schema", Priority = 50 )]
+public class MyPlugin : IHexPlugin
+{
+    public void OnPluginLoaded()
+    {
+        // Attach hooks component to the framework GameObject
+        HexagonFramework.Instance.GameObject.GetOrAddComponent<MyHooks>();
+    }
+
+    public void OnPluginUnloaded() { }
+}
+
+public class MyHooks : Component, ICharacterLoadedListener, ICharacterCreatedListener
+{
+    public void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
+    {
+        // Handle character load
+    }
+
+    public void OnCharacterCreated( HexPlayerComponent player, HexCharacter character )
+    {
+        // Handle character creation
+    }
+}
+```
+
+### Plugin vs Schema
+
+There is no technical difference between a "plugin" and a "schema" -- both use `[HexPlugin]` and `IHexPlugin`. The distinction is conceptual:
+
+- A **schema** is the main gamemode (priority 50, defines factions/items/rules).
+- A **plugin** is an optional addon (priority 100+, adds features on top of the schema).
+
+---
+
+## 8. Chat
+
+Chat in Hexagon is routed through **chat classes**. Each class defines a communication channel with its own prefix, range, formatting, and color.
+
+### Defining a Chat Class
+
+Implement the `IChatClass` interface:
+
+```csharp
+public class RadioChat : IChatClass
+{
+    public string Name => "Radio";
+    public string Prefix => "/r";            // players type "/r Hello" to use this channel
+    public float Range => 0;                 // 0 = global (heard by everyone)
+    public Color Color => new Color( 0.4f, 0.8f, 0.4f );
+
+    public bool CanHear( HexPlayerComponent listener, HexPlayerComponent speaker )
+    {
+        // Only police faction can hear the radio
+        return listener.Character?.Data.Faction == "police";
+    }
+
+    public bool CanSay( HexPlayerComponent player )
+    {
+        // Only police faction can transmit on the radio
+        return player.Character?.Data.Faction == "police";
+    }
+
+    public string Format( HexPlayerComponent player, string message )
+    {
+        var name = player.Character?.GetVar<string>( "Name" ) ?? "Unknown";
+        return $"[RADIO] {name}: {message}";
+    }
+}
+```
+
+### Registering
+
+```csharp
+ChatManager.Register( new RadioChat() );
+```
+
+### Built-In Chat Classes
+
+| Class | Prefix | Range | Description |
+|---|---|---|---|
+| IC | *(none)* | Config-based | In-character speech. Default channel. |
+| OOC | `//` | Global | Out-of-character. |
+| Yell | `!` | Config-based (extended) | Loud in-character speech. |
+| Whisper | `/w` | Config-based (short) | Quiet in-character speech. |
+| Local | `/l` | Config-based | Alias for IC range. |
+
+Chat ranges are controlled by config keys: `chat.icRange`, `chat.yellRange`, `chat.whisperRange`.
+
+---
+
+## 9. Commands
+
+Commands are text-based actions triggered from the chat input (e.g., `/setmoney Player1 500`).
+
+### Defining a Command
+
+```csharp
+var cmd = new HexCommand
+{
+    Name = "setmoney",
+    Description = "Set a player's money",
+    Aliases = new[] { "sm" },
+    Permission = "a", // requires admin flag
+    Arguments = new[]
+    {
+        new CommandArg { Name = "target", Type = typeof( HexPlayerComponent ) },
+        new CommandArg { Name = "amount", Type = typeof( int ) }
+    },
+    OnRun = ( caller, args ) =>
+    {
+        var target = (HexPlayerComponent)args[0];
+        var amount = (int)args[1];
+        CurrencyManager.SetMoney( target.Character, amount );
+    }
+};
+CommandManager.Register( cmd );
+```
+
+### Supported Argument Types
+
+| Type | Behavior |
+|---|---|
+| `HexPlayerComponent` | Player name lookup. Matches partial names. |
+| `int` | Parsed as integer. |
+| `float` | Parsed as floating-point number. |
+| `string` | Single word. If this is the **last** argument, it captures the remainder of the input. |
+
+### Permission Gating
+
+The `Permission` field is a flag string. The caller must have **all** specified flags. Set to `""` or `null` for no permission requirement.
+
+```csharp
+Permission = "a"   // requires admin flag
+Permission = "s"   // requires superadmin flag
+Permission = ""    // anyone can run
+Permission = null  // anyone can run
+```
+
+### HexCommand Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `Name` | `string` | Primary command name (e.g., `"setmoney"` for `/setmoney`). |
+| `Description` | `string` | Help text. |
+| `Aliases` | `string[]` | Alternative names (e.g., `"sm"` for `/sm`). |
+| `Permission` | `string` | Required permission flags. |
+| `Arguments` | `CommandArg[]` | Ordered argument definitions. |
+| `OnRun` | `Action<HexPlayerComponent, object[]>` | Execution callback. |
+
+---
+
+## 10. Permissions
+
+Hexagon uses a **flag-based** permission system. Each character has a `Flags` string where each character represents a permission.
+
+### Default Flags
+
+| Flag | Name | Description |
+|---|---|---|
+| `p` | Physgun | Can use the physics gun. |
+| `t` | Toolgun | Can use the tool gun. |
+| `e` | Entity | Can spawn entities. |
+| `o` | Door | Can manage any door. |
+| `v` | Vendor | Can manage any vendor. |
+| `a` | Admin | Server administrator. |
+| `s` | Superadmin | Bypasses all permission checks. |
+
+### API
+
+```csharp
+// Check
+bool isAdmin = character.HasFlag( 'a' );
+bool canBuild = PermissionManager.HasPermission( character, "pet" ); // has p, e, AND t?
+
+// Grant/Revoke
+character.GiveFlag( 'a' );
+character.TakeFlag( 'a' );
+```
+
+### Custom Permission Logic
+
+For dynamic permission checks (e.g., VIP status, time-based access), implement `IPermissionCheckListener` on a Component:
+
+```csharp
+public class VipPermissions : Component, IPermissionCheckListener
+{
+    public bool CanPerformAction( HexCharacter character, string permission )
+    {
+        // VIP characters bypass certain checks
+        if ( character.GetData<bool>( "isVip" ) && permission == "e" )
+            return true;
+
+        return character.HasFlag( permission[0] );
+    }
+}
+```
+
+---
+
+## 11. Currency
+
+The currency system wraps the character's `Money` CharVar with convenience methods and hooks.
+
+### API
+
+```csharp
+int money = CurrencyManager.GetMoney( character );
+CurrencyManager.GiveMoney( character, 100 );       // add 100
+CurrencyManager.TakeMoney( character, 50 );         // subtract 50
+CurrencyManager.SetMoney( character, 500 );          // set to exactly 500
+bool canBuy = CurrencyManager.CanAfford( character, 200 ); // has >= 200?
+string display = CurrencyManager.Format( 1500 );     // "$1,500"
+```
+
+### Hooks
+
+Use listener interfaces to intercept or react to money changes:
+
+```csharp
+public class MoneyHooks : Component, ICanMoneyChangeListener, IMoneyChangedListener
+{
+    public bool CanMoneyChange( HexCharacter character, int oldAmount, int newAmount )
+    {
+        // Prevent going below 0
+        if ( newAmount < 0 ) return false;
+        return true;
+    }
+
+    public void OnMoneyChanged( HexCharacter character, int oldAmount, int newAmount )
+    {
+        Log.Info( $"{character.GetVar<string>( "Name" )} money: {oldAmount} -> {newAmount}" );
+    }
+}
+```
+
+### Physical Currency
+
+Use `CurrencyItemDef` to create droppable money items. When a player uses the item, its `DefaultAmount` is added to their character's money and the item is consumed.
+
+```csharp
+var cash = TypeLibrary.Create<CurrencyItemDef>();
+cash.UniqueId = "money_cash";
+cash.DisplayName = "Cash";
+cash.Width = 1;
+cash.Height = 1;
+cash.Category = "Currency";
+cash.DefaultAmount = 100; // adds $100 when picked up
+ItemManager.Register( cash );
+```
+
+---
+
+## 12. Attributes
+
+Attributes are named numerical stats on characters (e.g., hunger, health, strength). They support a **boost system** for temporary buffs and debuffs.
+
+### Defining Attributes
+
+Create `.attrib` asset files in the editor, or register programmatically:
+
+```csharp
+var hunger = TypeLibrary.Create<AttributeDefinition>();
+hunger.UniqueId = "hunger";
+hunger.DisplayName = "Hunger";
+hunger.MinValue = 0;
+hunger.MaxValue = 100;
+hunger.StartValue = 100; // new characters start at 100
+AttributeManager.Register( hunger );
+```
+
+### API
+
+```csharp
+// Get/Set base value
+float val = AttributeManager.GetAttribute( character, "hunger" );
+AttributeManager.SetAttribute( character, "hunger", 100 );
+AttributeManager.AddAttribute( character, "hunger", -10 ); // subtract 10
+
+// Boosts (named, stackable)
+AttributeManager.AddBoost( character, "strength", "buff_potion", 15 );
+AttributeManager.RemoveBoost( character, "strength", "buff_potion" );
+```
+
+### Boost System
+
+Boosts are named bonuses that stack on top of the base value. The **effective value** of an attribute is:
+
+```
+effective = base + sum(all boosts)
+```
+
+Each boost has a unique key so it can be individually added and removed. This is useful for temporary effects like potions, equipment bonuses, or debuffs.
+
+```csharp
+// Base strength is 10
+AttributeManager.SetAttribute( character, "strength", 10 );
+
+// Add a potion boost (+15) and an armor boost (+5)
+AttributeManager.AddBoost( character, "strength", "potion_of_might", 15 );
+AttributeManager.AddBoost( character, "strength", "iron_armor", 5 );
+
+// Effective strength is now 30 (10 + 15 + 5)
+float effective = AttributeManager.GetAttribute( character, "strength" );
+
+// Remove the potion boost when it expires
+AttributeManager.RemoveBoost( character, "strength", "potion_of_might" );
+
+// Effective strength is now 15 (10 + 5)
+```
+
+---
+
+## 13. World Interaction
+
+All world-interactive objects implement `IPressable`, the s&box interface for raycast-based interaction. The player's `PlayerController` automatically detects `IPressable` components via raycast and calls `Press()` when the player interacts.
+
+### Built-In Interactables
+
+#### DoorComponent
+
+Lockable doors with an ownership hierarchy.
+
+```
+Auth hierarchy: superadmin > admin > owner > faction > access list
+```
+
+A player can use a door if any of the following are true (checked in order):
+1. They have the `s` (superadmin) flag.
+2. They have the `o` (door admin) flag.
+3. They are the door's owner.
+4. Their faction matches the door's faction.
+5. Their character ID is in the door's access list.
+
+**Hooks:** `ICanUseDoorListener`, `IDoorUsedListener`, `IDoorOwnerChangedListener`.
+
+##### Door Breach System
+
+Doors support lock breaching via damage (shootlock) and kicking. When a locked door's `LockHealth` reaches 0, the lock breaks and the door swings open.
+
+**Shootlock:** `DoorComponent` implements `Component.IDamageable`. Any damage source (bullets, explosions) reduces lock health when the door is locked and `door.breachable` is enabled.
+
+**Kicking:** Call `DoorComponent.TryKick(player)` to start a timed kick action. The framework handles the action bar and damage. Schema decides how to trigger it (keybind, alt-use, command, etc.).
+
+```csharp
+// In a command or keybind handler:
+var door = trace.GameObject?.GetComponent<DoorComponent>();
+if ( door != null )
+    door.TryKick( player );
+
+// Repair a breached lock:
+door.RepairLock(); // Resets health to max and re-locks
+```
+
+**Breach config:**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `door.breachable` | bool | true | Enable shootlock globally. |
+| `door.lockHealth` | int | 100 | Default lock HP. |
+| `door.kickEnabled` | bool | true | Enable door kicking. |
+| `door.kickDamage` | int | 34 | Damage per kick (3 kicks to breach at default). |
+| `door.kickTime` | float | 3.0 | Kick action duration in seconds. |
+
+Per-door lock health is persisted in `DoorData.LockHealth` and `DoorData.MaxLockHealth`. Set to -1 to use config defaults.
+
+**Breach hooks:**
+
+- `IDoorDamagedListener` -- fired when a lock takes damage.
+- `IDoorBreachedListener` -- fired when a lock breaks.
+- `ICanKickDoorListener` -- return false to prevent kicking.
+
+#### StorageComponent
+
+World containers with grid inventories. Place this component on a prop in your scene.
+
+| Property | Type | Description |
+|---|---|---|
+| `StorageName` | `string` | Display name for the storage container. |
+| `Width` | `int` | Grid width. |
+| `Height` | `int` | Grid height. |
+
+When a player presses the storage, their client opens the `StoragePanel` and they are added as a receiver of the storage inventory.
+
+**Hooks:** `ICanOpenStorageListener`, `IStorageOpenedListener`, `IStorageClosedListener`.
+
+#### VendorComponent
+
+Buy/sell NPCs with item catalogs. Place this component on an NPC model in your scene and configure its item catalog.
+
+When a player presses the vendor, their client opens the `VendorPanel` showing available items.
+
+**Hooks:** `ICanBuyItemListener`, `ICanSellItemListener`, `IItemBoughtListener`, `IItemSoldListener`, `IVendorOpenedListener`.
+
+### Weapon Raise/Lower
+
+Weapons default to **lowered** (cannot fire). Players **hold R** for a configurable duration to toggle between raised and lowered states. This prevents instant combat and encourages roleplay.
+
+#### How It Works
+
+- `WeaponRaiseComponent` is auto-added to every player via `HexPlayerSetup`
+- **Hold R** (configurable `weapon.raiseTime`) to toggle raise/lower
+- When raised, there's a short `weapon.fireDelay` before firing is allowed
+- `[Sync] IsWeaponRaised` replicates to all players for animations
+- When lowered: holdtype set to 0 (passive), `CanFire = false`
+
+#### Weapon Exemptions
+
+On `WeaponItemDef`:
+- `AlwaysRaised = true` — weapon skips raise/lower entirely (toolgun, physgun)
+- `FireWhenLowered = true` — weapon can fire even when lowered (fists)
+
+#### Schema Integration
+
+```csharp
+// In your weapon's fire logic:
+var raise = player.GetComponent<WeaponRaiseComponent>();
+if ( raise != null && !raise.CanFire )
+    return; // Weapon is lowered or raise delay hasn't elapsed
+
+// Programmatic control:
+raise.SetRaised( true );
+raise.ToggleRaised();
+```
+
+#### Hooks
+
+- `ICanRaiseWeaponListener` — return false to prevent raising
+- `IWeaponRaisedListener` — fired when raise state changes
+- `ICanFireWeaponListener` — additional permission check for firing
+
+#### Configuration
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `weapon.raiseTime` | float | 0.5 | Seconds to hold R to toggle |
+| `weapon.alwaysRaised` | bool | false | Disable raise/lower globally |
+| `weapon.fireDelay` | float | 0.5 | Delay after raising before can fire |
+
+---
+
+## 14. UI Customization
+
+Hexagon ships with a full set of default Razor UI panels. All panels are overridable by schema developers.
+
+### State Machine
+
+The UI follows a state machine with these states:
+
+```
+Loading -> CharacterSelect -> CharacterCreate -> Gameplay -> Dead
+```
+
+Transitions:
+- **Loading** -- shown while the framework initializes.
+- **CharacterSelect** -- player picks from their existing characters (when `character.autoLoad` is false).
+- **CharacterCreate** -- player creates a new character.
+- **Gameplay** -- the main HUD with chat, inventory, etc.
+- **Dead** -- death screen with respawn button.
+
+### Built-In Panels
+
+| Panel Name | State | Description |
+|---|---|---|
+| `CharacterSelect` | CharacterSelect | List of existing characters to load. |
+| `CharacterCreate` | CharacterCreate | Form for creating a new character. |
+| `HUD` | Gameplay | Main HUD overlay. |
+| `Chat` | Gameplay | Chat input and message history. |
+| `Inventory` | Gameplay | Grid inventory panel. |
+| `Storage` | Gameplay | Storage container panel (opens alongside inventory). |
+| `Vendor` | Gameplay | Vendor buy/sell panel. |
+| `Scoreboard` | Gameplay | Player list. |
+| `DeathScreen` | Dead | Death overlay with respawn button. |
+| `NotificationPanel` | Always | Toast notifications (top-right, auto-dismiss). |
+| `CrosshairPanel` | Gameplay | Screen-center crosshair (hides when weapon lowered). |
+
+### IHexPanel Interface
+
+All panels implement `IHexPanel`:
+
+```csharp
+public interface IHexPanel
+{
+    string PanelName { get; }
+    bool IsOpen { get; }
+    void Open();
+    void Close();
+}
+```
+
+### Auto-Setup
+
+By default, `HexagonFramework.Initialize()` calls `HexUISetup.EnsureUI()` which creates a `ScreenPanel` root with `HexUIManager` and all 9 default panels. If you place a `HexUIManager` in your scene manually, the auto-creation is skipped.
+
+### Replacing a Panel
+
+To replace a built-in panel with your own:
+
+1. Disable the default panel component on the auto-created UI (or place your own `HexUIManager` and panels manually).
+2. Create your own Razor `PanelComponent` that implements `IHexPanel` with the same `PanelName`.
+3. Add it to a GameObject with a `ScreenPanel` in your scene.
+
+```csharp
+public class MyCustomHud : PanelComponent, IHexPanel
+{
+    public string PanelName => "HUD";
+    public bool IsOpen { get; private set; }
+
+    public void Open()
+    {
+        IsOpen = true;
+        StateHasChanged();
+    }
+
+    public void Close()
+    {
+        IsOpen = false;
+        StateHasChanged();
+    }
+
+    protected override int BuildHash() => HashCode.Combine( IsOpen );
+}
+```
+
+### Controlling UI State
+
+```csharp
+// Switch state
+HexUIManager.Instance.SetState( UIState.Gameplay );
+HexUIManager.Instance.SetState( UIState.Dead );
+
+// Open/close specific panels
+HexUIManager.Instance.OpenPanel( "Inventory" );
+HexUIManager.Instance.ClosePanel( "Inventory" );
+```
+
+### Input Bindings
+
+| Key | Action |
+|---|---|
+| TAB | Toggle Scoreboard |
+| I | Toggle Inventory |
+| ENTER | Focus Chat input |
+| ESC | Close topmost open panel |
+
+### Accessing the Local Player
+
+When writing client-side UI code, use the static helper instead of `Scene.Active`:
+
+```csharp
+HexPlayerComponent localPlayer = HexUIManager.GetLocalPlayer();
+```
+
+This uses `HexUIManager.Instance.Scene` internally, which is more reliable than `Scene.Active`.
+
+### Notification Toasts
+
+Hexagon includes a toast notification system for transient player feedback (command results, errors, confirmations). Notifications stack in the top-right corner with a purple progress bar that depletes over time.
+
+#### Sending Notifications (Server-Side)
+
+```csharp
+// Send with default duration (notification.defaultDuration config, default 8s)
+NotificationManager.Send( player, "Item added to inventory." );
+
+// Send with custom duration
+NotificationManager.Send( player, "You have been warned.", 12f );
+
+// Send to all connected players
+NotificationManager.SendAll( "Server restarting in 5 minutes." );
+NotificationManager.SendAll( "Event starting!", 15f );
+```
+
+Command results (from `CommandManager.Execute`) are automatically routed to toast notifications instead of chat messages.
+
+#### Listening for Notifications (Client-Side)
+
+Implement `INotificationReceivedListener` on a Component to react to incoming toasts:
+
+```csharp
+public class MyNotificationLogger : Component, INotificationReceivedListener
+{
+    public void OnNotificationReceived( string message, float duration )
+    {
+        Log.Info( $"Toast received: {message} ({duration}s)" );
+    }
+}
+```
+
+#### Hover-to-Pause
+
+Players can hover over a notification to pause its timer. The progress bar freezes and the toast won't dismiss until the mouse leaves.
+
+### Crosshair
+
+Hexagon provides a simple Razor-based crosshair panel (white cross with center dot). It integrates with the weapon raise/lower system.
+
+The crosshair is visible when:
+- The player has an active character and is alive
+- `crosshair.enabled` config is true (default)
+- The weapon is raised (when `crosshair.hideWhenLowered` is true, default)
+
+To replace the crosshair with a custom design, remove the `CrosshairPanel` component from the UI GameObject and add your own `PanelComponent` with custom SCSS.
+
+---
+
+## 15. Configuration
+
+The `HexConfig` system provides persistent, admin-controlled server settings.
+
+### Registering Config Values
+
+Register your config keys in `OnPluginLoaded()`:
+
+```csharp
+public void OnPluginLoaded()
+{
+    HexConfig.Add( "gameplay.walkSpeed", 200f, "Default walk speed", "Gameplay" );
+    HexConfig.Add( "gameplay.runSpeed", 320f, "Default run speed", "Gameplay" );
+    HexConfig.Add( "gameplay.maxCarryWeight", 50, "Max carry weight in kg", "Gameplay" );
+}
+```
+
+### Reading Values
+
+```csharp
+float speed = HexConfig.Get<float>( "gameplay.walkSpeed", 200f );
+int maxWeight = HexConfig.Get<int>( "gameplay.maxCarryWeight", 50 );
+```
+
+The second parameter is a fallback value used if the key has no registered default and no override.
+
+### Writing Values (Admin)
+
+```csharp
+HexConfig.Set( "gameplay.walkSpeed", 150f );
+```
+
+### Resetting to Default
+
+```csharp
+HexConfig.Reset( "gameplay.walkSpeed" );
+```
+
+### Change Callbacks
+
+You can register a callback that fires when a config value changes:
+
+```csharp
+HexConfig.Add( "gameplay.walkSpeed", 200f, "Walk speed", "Gameplay",
+    onChange: ( oldVal, newVal ) =>
+    {
+        Log.Info( $"Walk speed changed from {oldVal} to {newVal}" );
+    }
+);
+```
+
+### Built-In Config Keys
+
+| Key | Default | Description |
+|---|---|---|
+| `framework.saveInterval` | 300 | Auto-save interval in seconds. |
+| `framework.debug` | false | Enable debug logging. |
+| `character.maxPerPlayer` | 5 | Max characters per player. |
+| `character.autoLoad` | false | Auto-load last character on connect (false = show character list). |
+| `chat.icRange` | 600 | IC chat hearing range in units. |
+| `chat.yellRange` | 1200 | Yell chat hearing range. |
+| `chat.whisperRange` | 200 | Whisper chat hearing range. |
+| `inventory.defaultWidth` | 6 | Default inventory grid width. |
+| `inventory.defaultHeight` | 4 | Default inventory grid height. |
+| `currency.symbol` | "$" | Currency display symbol. |
+| `currency.startingAmount` | 0 | Default starting money. |
+| `notification.defaultDuration` | 8 | Toast notification duration in seconds. |
+| `notification.maxVisible` | 5 | Max simultaneous toast notifications. |
+| `crosshair.enabled` | true | Show crosshair on screen. |
+| `crosshair.hideWhenLowered` | true | Hide crosshair when weapon is lowered. |
+| `door.breachable` | true | Enable shootlock (lock damage) globally. |
+| `door.lockHealth` | 100 | Default lock HP for breachable doors. |
+| `door.kickEnabled` | true | Enable door kicking globally. |
+| `door.kickDamage` | 34 | Damage per kick (3 kicks to breach at default). |
+| `door.kickTime` | 3.0 | Kick action duration in seconds. |
+
+---
+
+## 16. Events & Hooks
+
+Hexagon uses **listener interfaces** for event hooks. Implement these interfaces on a `Component` and add the component to a GameObject in the scene (typically the `HexagonFramework` GameObject). The framework discovers listeners automatically via `Scene.GetAll<T>()`.
+
+### Hook Priority
+
+When multiple listeners exist for the same event, they execute in this order:
+
+```
+Plugins (by priority) -> Schema -> Framework defaults
+```
+
+### Firing Events
+
+Hexagon provides three event-firing patterns:
+
+```csharp
+// Fire: call a method on all listeners
+HexEvents.Fire<ICharacterLoadedListener>( x => x.OnCharacterLoaded( player, character ) );
+
+// CanAll: return true only if ALL listeners return true (gating checks)
+bool allowed = HexEvents.CanAll<ICanCharacterCreate>( x => x.CanCharacterCreate( player, data ) );
+
+// Reduce: transform a value through all listeners
+Vector3 spawnPos = HexEvents.Reduce<IPlayerSpawnListener, Vector3>(
+    defaultPos,
+    ( listener, pos ) => listener.GetSpawnPosition( connection, pos )
+);
+```
+
+### All Listener Interfaces
+
+#### Framework Lifecycle
+
+```csharp
+public interface IFrameworkInitListener
+{
+    void OnFrameworkInit();
+}
+
+public interface IFrameworkShutdownListener
+{
+    void OnFrameworkShutdown();
+}
+```
+
+#### Players
+
+```csharp
+public interface IPlayerConnectedListener
+{
+    void OnPlayerConnected( HexPlayerComponent player, Connection connection );
+}
+
+public interface IPlayerDisconnectedListener
+{
+    void OnPlayerDisconnected( HexPlayerComponent player, Connection connection );
+}
+
+public interface IPlayerSpawnListener
+{
+    Vector3 GetSpawnPosition( Connection connection, Vector3 currentPosition );
+}
+```
+
+#### Characters
+
+```csharp
+public interface ICanCharacterCreate
+{
+    bool CanCharacterCreate( HexPlayerComponent player, HexCharacterData data );
+}
+
+public interface ICharacterCreatedListener
+{
+    void OnCharacterCreated( HexPlayerComponent player, HexCharacter character );
+}
+
+public interface ICharacterLoadedListener
+{
+    void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character );
+}
+
+public interface ICharacterUnloadedListener
+{
+    void OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character );
+}
+```
+
+#### Chat
+
+```csharp
+public interface ICanSendChatMessage
+{
+    bool CanSendChatMessage( HexPlayerComponent player, string message );
+}
+
+public interface IChatMessageListener
+{
+    void OnChatMessage( HexPlayerComponent player, string message, IChatClass chatClass );
+}
+
+public interface IChatMessageReceivedListener
+{
+    void OnChatMessageReceived( string playerName, string message, Color color );
+}
+```
+
+#### Commands
+
+```csharp
+public interface ICanRunCommandListener
+{
+    bool CanRunCommand( HexPlayerComponent player, HexCommand command );
+}
+```
+
+#### Currency
+
+```csharp
+public interface ICanMoneyChangeListener
+{
+    bool CanMoneyChange( HexCharacter character, int oldAmount, int newAmount );
+}
+
+public interface IMoneyChangedListener
+{
+    void OnMoneyChanged( HexCharacter character, int oldAmount, int newAmount );
+}
+```
+
+#### Permissions
+
+```csharp
+public interface IPermissionCheckListener
+{
+    bool CanPerformAction( HexCharacter character, string permission );
+}
+```
+
+#### Doors
+
+```csharp
+public interface ICanUseDoorListener
+{
+    bool CanUseDoor( HexPlayerComponent player, DoorComponent door );
+}
+
+public interface IDoorUsedListener
+{
+    void OnDoorUsed( HexPlayerComponent player, DoorComponent door );
+}
+
+public interface IDoorOwnerChangedListener
+{
+    void OnDoorOwnerChanged( DoorComponent door, string oldOwnerId, string newOwnerId, bool isFaction );
+}
+
+public interface IDoorDamagedListener
+{
+    void OnDoorDamaged( HexPlayerComponent attacker, DoorComponent door, float damage, int remainingHealth );
+}
+
+public interface IDoorBreachedListener
+{
+    void OnDoorBreached( HexPlayerComponent attacker, DoorComponent door );
+}
+
+public interface ICanKickDoorListener
+{
+    bool CanKickDoor( HexPlayerComponent player, DoorComponent door );
+}
+```
+
+#### Items
+
+```csharp
+public interface IItemConsumedListener
+{
+    void OnItemConsumed( HexPlayerComponent player, ItemInstance item );
+}
+```
+
+#### Loadouts
+
+```csharp
+public interface ICanApplyLoadoutListener
+{
+    bool CanApplyLoadout( HexPlayerComponent player, HexCharacter character, ClassDefinition classDef );
+}
+
+public interface ILoadoutAppliedListener
+{
+    void OnLoadoutApplied( HexPlayerComponent player, HexCharacter character, List<ItemInstance> items );
+}
+```
+
+#### Storage
+
+```csharp
+public interface ICanOpenStorageListener
+{
+    bool CanOpenStorage( HexPlayerComponent player, StorageComponent storage );
+}
+
+public interface IStorageOpenedListener
+{
+    void OnStorageOpened( HexPlayerComponent player, StorageComponent storage );
+}
+
+public interface IStorageClosedListener
+{
+    void OnStorageClosed( HexPlayerComponent player, StorageComponent storage );
+}
+```
+
+#### Vendors
+
+```csharp
+public interface ICanBuyItemListener
+{
+    bool CanBuyItem( HexPlayerComponent player, VendorComponent vendor, string itemDefId );
+}
+
+public interface ICanSellItemListener
+{
+    bool CanSellItem( HexPlayerComponent player, VendorComponent vendor, ItemInstance item );
+}
+
+public interface IItemBoughtListener
+{
+    void OnItemBought( HexPlayerComponent player, VendorComponent vendor, ItemInstance item );
+}
+
+public interface IItemSoldListener
+{
+    void OnItemSold( HexPlayerComponent player, VendorComponent vendor, ItemInstance item );
+}
+
+public interface IVendorOpenedListener
+{
+    void OnVendorOpened( HexPlayerComponent player, VendorComponent vendor );
+}
+```
+
+#### UI
+
+```csharp
+public interface IDeathScreenRespawnListener
+{
+    void OnRespawnRequested( HexPlayerComponent player );
+}
+
+public interface IChatFocusRequestListener
+{
+    void OnChatFocusRequested();
+}
+
+public interface INotificationReceivedListener
+{
+    void OnNotificationReceived( string message, float duration );
+}
+```
+
+#### Logging
+
+```csharp
+public interface ILogListener
+{
+    void OnLog( LogEntry entry );
+}
+```
+
+---
+
+## 17. Logging
+
+Hexagon includes a server-side logging system for tracking player actions and system events. Logs are date-partitioned into separate database collections for efficient storage and querying.
+
+### Writing Logs
+
+```csharp
+// Log with a player reference
+HexLog.Add( LogType.Chat, player, "said something in IC" );
+HexLog.Add( LogType.Admin, adminPlayer, "banned character xyz" );
+HexLog.Add( LogType.Item, player, "picked up Pistol" );
+
+// Log a system event (no player)
+HexLog.Add( LogType.System, "Server started" );
+```
+
+### Log Types
+
+| Type | Use Case |
+|---|---|
+| `Chat` | Chat messages. |
+| `Command` | Command execution. |
+| `Item` | Item creation, transfer, destruction. |
+| `Character` | Character creation, loading, deletion. |
+| `Door` | Door lock/unlock, ownership changes. |
+| `Vendor` | Buy/sell transactions. |
+| `Money` | Currency transfers. |
+| `Admin` | Administrative actions. |
+| `System` | Framework events, errors. |
+
+### Querying Logs
+
+```csharp
+// All logs for today
+List<LogEntry> todayLogs = HexLog.GetLogs( DateTime.UtcNow );
+
+// Filtered by type
+List<LogEntry> chatLogs = HexLog.GetLogs( DateTime.UtcNow, LogType.Chat );
+
+// Filtered by player
+List<LogEntry> playerLogs = HexLog.GetLogsForPlayer( DateTime.UtcNow, steamId );
+```
+
+### LogEntry Structure
+
+```csharp
+public class LogEntry
+{
+    public DateTime Timestamp { get; set; }
+    public LogType Type { get; set; }
+    public ulong SteamId { get; set; }
+    public string PlayerName { get; set; }
+    public string Message { get; set; }
+}
+```
+
+### Real-Time Log Monitoring
+
+Implement `ILogListener` on a Component to receive log entries as they are created:
+
+```csharp
+public class AdminLogMonitor : Component, ILogListener
+{
+    public void OnLog( LogEntry entry )
+    {
+        if ( entry.Type == LogType.Admin )
+        {
+            // Notify online admins, write to external system, etc.
+        }
+    }
+}
+```
+
+---
+
+## 18. Complete Example
+
+This section walks through the **Skeleton Schema**, the reference implementation that ships with Hexagon. It demonstrates how all the pieces connect.
+
+### SkeletonCharacter.cs -- Character Data
+
+```csharp
+namespace Hexagon.Schema;
+
+public class SkeletonCharacter : HexCharacterData
+{
+    [CharVar( Default = "John Doe", MinLength = 3, MaxLength = 64, Order = 1, ShowInCreation = true )]
+    public string Name { get; set; }
+
+    [CharVar( Default = "A mysterious stranger.", MinLength = 16, MaxLength = 512, Order = 2, ShowInCreation = true )]
+    public string Description { get; set; }
+
+    [CharVar( Order = 3, ShowInCreation = true )]
+    public string Model { get; set; }
+
+    [CharVar( Local = true, Default = 0 )]
+    public int Money { get; set; }
+}
+```
+
+**What this does:**
+- `Name` and `Description` are visible to all players (not `Local`), validated by length, and appear in the character creation form.
+- `Model` appears in creation so the player can pick a citizen model.
+- `Money` is `Local = true`, so only the owning player sees it (other players cannot see your balance).
+
+### SkeletonPlugin.cs -- Plugin Registration
+
+```csharp
+namespace Hexagon.Schema;
+
+[HexPlugin( "Skeleton Schema", Description = "Reference RP schema demonstrating all Hexagon features", Author = "Hexagon", Version = "1.0", Priority = 50 )]
+public class SkeletonPlugin : IHexPlugin
+{
+    public void OnPluginLoaded()
+    {
+        RegisterFactions();
+        RegisterClasses();
+        RegisterItems();
+        RegisterConfigs();
+
+        // Add SkeletonHooks component to the framework GO for event hooks.
+        // Must be a Component so Scene.GetAll<T>() discovers it for listener interfaces.
+        var framework = HexagonFramework.Instance;
+        if ( framework != null )
+        {
+            framework.GameObject.GetOrAddComponent<SkeletonHooks>();
+        }
+    }
+
+    private void RegisterFactions()
+    {
+        var citizens = TypeLibrary.Create<FactionDefinition>();
+        citizens.UniqueId = "citizen";
+        citizens.Name = "Citizens";
+        citizens.Description = "Regular citizens of the city.";
+        citizens.IsDefault = true;
+        citizens.MaxPlayers = 0;
+        citizens.Color = new Color( 0.29f, 0.565f, 0.886f );
+        citizens.StartingMoney = 100;
+        citizens.Order = 1;
+        FactionManager.Register( citizens );
+
+        var police = TypeLibrary.Create<FactionDefinition>();
+        police.UniqueId = "police";
+        police.Name = "Civil Protection";
+        police.Description = "Law enforcement officers protecting the city.";
+        police.IsDefault = false;
+        police.MaxPlayers = 4;
+        police.Color = new Color( 0.886f, 0.29f, 0.29f );
+        police.StartingMoney = 200;
+        police.Order = 2;
+        FactionManager.Register( police );
+    }
+
+    private void RegisterClasses()
+    {
+        var civilian = TypeLibrary.Create<ClassDefinition>();
+        civilian.UniqueId = "civilian";
+        civilian.Name = "Civilian";
+        civilian.Description = "An ordinary citizen.";
+        civilian.FactionId = "citizen";
+        civilian.MaxPlayers = 0;
+        civilian.Order = 1;
+        FactionManager.RegisterClass( civilian );
+
+        var officer = TypeLibrary.Create<ClassDefinition>();
+        officer.UniqueId = "officer";
+        officer.Name = "Officer";
+        officer.Description = "A Civil Protection officer.";
+        officer.FactionId = "police";
+        officer.MaxPlayers = 0;
+        officer.Order = 1;
+        FactionManager.RegisterClass( officer );
+
+        var chief = TypeLibrary.Create<ClassDefinition>();
+        chief.UniqueId = "chief";
+        chief.Name = "Chief";
+        chief.Description = "The Chief of Civil Protection.";
+        chief.FactionId = "police";
+        chief.MaxPlayers = 1;
+        chief.Order = 2;
+        FactionManager.RegisterClass( chief );
+    }
+
+    private void RegisterItems()
+    {
+        var pistol = TypeLibrary.Create<WeaponItemDef>();
+        pistol.UniqueId = "weapon_pistol";
+        pistol.DisplayName = "Pistol";
+        pistol.Description = "A standard 9mm pistol.";
+        pistol.Width = 1;
+        pistol.Height = 2;
+        pistol.Category = "Weapons";
+        pistol.ClipSize = 12;
+        pistol.AmmoType = "9mm";
+        ItemManager.Register( pistol );
+
+        var baton = TypeLibrary.Create<WeaponItemDef>();
+        baton.UniqueId = "weapon_baton";
+        baton.DisplayName = "Baton";
+        baton.Description = "A standard-issue police baton.";
+        baton.Width = 1;
+        baton.Height = 2;
+        baton.Category = "Weapons";
+        baton.ClipSize = 0;
+        baton.AmmoType = "";
+        ItemManager.Register( baton );
+
+        var cash = TypeLibrary.Create<CurrencyItemDef>();
+        cash.UniqueId = "money_cash";
+        cash.DisplayName = "Cash";
+        cash.Description = "A stack of bills.";
+        cash.Width = 1;
+        cash.Height = 1;
+        cash.Category = "Currency";
+        cash.DefaultAmount = 100;
+        ItemManager.Register( cash );
+
+        var backpack = TypeLibrary.Create<BagItemDef>();
+        backpack.UniqueId = "bag_backpack";
+        backpack.DisplayName = "Backpack";
+        backpack.Description = "A sturdy backpack for extra storage.";
+        backpack.Width = 1;
+        backpack.Height = 2;
+        backpack.Category = "Storage";
+        backpack.BagWidth = 6;
+        backpack.BagHeight = 4;
+        ItemManager.Register( backpack );
+
+        var policeUniform = TypeLibrary.Create<OutfitItemDef>();
+        policeUniform.UniqueId = "outfit_police";
+        policeUniform.DisplayName = "Police Uniform";
+        policeUniform.Description = "A standard Civil Protection uniform.";
+        policeUniform.Width = 1;
+        policeUniform.Height = 2;
+        policeUniform.Category = "Clothing";
+        policeUniform.Slot = "torso";
+        ItemManager.Register( policeUniform );
+
+        var ammo = TypeLibrary.Create<AmmoItemDef>();
+        ammo.UniqueId = "ammo_9mm";
+        ammo.DisplayName = "9mm Ammo";
+        ammo.Description = "A box of 9mm rounds.";
+        ammo.Width = 1;
+        ammo.Height = 1;
+        ammo.Category = "Ammo";
+        ammo.AmmoType = "9mm";
+        ammo.AmmoAmount = 12;
+        ItemManager.Register( ammo );
+    }
+
+    private void RegisterConfigs()
+    {
+        Config.HexConfig.Add( "gameplay.walkSpeed", 200f, "Default walk speed", "Gameplay" );
+        Config.HexConfig.Add( "gameplay.runSpeed", 320f, "Default run speed", "Gameplay" );
+    }
+}
+```
+
+### SkeletonHooks -- Event Handling
+
+```csharp
+namespace Hexagon.Schema;
+
+public class SkeletonHooks : Component,
+    ICharacterCreatedListener,
+    ICharacterLoadedListener,
+    IDeathScreenRespawnListener
+{
+    // --- Character Created ---
+
+    public void OnCharacterCreated( HexPlayerComponent player, HexCharacter character )
+    {
+        // Create default inventory for the new character
+        var inventory = InventoryManager.CreateDefault( character.Id );
+
+        // Give starting cash
+        var cash = ItemManager.CreateInstance( "money_cash", character.Id );
+        if ( cash != null )
+            inventory.Add( cash );
+
+        // Police faction gets extra starting gear
+        if ( character.Data.Faction == "police" )
+        {
+            var baton = ItemManager.CreateInstance( "weapon_baton", character.Id );
+            if ( baton != null )
+                inventory.Add( baton );
+
+            var uniform = ItemManager.CreateInstance( "outfit_police", character.Id );
+            if ( uniform != null )
+                inventory.Add( uniform );
+        }
+    }
+
+    // --- Character Loaded ---
+
+    public void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
+    {
+        // Apply movement speeds from config
+        var walkSpeed = Config.HexConfig.Get<float>( "gameplay.walkSpeed", 200f );
+        var runSpeed = Config.HexConfig.Get<float>( "gameplay.runSpeed", 320f );
+
+        character.SetData( "walkSpeed", walkSpeed );
+        character.SetData( "runSpeed", runSpeed );
+
+        // Load and sync inventory to the player
+        var inventories = InventoryManager.LoadForCharacter( character.Data.Id );
+        foreach ( var inv in inventories )
+        {
+            inv.AddReceiver( player.Connection );
+        }
+    }
+
+    // --- Death Screen Respawn ---
+
+    public void OnRespawnRequested( HexPlayerComponent player )
+    {
+        ServerRespawn();
+    }
+
+    [Rpc.Host]
+    private void ServerRespawn()
+    {
+        var caller = Rpc.Caller;
+        if ( caller == null ) return;
+
+        var player = HexGameManager.GetPlayer( caller );
+        if ( player == null || !player.IsDead ) return;
+
+        player.IsDead = false;
+
+        // Teleport to spawn position
+        var spawnPos = new Vector3( 0, 0, 100 );
+        foreach ( var gm in Scene.GetAll<HexGameManager>() )
+        {
+            spawnPos = gm.SpawnPosition;
+            break;
+        }
+
+        player.GameObject.WorldPosition = spawnPos;
+    }
+}
+```
+
+### How It All Connects
+
+1. **SkeletonCharacter** defines four CharVars: `Name`, `Description`, `Model`, and `Money`. The first three appear in the character creation UI (`ShowInCreation = true`). `Money` is `Local = true` so only the owning player sees it.
+
+2. **SkeletonPlugin** is discovered by `PluginManager` via the `[HexPlugin]` attribute. At priority 50, it loads before default-priority plugins. During `OnPluginLoaded()`, it:
+   - Registers two factions (Citizens and Civil Protection) with `FactionManager`.
+   - Registers three classes (Civilian, Officer, Chief) linked to those factions.
+   - Registers six item definitions covering all built-in item types.
+   - Registers two config values for movement speed.
+   - Attaches `SkeletonHooks` to the framework GameObject for event handling.
+
+3. **SkeletonHooks** implements three listener interfaces:
+   - `ICharacterCreatedListener` -- gives new characters a default inventory and starting items. Police faction characters also receive a baton and uniform.
+   - `ICharacterLoadedListener` -- applies config-based movement speeds and syncs inventory to the player's client by adding them as a receiver.
+   - `IDeathScreenRespawnListener` -- handles the respawn button from the death screen by sending an `[Rpc.Host]` call to the server, which resets the dead state and teleports the player to the spawn point.
+
+This pattern -- **data class + plugin + hooks component** -- is the standard structure for any Hexagon schema. Scale it up by adding more factions, items, commands, chat classes, and hook implementations as your gamemode requires.
+
+---
+
+<!-- Regenerate with: powershell -ExecutionPolicy Bypass -File tools/docgen.ps1 -->
+
+# Hexagon API Reference
+
+Complete API reference for the Hexagon roleplay framework for s&box (Source 2, C#).
+
+## Table of Contents
+
+- [Hexagon.Core](#hexagoncore)
+- [Hexagon.Attributes](#hexagonattributes)
+- [Hexagon.Characters](#hexagoncharacters)
+- [Hexagon.Chat](#hexagonchat)
+- [Hexagon.Commands](#hexagoncommands)
+- [Hexagon.Config](#hexagonconfig)
+- [Hexagon.Currency](#hexagoncurrency)
+- [Hexagon.Doors](#hexagondoors)
+- [Hexagon.Factions](#hexagonfactions)
+- [Hexagon.Interaction](#hexagoninteraction)
+- [Hexagon.Inventory](#hexagoninventory)
+- [Hexagon.Items](#hexagonitems)
+- [Hexagon.Items.Bases](#hexagonitemsbases)
+- [Hexagon.Logging](#hexagonlogging)
+- [Hexagon.Permissions](#hexagonpermissions)
+- [Hexagon.Persistence](#hexagonpersistence)
+- [Hexagon.Storage](#hexagonstorage)
+- [Hexagon.UI](#hexagonui)
+- [Hexagon.Vendors](#hexagonvendors)
+- [Listener Interfaces](#listener-interfaces)
+
+---
+
+## Hexagon.Core
+
+### DataHelper (static)
+
+Utility for typed access to Dictionary&lt;string, object&gt; stores with safe type conversion and fallback defaults.
+
+```csharp
+static T GetValue<T>( Dictionary<string, object> dict, string key, T defaultValue )
+```
+
+| Member | Description |
+|--------|-------------|
+| `GetValue` | Get a typed value from a dictionary with safe type conversion. Returns defaultValue if the key is missing, the dict is null, or conversion fails. |
+
+### HexagonFramework (sealed) : Component
+
+The core bootstrap component for the Hexagon roleplay framework. Attach this to a persistent GameObject in your scene to initialize all systems.
+
+```csharp
+static HexagonFramework Instance { get; set; }
+static bool IsInitialized { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `Instance` |  |
+| `IsInitialized` | Whether the framework has finished initialization. |
+
+### HexEvents (static)
+
+Central event system for Hexagon. Provides two mechanisms: 1. Interface-based: Components implement listener interfaces and are auto-discovered via Scene. 2. Static events: Non-Component code subscribes to Action delegates.
+
+```csharp
+static void Fire<T>( Action<T> action )
+static bool CanAll<T>( Func<T, bool> check )
+static T Reduce<TListener, T>( T initial, Func<TListener, T, T> reducer )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Fire` | Fires an event to all Components in the scene that implement interface T. |
+| `CanAll` | Fires a Can-style permission hook. All listeners must return true for the action to proceed. If any listener returns false, the action is blocked. |
+| `Reduce` | Fires a hook that collects a value, passing it through each listener in sequence. Each listener can modify the value before passing it to the next. |
+
+### IHexPlugin (interface)
+
+Interface for Hexagon plugins. Implement this alongside [HexPlugin] attribute to create a plugin that the framework auto-discovers and loads.
+
+```csharp
+void OnPluginLoaded()
+void OnPluginUnloaded()
+```
+
+| Member | Description |
+|--------|-------------|
+| `OnPluginLoaded` | Called when the plugin is loaded during framework initialization. Register your systems (items, factions, commands, etc.) here. |
+| `OnPluginUnloaded` | Called when the plugin is unloaded during framework shutdown. Clean up any resources here. |
+
+### HexPluginAttribute : Attribute
+
+Marks a class as a Hexagon plugin for auto-discovery. The class must also implement IHexPlugin.
+
+```csharp
+string Name { get; set; }
+string Description { get; set; }
+string Author { get; set; }
+string Version { get; set; }
+int Priority { get; set; }
+```
+
+### PluginManager (static)
+
+Discovers and manages Hexagon plugins. Scans all loaded assemblies for classes marked with [HexPlugin] that implement IHexPlugin.
+
+```csharp
+static IReadOnlyList<PluginEntry> Plugins
+static IHexPlugin Get( string name )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Plugins` | All currently loaded plugins. |
+| `Get` | Get a loaded plugin by name. |
+
+### PluginEntry
+
+Holds metadata and instance reference for a loaded plugin.
+
+```csharp
+string Name { get; set; }
+string Description { get; set; }
+string Author { get; set; }
+string Version { get; set; }
+int Priority { get; set; }
+TypeDescription Type { get; set; }
+IHexPlugin Instance { get; set; }
+```
+
+### PressableHelper (static)
+
+Utility for IPressable implementations.
+
+### RpcHelper (static)
+
+Utility for resolving the calling player in RPC handlers. Eliminates repeated caller validation boilerplate.
+
+---
+
+## Hexagon.Attributes
+
+### AttributeBoost
+
+A temporary or permanent modifier to a character's attribute. Boosts stack additively and are evaluated at runtime.
+
+```csharp
+string Id { get; set; }
+string AttributeId { get; set; }
+float Amount { get; set; }
+DateTime? ExpiresAt { get; set; }
+bool IsExpired
+```
+
+| Member | Description |
+|--------|-------------|
+| `Id` | Unique identifier for this boost (for removal). |
+| `AttributeId` | Which attribute this boost modifies (matches AttributeDefinition.UniqueId). |
+| `Amount` | Flat amount to add (can be negative for debuffs). |
+| `ExpiresAt` | When this boost expires. Null = permanent. |
+| `IsExpired` | Whether this boost has expired. |
+
+### AttributeDefinition : GameResource
+
+Defines an attribute type (e.g. Hunger, Stamina, Health). Create .attrib asset files in the s&box editor to define attribute types. Auto-registers with AttributeManager when the asset loads.
+
+```csharp
+[Property] string UniqueId { get; set; }
+[Property] string DisplayName { get; set; }
+[Property] float MinValue { get; set; }
+[Property] float MaxValue { get; set; }
+[Property] float StartValue { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `UniqueId` | Unique identifier for this attribute (e.g. "hunger", "stamina"). |
+| `DisplayName` | Display name shown in UI. |
+| `MinValue` | Minimum value this attribute can reach. |
+| `MaxValue` | Maximum value this attribute can reach. |
+| `StartValue` | Starting value for new characters. |
+
+### AttributeManager (static)
+
+Manages attribute definitions and per-character attribute values + boosts. Base values stored in character data as "hex_attr_{id}". Boosts stored as "hex_boosts" JSON list.
+
+```csharp
+static void RegisterDefinition( AttributeDefinition definition )
+static AttributeDefinition GetDefinition( string id )
+static IReadOnlyDictionary<string, AttributeDefinition> GetAllDefinitions()
+static float GetAttribute( HexCharacter character, string attributeId )
+static float GetBaseAttribute( HexCharacter character, string attributeId )
+static void SetAttribute( HexCharacter character, string attributeId, float value )
+static void AddAttribute( HexCharacter character, string attributeId, float amount )
+static void AddBoost( HexCharacter character, string attributeId, float amount, TimeSpan? duration, string boostId )
+static bool RemoveBoost( HexCharacter character, string boostId )
+static void ClearBoosts( HexCharacter character, string attributeId )
+static List<AttributeBoost> GetBoosts( HexCharacter character )
+static void InitializeCharacter( HexCharacter character )
+```
+
+| Member | Description |
+|--------|-------------|
+| `RegisterDefinition` | Register an attribute definition (called by AttributeDefinition.PostLoad). |
+| `GetDefinition` | Get an attribute definition by ID. |
+| `GetAllDefinitions` | Get all registered attribute definitions. |
+| `GetAttribute` | Get the effective attribute value for a character (base + boosts, clamped). |
+| `GetBaseAttribute` | Get the base attribute value (without boosts). |
+| `SetAttribute` | Set the base attribute value. Fires IAttributeChangedListener. |
+| `AddAttribute` | Add to the base attribute value. |
+| `AddBoost` | Add a boost to a character's attribute. |
+| `RemoveBoost` | Remove a specific boost by ID. |
+| `ClearBoosts` | Remove all boosts for a specific attribute. |
+| `GetBoosts` | Get all active (non-expired) boosts for a character. |
+| `InitializeCharacter` | Initialize all registered attributes on a character with their start values. Call this when a character is first created. |
+
+---
+
+## Hexagon.Characters
+
+### CharacterManager (static)
+
+Manages character CRUD operations, auto-save, and CharVar metadata discovery. Initialized by HexagonFramework on startup.
+
+```csharp
+static IReadOnlyDictionary<string, CharVarInfo> CharVars
+static CharVarInfo GetCharVarInfo( string name )
+static IEnumerable<CharVarInfo> GetPublicCharVars()
+static IEnumerable<CharVarInfo> GetLocalCharVars()
+static HexCharacter CreateCharacter( HexPlayerComponent player, HexCharacterData data )
+static bool LoadCharacter( HexPlayerComponent player, string characterId )
+static void UnloadCharacter( HexPlayerComponent player )
+static bool DeleteCharacter( HexPlayerComponent player, string characterId )
+static List<HexCharacterData> GetCharacterList( ulong steamId )
+static HexCharacter GetActiveCharacter( string characterId )
+static IReadOnlyDictionary<string, HexCharacter> GetActiveCharacters()
+static string ValidateCharacterData( HexCharacterData data )
+static void SaveAll()
+static HexCharacterData CreateDefaultData()
+```
+
+| Member | Description |
+|--------|-------------|
+| `CharVars` | All discovered CharVar metadata. |
+| `GetCharVarInfo` | Get CharVar metadata by property name. |
+| `GetPublicCharVars` | Get all CharVars that are public (not Local, not NoNetworking). |
+| `GetLocalCharVars` | Get all CharVars that are Local (owner-only networking). |
+| `CreateCharacter` | Create a new character for a player. |
+| `LoadCharacter` | Load a character for a player by character ID. |
+| `UnloadCharacter` | Unload the active character from a player (save + disconnect). |
+| `DeleteCharacter` | Delete a character permanently. |
+| `GetCharacterList` | Get the character list for a player by Steam ID. |
+| `GetActiveCharacter` | Get an active character by ID. |
+| `GetActiveCharacters` | Get all active characters. |
+| `ValidateCharacterData` | Validate character data against CharVar constraints. Returns null if valid, or an error message string if invalid. |
+| `SaveAll` | Save all active characters that have dirty data. |
+| `CreateDefaultData` | Create an instance of the schema's character data type with defaults applied. |
+
+### CharVarAttribute : Attribute
+
+Marks a property on a HexCharacterData subclass as a character variable. The framework handles persistence, networking, and validation automatically. Usage: [CharVar(Default = "John Doe")] public string Name { get; set; } [CharVar(Local = true)] public int Money { get; set; }  // Owner-only [CharVar(NoNetworking = true)] public Dictionary&lt;string, object&gt; ServerData { get; set; }
+
+```csharp
+object Default { get; set; }
+bool Local { get; set; }
+bool NoNetworking { get; set; }
+int MinLength { get; set; }
+int MaxLength { get; set; }
+bool ReadOnly { get; set; }
+int Order { get; set; }
+bool ShowInCreation { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `Default` | Default value for this variable when creating a new character. |
+| `Local` | If true, this variable is only networked to the owning player (not broadcast). Use for private data like money, flags, attributes. |
+| `NoNetworking` | If true, this variable is never networked. Server-only data. |
+| `MinLength` | Minimum string length for validation. Only applies to string properties. |
+| `MaxLength` | Maximum string length for validation. Only applies to string properties. |
+| `ReadOnly` | If true, this variable cannot be modified after character creation. |
+| `Order` | Display order in character creation UI. Lower numbers appear first. |
+| `ShowInCreation` | If true, this variable is shown in character creation UI. |
+
+### HexCharacter
+
+Runtime wrapper around a character's persistent data. Provides gameplay methods, dirty tracking for efficient saves, and networking helpers. Created when a player loads a character. One active HexCharacter per player at a time.
+
+```csharp
+HexCharacterData Data { get; }
+HexPlayerComponent Player { get; set; }
+bool IsDirty { get; set; }
+string Id
+ulong SteamId
+string Faction
+string Class
+bool HasFlag( char flag )
+bool HasFlags( string flags )
+void GiveFlag( char flag )
+void TakeFlag( char flag )
+T GetData<T>( string key, T defaultValue )
+void SetData( string key, object value )
+T GetVar<T>( string name, T defaultValue )
+void SetVar( string name, object value )
+void SetFaction( string factionId )
+void SetClass( string classId )
+void Ban( TimeSpan? duration )
+void Unban()
+HashSet<string> GetRecognizedIds()
+void AddRecognized( string characterId )
+void MarkDirty( string fieldName )
+void Save()
+IReadOnlySet<string> GetDirtyFields()
+```
+
+| Member | Description |
+|--------|-------------|
+| `Data` | The underlying persistent data. |
+| `Player` | The player component this character is attached to. Null if character is not active. |
+| `IsDirty` | Whether any data has changed since last save. |
+| `Id` |  |
+| `SteamId` |  |
+| `Faction` |  |
+| `Class` |  |
+| `HasFlag` | Check if this character has a specific flag. |
+| `HasFlags` | Check if this character has all specified flags. |
+| `GiveFlag` | Grant a flag to this character. |
+| `TakeFlag` | Remove a flag from this character. |
+| `GetData` | Get a value from the character's generic data store. |
+| `SetData` | Set a value in the character's generic data store. |
+| `GetVar` | Get a character variable value by name using reflection. Prefer using the typed property on your HexCharacterData subclass directly. |
+| `SetVar` | Set a character variable value by name using reflection. Prefer using the typed property on your HexCharacterData subclass directly, then calling MarkDirty(). |
+| `SetFaction` | Set this character's faction. |
+| `SetClass` | Set this character's class within their current faction. |
+| `Ban` | Ban this character. Pass null duration for permanent ban. |
+| `Unban` | Unban this character. |
+| `GetRecognizedIds` | Get the set of character IDs this character recognizes. |
+| `AddRecognized` | Add a character ID to this character's recognition list. |
+| `MarkDirty` | Mark a field as dirty (changed since last save). Call this after modifying character data properties directly. |
+| `Save` | Save this character to the database if dirty. |
+| `GetDirtyFields` | Get the list of fields that have changed since last save. |
+
+### HexCharacterData (abstract)
+
+Base class for character data. Schema devs extend this with [CharVar] properties to define their character fields. Usage: public class MyCharacter : HexCharacterData { [CharVar(Default = "John Doe", MinLength = 3, MaxLength = 64, Order = 1)] public string Name { get; set; } [CharVar(Default = "A mysterious stranger.", MinLength = 16, MaxLength = 512, Order = 2)] public string Description { get; set; } [CharVar(Order = 3)] public string Model { get; set; } [CharVar(Local = true)] public int Money { get; set; } } The framework auto-discovers the concrete subclass at startup and uses it for all character creation, persistence, and networking.
+
+```csharp
+string Id { get; set; }
+ulong SteamId { get; set; }
+int Slot { get; set; }
+string Faction { get; set; }
+string Class { get; set; }
+string Flags { get; set; }
+Dictionary<string, object> Data { get; set; }
+DateTime CreatedAt { get; set; }
+DateTime LastPlayedAt { get; set; }
+bool IsBanned { get; set; }
+DateTime? BanExpiry { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `Id` | Unique character ID (generated by the framework). |
+| `SteamId` | Steam ID of the player who owns this character. |
+| `Slot` | Character slot index (0-based) for this player. |
+| `Faction` | The faction this character belongs to (references FactionDefinition name). |
+| `Class` | The class within the faction (references ClassDefinition name). Empty if no class. |
+| `Flags` | Character flags (permission characters, e.g. "pet" for physgun/entities/tools). |
+| `Data` | Generic data store for plugin/schema-specific persistent data. |
+| `CreatedAt` | When this character was created. |
+| `LastPlayedAt` | When this character was last played. |
+| `IsBanned` | Whether this character is currently banned. |
+| `BanExpiry` | When the ban expires (null = permanent). |
+
+### CharVarInfo
+
+Metadata about a character variable, discovered via s&box TypeLibrary at startup.
+
+```csharp
+string Name { get; set; }
+Type PropertyType { get; set; }
+CharVarAttribute Attribute { get; set; }
+PropertyDescription Property { get; set; }
+object GetValue( HexCharacterData data )
+void SetValue( HexCharacterData data, object value )
+```
+
+### HexGameManager (sealed) : Component, Component.INetworkListener
+
+Handles player connections and spawning. Auto-added to HexagonFramework. When a player connects: 1. Creates a bare networked GameObject with HexPlayerComponent (no body yet) 2. Loads their character list and shows CharacterSelect UI 3. After character selection, builds the full player body (PlayerController, model, etc.) The player has no physical presence until they select a character.
+
+```csharp
+[Property] GameObject PlayerPrefab { get; set; }
+[Property] Vector3 SpawnPosition { get; set; }
+readonly Dictionary<ulong, HexPlayerComponent> Players
+static HexPlayerComponent GetPlayer( ulong steamId )
+static HexPlayerComponent GetPlayer( Connection connection )
+void OnActive( Connection connection )
+void OnDisconnected( Connection connection )
+```
+
+| Member | Description |
+|--------|-------------|
+| `PlayerPrefab` | Optional prefab to spawn for each player when their character loads. If null, a default first-person player is built (PlayerController, citizen model, Dresser). |
+| `SpawnPosition` | World position to spawn players at. Override via IPlayerSpawnListener. |
+| `Players` | All currently connected players. |
+| `GetPlayer` | Get a player component by Steam ID. |
+| `GetPlayer` | Get a player component by Connection. |
+| `OnActive` |  |
+| `OnDisconnected` |  |
+
+### HexModelHandler (sealed) : Component, ICharacterLoadedListener
+
+Listens for character load events and applies character model/speeds to the player. Added to the HexagonFramework GameObject during initialization.
+
+```csharp
+void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
+```
+
+| Member | Description |
+|--------|-------------|
+| `OnCharacterLoaded` | When a character loads, build the player body (if needed) and apply model/speeds. |
+
+### CharacterListEntry
+
+Lightweight DTO for character list sent to clients.
+
+```csharp
+string Id { get; set; }
+string Name { get; set; }
+string Description { get; set; }
+string Faction { get; set; }
+string Class { get; set; }
+DateTime LastPlayed { get; set; }
+```
+
+### HexPlayerComponent (sealed) : Component
+
+Component attached to each player's GameObject. Holds the networked character data that other players need to see, plus a server-side reference to the full HexCharacter. Public data ([Sync]): visible to all players (name, model, faction). Private data: synced only to the owner via RPC when it changes.
+
+```csharp
+[Sync] ulong SteamId { get; set; }
+[Sync] string DisplayName { get; set; }
+[Sync] string CharacterName { get; set; }
+[Sync] string CharacterModel { get; set; }
+[Sync] string CharacterDescription { get; set; }
+[Sync] string FactionId { get; set; }
+[Sync] string ClassId { get; set; }
+[Sync] string CharacterId { get; set; }
+[Sync] bool HasActiveCharacter { get; set; }
+[Sync] bool IsDead { get; set; }
+HexCharacter Character { get; set; }
+Connection Connection { get; set; }
+List<CharacterListEntry> ClientCharacterList { get; set; }
+event Action OnCharacterListReceived
+event Action<bool, string
+float ActionStartTime { get; set; }
+float ActionEndTime { get; set; }
+string ActionText { get; set; }
+event Action OnActionBarChanged
+[Rpc.Host] void RequestCharacterList()
+[Rpc.Host] void RequestLoadCharacter( string characterId )
+[Rpc.Host] void RequestCreateCharacter( string json )
+[Rpc.Host] void RequestDeleteCharacter( string characterId )
+T GetPrivateVar<T>( string name, T defaultValue )
+bool DoesRecognizeLocal( HexPlayerComponent target )
+[Rpc.Host] void RequestIntroduce( int level )
+```
+
+| Member | Description |
+|--------|-------------|
+| `SteamId` |  |
+| `DisplayName` |  |
+| `CharacterName` |  |
+| `CharacterModel` |  |
+| `CharacterDescription` |  |
+| `FactionId` |  |
+| `ClassId` |  |
+| `CharacterId` |  |
+| `HasActiveCharacter` |  |
+| `IsDead` |  |
+| `Character` | The active character for this player. Only valid on the server. |
+| `Connection` | The network connection for this player. |
+| `ClientCharacterList` | Client-side character list received from the server. |
+| `OnCharacterListReceived` | Fired on the client when the character list is received from the server. |
+| `string` | Fired on the client when a character creation result is received. |
+| `ActionStartTime` | Client-side: start time of the current action bar. |
+| `ActionEndTime` | Client-side: end time of the current action bar. |
+| `ActionText` | Client-side: text label for the current action bar. |
+| `OnActionBarChanged` | Client-side: fired when action bar state changes. |
+| `RequestCharacterList` | Client requests their character list from the server. |
+| `RequestLoadCharacter` | Client requests to load a specific character. |
+| `RequestCreateCharacter` | Client requests to create a new character from JSON data. |
+| `RequestDeleteCharacter` | Client requests to delete a character. |
+| `GetPrivateVar` | Client-side: get a private CharVar value that was synced from the server. |
+| `DoesRecognizeLocal` | Client-side: check if this player recognizes a target player. |
+| `RequestIntroduce` | Client requests to introduce themselves. Level: 0=look-at, 1=whisper, 2=talk, 3=yell. |
+
+### HexPlayerSetup (static)
+
+Static helper that builds and tears down player bodies. On connect, players are bare networked objects. When a character loads, BuildPlayerBody() adds the full player (PlayerController, model, Dresser). When a character unloads, StripPlayerBody() removes everything.
+
+```csharp
+static void BuildPlayerBody( HexPlayerComponent player, GameObject prefab )
+static void StripPlayerBody( GameObject playerGo )
+static void BuildDefaultPlayer( GameObject playerGo )
+static void ApplyCharacterToPlayer( HexPlayerComponent player, HexCharacter character )
+```
+
+| Member | Description |
+|--------|-------------|
+| `BuildPlayerBody` | Build the full player body on an existing networked GameObject. Called when a character is loaded for the first time (or after switching characters). |
+| `StripPlayerBody` | Strip the player body back to a bare networked object. Removes PlayerController, WeaponRaise, and all child objects (Body, etc.). |
+| `BuildDefaultPlayer` | Configure a bare GameObject as a fully functional first-person player. Adds PlayerController, SkinnedModelRenderer (citizen), and Dresser. |
+| `ApplyCharacterToPlayer` | Apply character-specific data to an existing player (model, speeds). Called when a character loads or changes. |
+
+### RecognitionManager (static)
+
+Manages the recognizable names system. Characters are "Unknown" to others until formally introduced. Recognition is one-way and persists across sessions. Factions with IsGloballyRecognized are always known (e.g., police uniforms).
+
+```csharp
+static bool DoesRecognize( HexCharacter observer, HexCharacter target )
+static bool Recognize( HexCharacter observer, string targetCharacterId )
+static int IntroduceToRange( HexPlayerComponent player, float range )
+static bool IntroduceToTarget( HexPlayerComponent player, HexPlayerComponent target )
+static string GetDisplayName( HexPlayerComponent observer, HexPlayerComponent target )
+static string GetDisplayNameForChat( HexPlayerComponent observer, HexPlayerComponent target )
+static string FormatForListener( HexPlayerComponent observer, HexPlayerComponent speaker, string formatted )
+```
+
+| Member | Description |
+|--------|-------------|
+| `DoesRecognize` | Server-side: check if observer recognizes target. |
+| `Recognize` | Server-side: add target to observer's recognition list. Returns true if newly recognized, false if already known. |
+| `IntroduceToRange` | Server-side: introduce a character to all players within range. Returns the number of players who newly recognized the introducer. |
+| `IntroduceToTarget` | Server-side: introduce to a specific player. Returns true if the target newly recognized the introducer. |
+| `GetDisplayName` | Server-side: get the display name for a target as seen by an observer. Returns "Unknown" if not recognized. |
+| `GetDisplayNameForChat` | Server-side: get a chat-friendly display name with truncated description for unknowns. |
+| `FormatForListener` | Server-side: format a pre-formatted message replacing the speaker's real name with the recognition-aware name for a specific listener. |
+
+---
+
+## Hexagon.Chat
+
+### ICChat : IChatClass
+
+Default in-character chat. No prefix. Range-limited. Format: {Name} says "{message}"
+
+```csharp
+string Name
+string Prefix
+float Range
+Color Color
+bool CanHear( HexPlayerComponent speaker, HexPlayerComponent listener )
+bool CanSay( HexPlayerComponent speaker, string message )
+string Format( HexPlayerComponent speaker, string message )
+```
+
+### YellChat : IChatClass
+
+Yell chat. Prefix: /y. Extended range. Format: {Name} yells "{message}!"
+
+```csharp
+string Name
+string Prefix
+float Range
+Color Color
+bool CanHear( HexPlayerComponent speaker, HexPlayerComponent listener )
+bool CanSay( HexPlayerComponent speaker, string message )
+string Format( HexPlayerComponent speaker, string message )
+```
+
+### WhisperChat : IChatClass
+
+Whisper chat. Prefix: /w. Short range. Format: {Name} whispers "{message}"
+
+```csharp
+string Name
+string Prefix
+float Range
+Color Color
+bool CanHear( HexPlayerComponent speaker, HexPlayerComponent listener )
+bool CanSay( HexPlayerComponent speaker, string message )
+string Format( HexPlayerComponent speaker, string message )
+```
+
+### MeChat : IChatClass
+
+Action/emote chat. Prefix: /me. IC range. Format: ** {Name} {message} **
+
+```csharp
+string Name
+string Prefix
+float Range
+Color Color
+bool CanHear( HexPlayerComponent speaker, HexPlayerComponent listener )
+bool CanSay( HexPlayerComponent speaker, string message )
+string Format( HexPlayerComponent speaker, string message )
+```
+
+### ItChat : IChatClass
+
+Impersonal action chat. Prefix: /it. IC range. Format: ** {message} **
+
+```csharp
+string Name
+string Prefix
+float Range
+Color Color
+bool CanHear( HexPlayerComponent speaker, HexPlayerComponent listener )
+bool CanSay( HexPlayerComponent speaker, string message )
+string Format( HexPlayerComponent speaker, string message )
+```
+
+### OOCChat : IChatClass
+
+Out-of-character global chat. Prefix: /ooc (alias: //). Format: (OOC) {Name}: {message} Rate-limited by chat.oocDelay config.
+
+```csharp
+string Name
+string Prefix
+float Range
+Color Color
+bool CanHear( HexPlayerComponent speaker, HexPlayerComponent listener )
+bool CanSay( HexPlayerComponent speaker, string message )
+string Format( HexPlayerComponent speaker, string message )
+```
+
+### LOOCChat : IChatClass
+
+Local out-of-character chat. Prefix: /looc (alias: .//). Format: (LOOC) {Name}: {message}
+
+```csharp
+string Name
+string Prefix
+float Range
+Color Color
+bool CanHear( HexPlayerComponent speaker, HexPlayerComponent listener )
+bool CanSay( HexPlayerComponent speaker, string message )
+string Format( HexPlayerComponent speaker, string message )
+```
+
+### RollChat : IChatClass
+
+Dice roll chat. Prefix: /roll. IC range. Format: ** {Name} rolled {1-100} out of 100 ** The message text is ignored; a random roll is generated.
+
+```csharp
+string Name
+string Prefix
+float Range
+Color Color
+bool CanHear( HexPlayerComponent speaker, HexPlayerComponent listener )
+bool CanSay( HexPlayerComponent speaker, string message )
+string Format( HexPlayerComponent speaker, string message )
+```
+
+### PMChat : IChatClass
+
+Private message chat. Prefix: /pm. Direct to a single player. First word after prefix is the target player name. Format: [PM from {Name}]: {message}
+
+```csharp
+string Name
+string Prefix
+float Range
+Color Color
+bool CanHear( HexPlayerComponent speaker, HexPlayerComponent listener )
+bool CanSay( HexPlayerComponent speaker, string message )
+string Format( HexPlayerComponent speaker, string message )
+```
+
+### EventChat : IChatClass
+
+Event announcer chat. Prefix: /event. Global range. Requires admin flag. Format: ** {message} **
+
+```csharp
+string Name
+string Prefix
+float Range
+Color Color
+bool CanHear( HexPlayerComponent speaker, HexPlayerComponent listener )
+bool CanSay( HexPlayerComponent speaker, string message )
+string Format( HexPlayerComponent speaker, string message )
+```
+
+### ChatManager (static)
+
+Central chat routing system. Registers chat classes, parses prefixes, routes messages to the correct chat class, and delegates to CommandManager for non-chat / prefixed input.
+
+```csharp
+static void Register( IChatClass chatClass )
+static void RegisterAlias( string alias, string targetPrefix )
+static IChatClass GetChatClass( string prefix )
+static IChatClass GetDefaultChat()
+static IReadOnlyDictionary<string, IChatClass> GetAllChatClasses()
+static void ProcessMessage( HexPlayerComponent sender, string rawMessage )
+static void SendSystemMessage( HexPlayerComponent target, string message )
+static void SendDirectMessage( HexPlayerComponent sender, Connection target, IChatClass chatClass, string formatted )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Register` | Register a chat class. If prefix is empty, it becomes the default IC chat. |
+| `RegisterAlias` | Register an alias for a chat class prefix (e.g. "//" → "ooc"). |
+| `GetChatClass` | Get a registered chat class by prefix. |
+| `GetDefaultChat` | Get the default (no-prefix) chat class. |
+| `GetAllChatClasses` | Get all registered chat classes. |
+| `ProcessMessage` | Process a raw message from a player. Handles prefix parsing, chat class routing, and falls through to CommandManager for unrecognized / prefixed input. |
+| `SendSystemMessage` | Send a system message to a specific player only. |
+| `SendDirectMessage` | Send a formatted message to specific recipients with a given chat class appearance. Useful for PM and other targeted chat. |
+
+### HexChatComponent (sealed) : Component
+
+Network bridge for the chat system. Singleton component that lives on the HexagonFramework GameObject. Provides RPCs for sending and receiving chat messages. Color is passed as 3 floats (r, g, b) for RPC safety.
+
+```csharp
+static HexChatComponent Instance { get; set; }
+[Rpc.Host] void SendMessage( string rawMessage )
+void ReceiveMessage( string senderName, string chatClassName, string formattedMessage, float colorR, float colorG, float colorB )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Instance` |  |
+| `SendMessage` | Called by clients to send a raw chat message to the server. The server will parse, permission-check, and route it. |
+| `ReceiveMessage` | Server-to-client broadcast of a formatted chat message. Only sent to filtered recipients via Rpc.FilterInclude. |
+
+### IChatClass (interface)
+
+Defines a chat class (IC, OOC, Yell, Whisper, etc.). Implement this interface and register with ChatManager to add custom chat types.
+
+```csharp
+string Name { get; }
+string Prefix { get; }
+float Range { get; }
+Color Color { get; }
+bool CanHear( HexPlayerComponent speaker, HexPlayerComponent listener )
+bool CanSay( HexPlayerComponent speaker, string message )
+string Format( HexPlayerComponent speaker, string message )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Name` | Display name of this chat class (e.g. "In-Character", "OOC"). |
+| `Prefix` | The prefix that triggers this chat class (e.g. "/y", "/w", "/me"). Empty string means this is the default chat class (no prefix needed). |
+| `Range` | Maximum range in units. 0 = global (all players). |
+| `Color` | The color of this chat class in the chat panel. |
+| `CanHear` | Check if a listener can hear a message from this speaker. Called per-recipient after range filtering. |
+| `CanSay` | Check if a speaker is allowed to send a message in this chat class. Return false to block (e.g. rate limits, permissions). |
+| `Format` | Format the message for display (e.g. '{Name} says "{message}"'). |
+
+---
+
+## Hexagon.Commands
+
+### CommandArg
+
+Defines a single argument for a command.
+
+```csharp
+string Name { get; set; }
+Type ArgType { get; set; }
+bool IsOptional { get; set; }
+bool IsRemainder { get; set; }
+object DefaultValue { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `Name` | Display name of the argument (e.g. "player", "amount"). |
+| `ArgType` | Expected type: typeof(HexPlayerComponent), typeof(string), typeof(int), typeof(float). |
+| `IsOptional` | Whether this argument can be omitted. |
+| `IsRemainder` | If true, this argument captures all remaining tokens as a single string. Must be the last argument. |
+| `DefaultValue` | Default value if the argument is optional and not provided. |
+
+### Arg (static)
+
+Factory methods for creating command arguments.
+
+```csharp
+static CommandArg Player( string name )
+static CommandArg String( string name, bool remainder )
+static CommandArg Number( string name )
+static CommandArg Int( string name )
+static CommandArg Optional( CommandArg arg, object defaultValue )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Player` |  |
+| `String` |  |
+| `Number` |  |
+| `Int` |  |
+| `Optional` | Make an existing argument optional with a default value. |
+
+### CommandContext
+
+Contains parsed arguments for a command execution.
+
+```csharp
+string RawInput { get; set; }
+T Get<T>( string name, T defaultValue )
+void Set( string name, object value )
+bool Has( string name )
+```
+
+| Member | Description |
+|--------|-------------|
+| `RawInput` | The raw input string (everything after the command name). |
+| `Get` | Get a parsed argument by name. |
+| `Set` | Set a parsed argument value. |
+| `Has` | Check if an argument was provided. |
+
+### CommandManager (static)
+
+Manages command registration, parsing, permission checking, and execution. Commands are invoked when a player types /{name} in chat and it doesn't match a chat class prefix.
+
+```csharp
+static void Register( HexCommand command )
+static HexCommand GetCommand( string name )
+static IReadOnlyDictionary<string, HexCommand> GetAllCommands()
+static string Execute( HexPlayerComponent caller, string name, string rawArgs )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Register` | Register a command. |
+| `GetCommand` | Get a command by name or alias. |
+| `GetAllCommands` | Get all registered commands. |
+| `Execute` | Execute a command by name with raw argument input. Returns a message to send to the caller. Called by ChatManager when a /prefixed message doesn't match a chat class. |
+
+### HexCommand
+
+Defines a chat command. Register with CommandManager.Register().
+
+```csharp
+string Name { get; set; }
+string Description { get; set; }
+string[] Aliases { get; set; }
+string Permission { get; set; }
+Func<HexPlayerComponent, bool> PermissionFunc { get; set; }
+CommandArg[] Arguments { get; set; }
+Func<HexPlayerComponent, CommandContext, string> OnRun { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `Name` | Primary command name (without prefix). E.g. "givemoney". |
+| `Description` | Description shown in help text. |
+| `Aliases` | Alternative names for this command. |
+| `Permission` | Required permission flag string (e.g. "a" for admin, "s" for super admin). Empty = no permission required. |
+| `PermissionFunc` | Custom permission check function. If set, called in addition to flag check. |
+| `Arguments` | Argument definitions for this command. |
+| `OnRun` | Handler called when the command is executed. Parameters: (caller, context). Return a string message to send back to the caller. |
+
+---
+
+## Hexagon.Config
+
+### HexConfig (static)
+
+Server-side configuration system. Admin-controlled settings that are persisted and synced to all connected clients. Usage: HexConfig.Add("walkSpeed", 200f, "Default walk speed"); HexConfig.Add("maxCharacters", 5, "Max characters per player"); var speed = HexConfig.Get&lt;float&gt;("walkSpeed"); HexConfig.Set("walkSpeed", 150f);
+
+```csharp
+static IReadOnlyDictionary<string, ConfigEntry> Entries
+static void Add( string key, object defaultValue, string description, string category, Action<object, object> onChange )
+static T Get<T>( string key, T fallback )
+static void Set( string key, object value )
+static void Reset( string key )
+static void Save()
+static void Load()
+```
+
+| Member | Description |
+|--------|-------------|
+| `Entries` | All registered config entries. |
+| `Add` | Register a new config entry with a default value. Call this during plugin/schema initialization. |
+| `Get` | Get a config value. Returns the override if set, otherwise the default. |
+| `Set` | Set a config value (creates an override). Triggers OnChange callback if registered. |
+| `Reset` | Reset a config value back to its default. |
+| `Save` | Save all config overrides to disk. |
+| `Load` | Load config overrides from disk. |
+
+### ConfigEntry
+
+A registered configuration entry.
+
+```csharp
+string Key { get; set; }
+object DefaultValue { get; set; }
+string Description { get; set; }
+string Category { get; set; }
+Type ValueType { get; set; }
+Action<object, object> OnChange { get; set; }
+```
+
+---
+
+## Hexagon.Currency
+
+### CurrencyManager (static)
+
+Manages character currency. Uses the "Money" CharVar on HexCharacterData for storage, which triggers existing dirty tracking and networking automatically.
+
+```csharp
+static string Format( int amount )
+static int GetMoney( HexCharacter character )
+static void GiveMoney( HexCharacter character, int amount, string reason )
+static bool TakeMoney( HexCharacter character, int amount, string reason )
+static void SetMoney( HexCharacter character, int amount, string reason )
+static bool CanAfford( HexCharacter character, int amount )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Format` | Format a money amount with the configured currency symbol (e.g. "$500"). |
+| `GetMoney` | Get a character's current money. |
+| `GiveMoney` | Give money to a character. Amount must be positive. |
+| `TakeMoney` | Take money from a character. Returns false if they can't afford it. |
+| `SetMoney` | Set a character's money to an exact amount. |
+| `CanAfford` | Check if a character can afford a given amount. |
+
+---
+
+## Hexagon.Doors
+
+### DoorComponent (sealed) : Component, Component.IPressable, Component.IDamageable
+
+A world-placed door that supports ownership, locking, access control, and breach mechanics. Interacted with via the USE key (IPressable). Locks can be damaged via IDamageable (shootlock) or the TryKick() API. Place on any GameObject in the scene. Set DoorId in the editor or let it auto-generate. Schema devs bind IsOpen to their door animation system. Authorization hierarchy: admin flag ("a") > character owner > faction member > access list
+
+```csharp
+[Property] string DoorId { get; set; }
+[Property] string DoorName { get; set; }
+[Sync] bool IsLocked { get; set; }
+[Sync] bool IsOpen { get; set; }
+[Sync] string OwnerDisplay { get; set; }
+[Sync] int LockHealth { get; set; }
+int MaxLockHealth { get; set; }
+DoorData Data
+bool CanPress( Component.IPressable.Event e )
+bool Press( Component.IPressable.Event e )
+void OnDamage( in DamageInfo damage )
+void ToggleOpen()
+void SetLocked( bool locked )
+void TryKick( HexPlayerComponent player )
+void RepairLock()
+bool IsAuthorized( HexPlayerComponent player )
+void SetOwnerCharacter( string characterId, string displayName )
+bool SetOwnerFaction( string factionId )
+void ClearOwner()
+void AddAccess( string characterId )
+void RemoveAccess( string characterId )
+```
+
+| Member | Description |
+|--------|-------------|
+| `DoorId` | Unique identifier for this door. Auto-generated if empty on enable. |
+| `DoorName` | Display name shown in the tooltip. |
+| `IsLocked` | Whether the door is currently locked. Synced to all players. |
+| `IsOpen` | Whether the door is currently open. Schema binds this to door animation. |
+| `OwnerDisplay` | Display name of the current owner. Synced to all players for tooltip display. |
+| `LockHealth` | Current lock health. When reduced to 0, the lock is breached. |
+| `MaxLockHealth` | Maximum lock health for this door. |
+| `Data` | The underlying door data. Loaded from the database on enable. |
+| `CanPress` |  |
+| `Press` |  |
+| `OnDamage` | Called when the door takes damage (e.g. from gunfire). Damages the lock if applicable. |
+| `ToggleOpen` | Toggle the door between open and closed. |
+| `SetLocked` | Set the door's locked state. |
+| `TryKick` | Attempt to kick the door. Uses ActionBarManager for a timed action. Schema decides how to trigger this (keybind, alt-use, command, etc.). |
+| `RepairLock` | Repair the lock to full health and re-lock the door. Schema decides when to call this (admin command, timed auto-repair, map reset, etc.). |
+| `IsAuthorized` | Check if a player is authorized to use this door when locked. Hierarchy: admin flag > character owner > faction member > access list |
+| `SetOwnerCharacter` | Set a character as the owner. Clears faction ownership and access list. |
+| `SetOwnerFaction` | Set a faction as the owner. Clears character ownership and access list. Returns false if faction ownership is disabled by config. |
+| `ClearOwner` | Remove all ownership and unlock the door. |
+| `AddAccess` | Add a character to the access list. |
+| `RemoveAccess` | Remove a character from the access list. |
+
+### DoorData
+
+Serializable door state persisted to the database. A door can be owned by a character OR a faction, but not both.
+
+```csharp
+string DoorId { get; set; }
+string OwnerCharacterId { get; set; }
+string OwnerFactionId { get; set; }
+bool IsLocked { get; set; }
+List<string> AccessList { get; set; }
+int LockHealth { get; set; }
+int MaxLockHealth { get; set; }
+bool HasOwner
+```
+
+| Member | Description |
+|--------|-------------|
+| `DoorId` | Unique identifier for this door. Matches the DoorComponent's DoorId property. |
+| `OwnerCharacterId` | Character ID of the owner. Mutually exclusive with OwnerFactionId. |
+| `OwnerFactionId` | Faction ID of the owner. Mutually exclusive with OwnerCharacterId. |
+| `IsLocked` | Whether the door is currently locked. |
+| `AccessList` | Additional character IDs that have access to this door. |
+| `LockHealth` | Current lock health. -1 = use config default; 0 = broken. |
+| `MaxLockHealth` | Maximum lock health. -1 = use config default. |
+| `HasOwner` | Whether this door has any owner. |
+
+### DoorManager (static)
+
+Manages door registration, persistence, and lookup. DoorComponents register/unregister themselves on enable/disable.
+
+```csharp
+static DoorComponent GetDoor( string doorId )
+static IReadOnlyDictionary<string, DoorComponent> GetAllDoors()
+static void SaveDoor( DoorData data )
+static DoorData LoadDoor( string doorId )
+static void DeleteDoor( string doorId )
+static void SaveAll()
+```
+
+| Member | Description |
+|--------|-------------|
+| `GetDoor` | Get a door component by its ID. |
+| `GetAllDoors` | Get all registered doors. |
+| `SaveDoor` | Save door data to the database. |
+| `LoadDoor` | Load door data from the database. |
+| `DeleteDoor` | Delete door data from the database. |
+| `SaveAll` | Save all registered doors to the database. |
+
+---
+
+## Hexagon.Factions
+
+### ClassDefinition : GameResource
+
+Defines a class (sub-role) within a faction. Create .class files in your schema's Assets folder via the s&box editor. Example: "Civil Protection Officer", "Medic", "Engineer", etc.
+
+```csharp
+[Property] string UniqueId { get; set; }
+[Property] string Name { get; set; }
+string Description { get; set; }
+[Property] string FactionId { get; set; }
+[Property] Model ClassModel { get; set; }
+[Property] int MaxPlayers { get; set; }
+[Property] int Order { get; set; }
+[Property] List<LoadoutEntry> Loadout { get; set; }
+[Property] LoadoutMode LoadoutMode { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `UniqueId` | Unique identifier for this class. |
+| `Name` | Display name of the class. |
+| `Description` | Description of this class. |
+| `FactionId` | The faction this class belongs to (reference the FactionDefinition UniqueId). |
+| `ClassModel` | Override model when this class is active. Empty = use faction default. |
+| `MaxPlayers` | Maximum active players in this class (0 = unlimited). |
+| `Order` | Sort order within the faction. Lower = appears first. |
+| `Loadout` | Items to grant when a character selects this class. |
+| `LoadoutMode` | When to apply the loadout: OnCreate (once) or OnLoad (every time the character loads). |
+
+### LoadoutEntry
+
+A single item entry in a class loadout.
+
+```csharp
+[Property] string ItemDefinitionId { get; set; }
+[Property] int Count { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `ItemDefinitionId` | The UniqueId of the ItemDefinition to grant. |
+| `Count` | How many of this item to grant. |
+
+### LoadoutMode (enum)
+
+Controls when a class loadout is applied to characters.
+
+### FactionDefinition : GameResource
+
+Defines a faction that characters can belong to. Create .faction files in your schema's Assets folder via the s&box editor. Example: Citizens faction, Combine faction, Rebels faction, etc.
+
+```csharp
+[Property] string UniqueId { get; set; }
+[Property] string Name { get; set; }
+string Description { get; set; }
+[Property] Color Color { get; set; }
+[Property] List<Model> Models { get; set; }
+[Property] bool IsDefault { get; set; }
+[Property] int MaxPlayers { get; set; }
+[Property] int Order { get; set; }
+[Property] int StartingMoney { get; set; }
+[Property] bool IsGloballyRecognized { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `UniqueId` | Unique identifier for this faction. Used in code and persistence. |
+| `Name` | Display name of the faction. |
+| `Description` | Description shown in character creation. |
+| `Color` | Faction color used in chat, scoreboard, etc. |
+| `Models` | Models available to characters in this faction. |
+| `IsDefault` | If true, players can create characters in this faction without a whitelist. |
+| `MaxPlayers` | Maximum active players in this faction (0 = unlimited). |
+| `Order` | Sort order in character creation UI. Lower = appears first. |
+| `StartingMoney` | Starting money for characters created in this faction. If -1, uses the global currency.startingAmount config. |
+| `IsGloballyRecognized` | If true, members of this faction are always recognized by everyone. Useful for factions with distinctive uniforms (e.g., police, military). |
+
+### FactionManager (static)
+
+Manages faction and class definitions. Factions auto-register when their GameResource assets are loaded by s&box.
+
+```csharp
+static IReadOnlyDictionary<string, FactionDefinition> Factions
+static IReadOnlyDictionary<string, ClassDefinition> Classes
+static void Register( FactionDefinition faction )
+static void RegisterClass( ClassDefinition classDef )
+static FactionDefinition GetFaction( string uniqueId )
+static ClassDefinition GetClass( string uniqueId )
+static List<ClassDefinition> GetClassesForFaction( string factionId )
+static List<FactionDefinition> GetDefaultFactions()
+static List<FactionDefinition> GetAllFactions()
+static int GetFactionPlayerCount( string factionId )
+static bool CanJoinFaction( string factionId )
+static int GetClassPlayerCount( string classId )
+static bool CanJoinClass( string classId )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Factions` | All registered factions. |
+| `Classes` | All registered classes. |
+| `Register` | Register a faction definition. Called automatically by FactionDefinition.PostLoad(). |
+| `RegisterClass` | Register a class definition. Called automatically by ClassDefinition.PostLoad(). |
+| `GetFaction` | Get a faction by its unique ID. |
+| `GetClass` | Get a class by its unique ID. |
+| `GetClassesForFaction` | Get all classes belonging to a faction. |
+| `GetDefaultFactions` | Get all factions available for character creation (IsDefault = true). |
+| `GetAllFactions` | Get all factions, sorted by order. |
+| `GetFactionPlayerCount` | Check how many active players are in a faction. |
+| `CanJoinFaction` | Check if a faction has room for another player. |
+| `GetClassPlayerCount` | Check how many active players are in a class. |
+| `CanJoinClass` | Check if a class has room for another player. |
+
+### LoadoutManager (static)
+
+Manages class-based loadout distribution. When a character is created or loaded, the loadout system checks their class for configured items and grants them.
+
+```csharp
+static void ApplyLoadout( HexPlayerComponent player, Characters.HexCharacter character )
+```
+
+| Member | Description |
+|--------|-------------|
+| `ApplyLoadout` | Apply the loadout for a character's class. Creates items and adds them to the character's main inventory. |
+
+---
+
+## Hexagon.Interaction
+
+### ActionBarManager (static)
+
+Manages timed actions with progress bars. Supports basic timed actions and stared actions that cancel if the player looks away from the target. Usage: ActionBarManager.SetAction(player, "Searching...", 3f, callback) Stared: ActionBarManager.DoStaredAction(player, target, "Lockpicking...", 5f, callback, onCancel)
+
+```csharp
+string Text
+float StartTime
+float EndTime
+Action<HexPlayerComponent> Callback
+GameObject StareTarget
+Action OnCancel
+float MaxDistance
+static void SetAction( HexPlayerComponent player, string text, float time, Action<HexPlayerComponent> callback )
+static void DoStaredAction( HexPlayerComponent player, GameObject target, string text, float time, Action<HexPlayerComponent> callback, Action onCancel, float maxDistance )
+static void CancelAction( HexPlayerComponent player )
+static bool HasAction( HexPlayerComponent player )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Text` |  |
+| `StartTime` |  |
+| `EndTime` |  |
+| `Callback` |  |
+| `StareTarget` |  |
+| `OnCancel` |  |
+| `MaxDistance` |  |
+| `SetAction` | Start a timed action with a progress bar for the given player. Any existing action is replaced. |
+| `DoStaredAction` | Start a stared action that cancels if the player looks away from the target or moves too far. |
+| `CancelAction` | Cancel the current action for a player. Fires the cancel callback if set. |
+| `HasAction` | Returns true if the player has an active timed action. |
+
+### WeaponRaiseComponent (sealed) : Component
+
+Per-player component handling weapon raise/lower state. Weapons default to lowered (cannot fire). Hold R for configurable duration to toggle. When raised, there's a short delay before firing is allowed. Schema weapon code should check CanFire before allowing shots. Special weapons can set AlwaysRaised or FireWhenLowered on WeaponItemDef.
+
+```csharp
+[Sync] bool IsWeaponRaised { get; set; }
+bool CanFire { get; set; }
+[Rpc.Host] void RequestToggleRaise()
+void SetRaised( bool raised )
+void ToggleRaised()
+```
+
+| Member | Description |
+|--------|-------------|
+| `IsWeaponRaised` | Whether the weapon is currently raised. Synced to all players for animations. |
+| `CanFire` | Server-side: whether the player can fire right now. Only true when raised and the fire delay has elapsed. |
+| `RequestToggleRaise` | Server RPC: client requests to toggle weapon raise state. |
+| `SetRaised` | Server-side: explicitly set the raise state. |
+| `ToggleRaised` | Server-side: toggle between raised and lowered. |
+
+---
+
+## Hexagon.Inventory
+
+### HexInventory
+
+A grid-based inventory. Items occupy Width x Height cells at specific (X, Y) positions. Supports receiver-based networking - only players who should see this inventory receive its contents. Inventories are persisted to the database and restored when characters load.
+
+```csharp
+string Id { get; set; }
+int Width { get; set; }
+int Height { get; set; }
+string OwnerId { get; set; }
+string Type { get; set; }
+List<string> ItemIds { get; set; }
+bool CanItemFit( int x, int y, int w, int h, string excludeItemId )
+bool AddAt( Items.ItemInstance item, int x, int y )
+bool Add( Items.ItemInstance item )
+bool Remove( string itemId )
+bool Move( string itemId, int newX, int newY )
+bool Transfer( string itemId, HexInventory target, int? targetX, int? targetY )
+bool HasItem( string definitionId )
+int CountItem( string definitionId )
+bool IsFull
+int ItemCount
+void AddReceiver( Connection conn )
+void RemoveReceiver( Connection conn )
+IReadOnlySet<Connection> GetReceivers()
+void Save()
+```
+
+| Member | Description |
+|--------|-------------|
+| `Id` | Unique database ID for this inventory. |
+| `Width` | Grid width in cells. |
+| `Height` | Grid height in cells. |
+| `OwnerId` | The character ID that owns this inventory. Empty for world containers. |
+| `Type` | Inventory type identifier (e.g. "main", "bag", "container"). |
+| `ItemIds` | IDs of items in this inventory (for persistence). |
+| `CanItemFit` | Check if an item of given size can fit at position (x, y). |
+| `AddAt` | Add an item instance to this inventory at a specific position. Returns true if successful. |
+| `Add` | Add an item instance to the first available slot. Returns true if successful. |
+| `Remove` | Remove an item from this inventory. |
+| `Move` | Move an item within this inventory to a new position. |
+| `Transfer` | Transfer an item from this inventory to another. |
+| `HasItem` | Check if this inventory has an item with the given definition ID. |
+| `CountItem` | Count items with the given definition ID. |
+| `IsFull` | Check if the inventory is full (no 1x1 slot available). |
+| `ItemCount` | Number of items in the inventory. |
+| `AddReceiver` | Add a player as a receiver of this inventory's contents. They will receive the full inventory state. |
+| `RemoveReceiver` | Remove a player from this inventory's receivers. |
+| `GetReceivers` | Get all current receivers. |
+| `Save` | Save this inventory's metadata to the database. |
+
+### InventorySnapshot
+
+Snapshot of an inventory's state for client-side caching.
+
+```csharp
+string Id { get; set; }
+string OwnerId { get; set; }
+string Type { get; set; }
+int Width { get; set; }
+int Height { get; set; }
+List<ItemSnapshot> Items { get; set; }
+```
+
+### ItemSnapshot
+
+Snapshot of a single item instance within an inventory.
+
+```csharp
+string Id { get; set; }
+string DefinitionId { get; set; }
+int X { get; set; }
+int Y { get; set; }
+Dictionary<string, object> Data { get; set; }
+```
+
+### VendorCatalogEntry
+
+Catalog entry sent to clients when opening a vendor.
+
+```csharp
+string DefinitionId { get; set; }
+string DisplayName { get; set; }
+string Description { get; set; }
+string Category { get; set; }
+int BuyPrice { get; set; }
+int SellPrice { get; set; }
+```
+
+### HexInventoryComponent (sealed) : Component
+
+Singleton network bridge for the inventory system. Lives on the HexagonFramework GameObject. Server-side: flushes dirty inventories to receivers via RPCs. Client-side: caches inventory snapshots for UI consumption. Also handles item action RPCs (move, transfer, drop, use) and vendor buy/sell RPCs.
+
+```csharp
+static HexInventoryComponent Instance { get; set; }
+IReadOnlyDictionary<string, InventorySnapshot> ClientInventories
+InventorySnapshot GetClientInventory( string id )
+List<VendorCatalogEntry> CurrentVendorCatalog { get; set; }
+string CurrentVendorId { get; set; }
+string CurrentVendorName { get; set; }
+void ReceiveInventorySnapshot( string json )
+void ReceiveInventoryRemoved( string inventoryId )
+void ReceiveVendorCatalog( string vendorId, string vendorName, string catalogJson )
+void ReceiveVendorResult( bool success, string message )
+[Rpc.Host] void RequestMoveItem( string inventoryId, string itemId, int newX, int newY )
+[Rpc.Host] void RequestTransferItem( string sourceInvId, string itemId, string targetInvId, int x, int y )
+[Rpc.Host] void RequestDropItem( string inventoryId, string itemId )
+[Rpc.Host] void RequestUseItem( string inventoryId, string itemId )
+[Rpc.Host] void RequestBuyItem( string vendorId, string definitionId )
+[Rpc.Host] void RequestSellItem( string vendorId, string itemInstanceId )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Instance` |  |
+| `ClientInventories` | Client-side inventory cache, keyed by inventory ID. |
+| `GetClientInventory` | Get a cached inventory snapshot by ID (client-side). |
+| `CurrentVendorCatalog` | The most recently received vendor catalog (client-side). |
+| `CurrentVendorId` | The vendor ID for the currently open vendor (client-side). |
+| `CurrentVendorName` | The vendor name for the currently open vendor (client-side). |
+| `ReceiveInventorySnapshot` | Server sends an inventory snapshot to filtered receivers. |
+| `ReceiveInventoryRemoved` | Server notifies clients that an inventory is no longer available. |
+| `ReceiveVendorCatalog` | Server sends a vendor catalog to the client. |
+| `ReceiveVendorResult` | Server sends a vendor operation result to the client. |
+| `RequestMoveItem` | Client requests to move an item within an inventory. |
+| `RequestTransferItem` | Client requests to transfer an item between inventories. |
+| `RequestDropItem` | Client requests to drop an item from an inventory into the world. |
+| `RequestUseItem` | Client requests to use an item from an inventory. |
+| `RequestBuyItem` | Client requests to buy an item from a vendor. |
+| `RequestSellItem` | Client requests to sell an item to a vendor. |
+
+### InventoryManager (static)
+
+Manages inventory lifecycle: creation, restoration, persistence, and dirty tracking.
+
+```csharp
+static IReadOnlyDictionary<string, HexInventory> Inventories
+static HexInventory Create( int width, int height, string ownerId, string type )
+static HexInventory CreateDefault( string ownerId, string type )
+static HexInventory Get( string inventoryId )
+static List<HexInventory> LoadForCharacter( string characterId )
+static void Delete( string inventoryId )
+static void SaveAll()
+static void Unload( string inventoryId )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Inventories` | All active inventories. |
+| `Create` | Create a new inventory and persist it. |
+| `CreateDefault` | Create an inventory using the default config dimensions. |
+| `Get` | Get an inventory by ID. Loads from database if not in memory. |
+| `LoadForCharacter` | Load all inventories for a character. |
+| `Delete` | Delete an inventory and all its items. |
+| `SaveAll` | Save all dirty inventories and their items. |
+| `Unload` | Unload an inventory from memory (e.g. when a character disconnects). Saves first. |
+
+---
+
+## Hexagon.Items
+
+### ItemAction
+
+Defines a context menu action for an item (like Helix's ITEM.functions).
+
+```csharp
+string Name { get; set; }
+string Icon { get; set; }
+Func<HexPlayerComponent, ItemInstance, bool> OnRun { get; set; }
+Func<HexPlayerComponent, ItemInstance, bool> OnCanRun { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `Name` | Display name of the action. |
+| `Icon` | Icon name (material icon). |
+| `OnRun` | Server-side callback when the action is executed. Return false to keep item, true to consume it. |
+| `OnCanRun` | Permission check - should this action be visible/available? |
+
+### ItemDefinition : GameResource
+
+Base class for item type definitions. Create .item asset files in the s&box editor for simple items, or subclass in C# for items with custom behavior. Schema devs can create items visually (set name, model, size in editor) or extend this class for weapons, bags, outfits, etc.
+
+```csharp
+[Property] string UniqueId { get; set; }
+[Property] string DisplayName { get; set; }
+string Description { get; set; }
+[Property] Model WorldModel { get; set; }
+[Property] int Width { get; set; }
+[Property] int Height { get; set; }
+[Property] string Category { get; set; }
+[Property] int MaxStack { get; set; }
+[Property] bool CanDrop { get; set; }
+[Property] int Order { get; set; }
+virtual Dictionary<string, ItemAction> GetActions()
+virtual bool OnUse( HexPlayerComponent player, ItemInstance item )
+virtual bool OnCanUse( HexPlayerComponent player, ItemInstance item )
+virtual void OnEquip( HexPlayerComponent player, ItemInstance item )
+virtual void OnUnequip( HexPlayerComponent player, ItemInstance item )
+virtual void OnDrop( HexPlayerComponent player, ItemInstance item )
+virtual void OnPickup( HexPlayerComponent player, ItemInstance item )
+virtual void OnTransferred( ItemInstance item, Inventory.HexInventory from, Inventory.HexInventory to )
+virtual void OnInstanced( ItemInstance item )
+virtual void OnRemoved( ItemInstance item )
+```
+
+| Member | Description |
+|--------|-------------|
+| `UniqueId` | Unique identifier for this item type. |
+| `DisplayName` | Display name of the item. |
+| `Description` | Description shown in tooltips. |
+| `WorldModel` | World model for when the item is dropped on the ground. |
+| `Width` | Inventory grid width (in cells). |
+| `Height` | Inventory grid height (in cells). |
+| `Category` | Category for organization (e.g. "Weapons", "Medical", "Misc"). |
+| `MaxStack` | Maximum stack size. 1 = no stacking. |
+| `CanDrop` | Whether this item can be dropped into the world. |
+| `Order` | Sort order within category. |
+| `GetActions` | Get the context menu actions for this item type. Override in subclasses to add Use, Equip, etc. |
+| `OnUse` | Called when a player uses this item. Return true to consume (remove) the item. |
+| `OnCanUse` | Permission check: can this player use this item? |
+| `OnEquip` | Called when this item is equipped by a player. |
+| `OnUnequip` | Called when this item is unequipped. |
+| `OnDrop` | Called when this item is dropped into the world. |
+| `OnPickup` | Called when this item is picked up from the world. |
+| `OnTransferred` | Called when this item is transferred between inventories. |
+| `OnInstanced` | Called when a new instance of this item is created. |
+| `OnRemoved` | Called when an instance of this item is permanently removed. |
+
+### ItemInstance
+
+A runtime instance of an item, backed by the database. Each instance has a unique ID, references an ItemDefinition, and stores per-instance data (condition, ammo, custom data). Item instances live inside inventories at specific grid positions.
+
+```csharp
+string Id { get; set; }
+string DefinitionId { get; set; }
+string InventoryId { get; set; }
+int X { get; set; }
+int Y { get; set; }
+Dictionary<string, object> Data { get; set; }
+string CharacterId { get; set; }
+bool IsDirty { get; set; }
+ItemDefinition Definition
+T GetData<T>( string key, T defaultValue )
+void SetData( string key, object value )
+void RemoveData( string key )
+void MarkDirty()
+void Save()
+```
+
+| Member | Description |
+|--------|-------------|
+| `Id` | Unique database ID for this item instance. |
+| `DefinitionId` | The UniqueId of the ItemDefinition this instance is based on. |
+| `InventoryId` | The inventory this item is currently in. 0 or empty = world/not in inventory. |
+| `X` | Grid X position within the inventory. |
+| `Y` | Grid Y position within the inventory. |
+| `Data` | Per-instance custom data (condition, ammo count, custom properties, etc.). |
+| `CharacterId` | The character ID that owns this item (for ownership tracking). |
+| `IsDirty` | Whether this item instance has unsaved changes. |
+| `Definition` | Get the ItemDefinition for this instance. |
+| `GetData` | Get a per-instance data value. |
+| `SetData` | Set a per-instance data value. Marks the item as dirty. |
+| `RemoveData` | Remove a per-instance data value. |
+| `MarkDirty` | Mark this item as having unsaved changes. |
+| `Save` | Save this item instance to the database. |
+
+### ItemManager (static)
+
+Manages item definitions and active item instances. Definitions auto-register when .item GameResource assets load. Instances are created/loaded from the database.
+
+```csharp
+static IReadOnlyDictionary<string, ItemDefinition> Definitions
+static IReadOnlyDictionary<string, ItemInstance> Instances
+static void Register( ItemDefinition definition )
+static ItemDefinition GetDefinition( string uniqueId )
+static ItemInstance CreateInstance( string definitionId, string characterId, Dictionary<string, object> data )
+static ItemInstance GetInstance( string instanceId )
+static void DestroyInstance( string instanceId )
+static void SaveAll()
+static List<ItemInstance> LoadInstancesForCharacter( string characterId )
+static List<ItemDefinition> GetDefinitionsByCategory( string category )
+static List<string> GetCategories()
+```
+
+| Member | Description |
+|--------|-------------|
+| `Definitions` | All registered item definitions. |
+| `Instances` | All active item instances. |
+| `Register` | Register an item definition. Called automatically by ItemDefinition.PostLoad(). |
+| `GetDefinition` | Get an item definition by its unique ID. |
+| `CreateInstance` | Create a new item instance from a definition and persist it. |
+| `GetInstance` | Get an active item instance by ID. |
+| `DestroyInstance` | Remove an item instance permanently (from memory and database). |
+| `SaveAll` | Save all dirty item instances to the database. |
+| `LoadInstancesForCharacter` | Load all item instances for a specific character from the database. |
+| `GetDefinitionsByCategory` | Get all definitions in a specific category. |
+| `GetCategories` | Get all item categories. |
+
+---
+
+## Hexagon.Items.Bases
+
+### AmmoItemDef : ItemDefinition
+
+Base definition for ammo items. When used, loads ammo into a compatible weapon in the player's inventory, or adds to a reserve ammo pool.
+
+```csharp
+[Property] string AmmoType { get; set; }
+[Property] int AmmoAmount { get; set; }
+override Dictionary<string, ItemAction> GetActions()
+override bool OnUse( HexPlayerComponent player, ItemInstance item )
+```
+
+| Member | Description |
+|--------|-------------|
+| `AmmoType` | The ammo type identifier. Must match WeaponItemDef.AmmoType to be compatible. |
+| `AmmoAmount` | How much ammo this item gives when used. |
+| `GetActions` |  |
+| `OnUse` |  |
+
+### BagItemDef : ItemDefinition
+
+Base definition for bag/container items. When used, creates a nested inventory that the player can store additional items in.
+
+```csharp
+[Property] int BagWidth { get; set; }
+[Property] int BagHeight { get; set; }
+override Dictionary<string, ItemAction> GetActions()
+void OpenBag( HexPlayerComponent player, ItemInstance item )
+void CloseBag( HexPlayerComponent player, ItemInstance item )
+override void OnRemoved( ItemInstance item )
+```
+
+| Member | Description |
+|--------|-------------|
+| `BagWidth` | Width of the bag's internal inventory grid. |
+| `BagHeight` | Height of the bag's internal inventory grid. |
+| `GetActions` |  |
+| `OpenBag` | Open this bag for a player (adds them as a receiver of the bag's inventory). |
+| `CloseBag` | Close this bag for a player. |
+| `OnRemoved` |  |
+
+### ConsumableItemDef : ItemDefinition
+
+Base definition for consumable items (food, drinks, medical supplies, etc.). When used, runs a timed action (if UseTime > 0) then calls OnConsume for schema-defined effects. Return true from OnConsume to destroy the item, false to keep it.
+
+```csharp
+[Property] float UseTime { get; set; }
+[Property] string UseSound { get; set; }
+[Property] string ConsumeVerb { get; set; }
+override Dictionary<string, ItemAction> GetActions()
+override bool OnUse( HexPlayerComponent player, ItemInstance item )
+virtual bool OnConsume( HexPlayerComponent player, ItemInstance item )
+```
+
+| Member | Description |
+|--------|-------------|
+| `UseTime` | Time in seconds to consume the item. 0 = instant consumption. If > 0, uses ActionBarManager.DoStaredAction with the ConsumeVerb text. |
+| `UseSound` | Optional sound to play when consumption starts. |
+| `ConsumeVerb` | Action bar text shown during timed consumption (e.g. "Eating...", "Drinking..."). |
+| `GetActions` |  |
+| `OnUse` |  |
+| `OnConsume` | Called when consumption completes. Override in schema subclasses for custom effects (healing, buffs, etc.). Return true to destroy the item, false to keep it. |
+
+### CurrencyItemDef : ItemDefinition
+
+Base definition for physical currency items. When picked up or used, adds to the character's money. Supports split/merge for different denominations.
+
+```csharp
+[Property] int DefaultAmount { get; set; }
+override Dictionary<string, ItemAction> GetActions()
+int GetAmount( ItemInstance item )
+void SetAmount( ItemInstance item, int amount )
+override bool OnUse( HexPlayerComponent player, ItemInstance item )
+override void OnInstanced( ItemInstance item )
+static ItemInstance CreateWithAmount( string definitionId, int amount, string characterId )
+```
+
+| Member | Description |
+|--------|-------------|
+| `DefaultAmount` | Default value of a newly created currency item. The actual value is stored per-instance in Data["amount"]. |
+| `GetActions` |  |
+| `GetAmount` | Get the amount of money this currency item represents. |
+| `SetAmount` | Set the amount of money this currency item represents. |
+| `OnUse` |  |
+| `OnInstanced` |  |
+| `CreateWithAmount` | Create a currency item with a specific amount. |
+
+### OutfitItemDef : ItemDefinition
+
+Base definition for outfit/clothing items. When equipped, changes the player's model or bodygroups. Handles equip/unequip with model restoration.
+
+```csharp
+[Property] Model OutfitModel { get; set; }
+[Property] Dictionary<string, int> Bodygroups { get; set; }
+[Property] string Slot { get; set; }
+override Dictionary<string, ItemAction> GetActions()
+override void OnEquip( HexPlayerComponent player, ItemInstance item )
+override void OnUnequip( HexPlayerComponent player, ItemInstance item )
+```
+
+| Member | Description |
+|--------|-------------|
+| `OutfitModel` | The model to apply when this outfit is equipped. If null, the player keeps their current model. |
+| `Bodygroups` | Bodygroup overrides to apply when equipped. Key = bodygroup name, Value = choice index. |
+| `Slot` | Equipment slot this outfit occupies (e.g. "head", "torso", "legs", "feet"). |
+| `GetActions` |  |
+| `OnEquip` |  |
+| `OnUnequip` |  |
+
+### WeaponItemDef : ItemDefinition
+
+Base definition for weapon items. Handles equip/unequip lifecycle and ammo tracking. Schema devs can subclass this for specific weapon types or use it directly via .item assets.
+
+```csharp
+[Property] string AmmoType { get; set; }
+[Property] int ClipSize { get; set; }
+[Property] Model WeaponModel { get; set; }
+[Property] bool TwoHanded { get; set; }
+[Property] bool AlwaysRaised { get; set; }
+[Property] bool FireWhenLowered { get; set; }
+override Dictionary<string, ItemAction> GetActions()
+int GetClipAmmo( ItemInstance item )
+void SetClipAmmo( ItemInstance item, int amount )
+override void OnInstanced( ItemInstance item )
+```
+
+| Member | Description |
+|--------|-------------|
+| `AmmoType` | The ammo definition ID this weapon uses. Empty for melee weapons. |
+| `ClipSize` | Maximum ammo this weapon can hold in its magazine. |
+| `WeaponModel` | Model used when the weapon is held (viewmodel or world attachment). |
+| `TwoHanded` | Whether this weapon is two-handed (prevents offhand use). |
+| `AlwaysRaised` | If true, this weapon skips raise/lower (e.g., toolgun, physgun). |
+| `FireWhenLowered` | If true, this weapon can fire even when lowered (e.g., fists). |
+| `GetActions` |  |
+| `GetClipAmmo` | Get the current ammo in this weapon's clip. |
+| `SetClipAmmo` | Set the current ammo in this weapon's clip. |
+| `OnInstanced` |  |
+
+---
+
+## Hexagon.Logging
+
+### LogType (enum)
+
+Types of log entries for categorization and filtering.
+
+### LogEntry
+
+A single log entry recording a player action or system event.
+
+```csharp
+DateTime Timestamp { get; set; }
+LogType Type { get; set; }
+ulong SteamId { get; set; }
+string PlayerName { get; set; }
+string Message { get; set; }
+```
+
+### HexLog (static)
+
+Server-side logging system for tracking player actions and system events. Logs are date-partitioned into separate database collections for efficient querying. Storage: hexagon/logs_YYYY-MM-DD/{guid}.json
+
+```csharp
+static void Add( LogType type, HexPlayerComponent player, string message )
+static void Add( LogType type, string message )
+static List<LogEntry> GetLogs( DateTime date )
+static List<LogEntry> GetLogs( DateTime date, LogType type )
+static List<LogEntry> GetLogsForPlayer( DateTime date, ulong steamId )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Add` | Record a log entry for a player action. |
+| `Add` | Record a system log entry with no associated player. |
+| `GetLogs` | Get all log entries for a specific date. |
+| `GetLogs` | Get all log entries for a specific date and type. |
+| `GetLogsForPlayer` | Get all log entries for a specific date and player. |
+
+---
+
+## Hexagon.Permissions
+
+### FlagInfo
+
+Info about a registered permission flag.
+
+```csharp
+char Flag { get; set; }
+string Description { get; set; }
+```
+
+### PermissionManager (static)
+
+Manages permission flags and provides permission checks. Flags are single characters assigned to characters (e.g. 'a' = Admin, 's' = Super Admin). The 's' flag bypasses all permission checks.
+
+```csharp
+static void RegisterFlag( char flag, string description )
+static FlagInfo GetFlagInfo( char flag )
+static IReadOnlyDictionary<char, FlagInfo> GetAllFlags()
+static bool HasPermission( HexPlayerComponent player, string requirement )
+```
+
+| Member | Description |
+|--------|-------------|
+| `RegisterFlag` | Register a permission flag with a description. |
+| `GetFlagInfo` | Get info about a registered flag. |
+| `GetAllFlags` | Get all registered flags. |
+| `HasPermission` | Check if a player has permission for a given requirement. If requirement is 1-2 characters and all are registered flags, checks character flags directly. Otherwise fires IPermissionCheckListener for schema-defined permissions. The 's' (Super Admin) flag bypasses all checks. |
+
+---
+
+## Hexagon.Persistence
+
+### DatabaseManager (static)
+
+JSON-based persistence layer using s&box's FileSystem.Data. Documents are organized into collections (directories) and identified by string keys. All data is cached in memory for fast reads, with writes going to disk. Structure on disk: hexagon/{collection}/{key}.json
+
+```csharp
+static void Save<T>( string collection, string key, T document )
+static T Load<T>( string collection, string key )
+static void Delete( string collection, string key )
+static bool Exists( string collection, string key )
+static List<T> LoadAll<T>( string collection )
+static List<T> Select<T>( string collection, Func<T, bool> predicate )
+static List<string> GetKeys( string collection )
+static string NewId()
+```
+
+| Member | Description |
+|--------|-------------|
+| `Save` | Save a document to a collection. Serializes to JSON and writes to disk. |
+| `Load` | Load a document from a collection. Checks cache first, then disk. Returns default(T) if not found. |
+| `Delete` | Delete a document from a collection. |
+| `Exists` | Check if a document exists in a collection. |
+| `LoadAll` | Load all documents from a collection. Scans the collection directory for JSON files. |
+| `Select` | Load all documents from a collection that match a predicate. |
+| `GetKeys` | Get all document keys in a collection. |
+| `NewId` | Generate a unique ID for a new document. |
+
+---
+
+## Hexagon.Storage
+
+### StorageComponent (sealed) : Component, Component.IPressable
+
+A world-placed storage container that players can interact with via USE key. Items persist across server restarts via the inventory system. Place on any GameObject in the scene. The InventoryId is generated on first use and persists via scene save, linking to the database-backed inventory.
+
+```csharp
+[Property] string StorageName { get; set; }
+[Property] int Width { get; set; }
+[Property] int Height { get; set; }
+[Property] string InventoryId { get; set; }
+HexInventory Inventory
+bool CanPress( Component.IPressable.Event e )
+bool Press( Component.IPressable.Event e )
+void Release( Component.IPressable.Event e )
+void Blur( Component.IPressable.Event e )
+```
+
+| Member | Description |
+|--------|-------------|
+| `StorageName` | Display name shown in the tooltip. |
+| `Width` | Grid width of the storage inventory. |
+| `Height` | Grid height of the storage inventory. |
+| `InventoryId` | Persisted inventory ID. Set automatically on first interaction. |
+| `Inventory` | The backing inventory for this container. |
+| `CanPress` |  |
+| `Press` |  |
+| `Release` |  |
+| `Blur` |  |
+
+---
+
+## Hexagon.UI
+
+### UIState (enum)
+
+UI state machine states.
+
+### HexUIManager (sealed) : Component, ICharacterLoadedListener, ICharacterUnloadedListener
+
+Central UI coordinator. Manages panel visibility, input dispatch, cursor state, and the UI state machine. Lives on the ScreenPanel GameObject. Schema devs can replace individual panels by disabling the defaults and adding their own IHexPanel implementations. HexUIManager discovers panels via Scene.GetAll&lt;IHexPanel&gt;().
+
+```csharp
+static HexUIManager Instance { get; set; }
+UIState State { get; set; }
+void SetState( UIState newState )
+IHexPanel FindPanel( string name )
+void OpenPanel( string name )
+void ClosePanel( string name )
+void TogglePanel( string name )
+void CloseTopmostPanel()
+void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
+void OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character )
+static HexPlayerComponent GetLocalPlayer()
+```
+
+| Member | Description |
+|--------|-------------|
+| `Instance` |  |
+| `State` | Current UI state. |
+| `SetState` | Transition to a new UI state. Hides/shows panels appropriate to that state. |
+| `FindPanel` | Find a panel by name. Schema panels take priority over framework defaults. |
+| `OpenPanel` | Open a panel by name. |
+| `ClosePanel` | Close a panel by name. |
+| `TogglePanel` | Toggle a panel open/closed by name. |
+| `CloseTopmostPanel` | Close the topmost open overlay panel. |
+| `OnCharacterLoaded` |  |
+| `OnCharacterUnloaded` |  |
+| `GetLocalPlayer` | Get the local player's HexPlayerComponent. |
+
+### HexUISetup (static)
+
+Static helper that auto-creates the full Hexagon UI hierarchy if not already present. Creates a ScreenPanel root with HexUIManager and all 9 default panels.
+
+```csharp
+static GameObject UIObject { get; set; }
+static void EnsureUI( Scene scene )
+```
+
+| Member | Description |
+|--------|-------------|
+| `UIObject` | The runtime-created UI GameObject containing all default panels. Used by HexUIManager to identify framework defaults vs schema overrides. |
+| `EnsureUI` | Ensure HexUIManager and all default panels exist in the scene. If a HexUIManager is already present, this is a no-op. |
+
+### IHexPanel (interface)
+
+Interface for all Hexagon UI panels. Implement on PanelComponents to allow HexUIManager to discover and coordinate them. To override a default panel, create your own PanelComponent implementing IHexPanel with the same PanelName (e.g. "CharacterSelect") on any GameObject in your scene. The framework default is automatically disabled — no configuration needed.
+
+```csharp
+string PanelName { get; }
+bool IsOpen { get; }
+void Open()
+void Close()
+```
+
+| Member | Description |
+|--------|-------------|
+| `PanelName` | Unique name for this panel (e.g. "CharacterSelect", "Inventory"). |
+| `IsOpen` | Whether this panel is currently visible. |
+| `Open` | Show the panel. |
+| `Close` | Hide the panel. |
+
+### NotificationManager (static)
+
+Server-side notification system. Sends toast notifications to specific players. Use this for transient feedback (command results, errors) instead of chat messages.
+
+```csharp
+static void Send( HexPlayerComponent target, string message )
+static void Send( HexPlayerComponent target, string message, float duration )
+static void SendAll( string message )
+static void SendAll( string message, float duration )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Send` | Send a notification to a specific player with the default duration. |
+| `Send` | Send a notification to a specific player with a custom duration in seconds. |
+| `SendAll` | Send a notification to all connected players with the default duration. |
+| `SendAll` | Send a notification to all connected players with a custom duration. |
+
+---
+
+## Hexagon.Vendors
+
+### VendorComponent (sealed) : Component, Component.IPressable
+
+A world-placed vendor NPC that players can interact with to buy and sell items. Interacted with via the USE key (IPressable). Place on any GameObject in the scene. Set VendorId in the editor or let it auto-generate. Configure the catalog via admin commands or the public API.
+
+```csharp
+[Property] string VendorId { get; set; }
+[Property] string VendorName { get; set; }
+VendorData Data
+bool CanPress( Component.IPressable.Event e )
+bool Press( Component.IPressable.Event e )
+void AddItem( string definitionId, int buyPrice, int sellPrice )
+bool RemoveItem( string definitionId )
+List<VendorItem> GetItems()
+VendorItem GetVendorItem( string definitionId )
+```
+
+| Member | Description |
+|--------|-------------|
+| `VendorId` | Unique identifier for this vendor. Auto-generated if empty on enable. |
+| `VendorName` | Display name shown in the tooltip and UI. |
+| `Data` | The underlying vendor data loaded from the database. |
+| `CanPress` |  |
+| `Press` |  |
+| `AddItem` | Add or update an item in the vendor's catalog. |
+| `RemoveItem` | Remove an item from the vendor's catalog. |
+| `GetItems` | Get all items in the vendor's catalog. |
+| `GetVendorItem` | Get a specific vendor item by definition ID. |
+
+### VendorItem
+
+A single item entry in a vendor's catalog with buy/sell prices.
+
+```csharp
+string DefinitionId { get; set; }
+int BuyPrice { get; set; }
+int SellPrice { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `DefinitionId` | The ItemDefinition unique ID for this vendor listing. |
+| `BuyPrice` | Price a player pays to buy this item. 0 = not for sale. |
+| `SellPrice` | Price a player receives when selling this item. 0 = cannot sell. |
+
+### VendorData
+
+Serializable vendor catalog persisted to the database.
+
+```csharp
+string VendorId { get; set; }
+string VendorName { get; set; }
+List<VendorItem> Items { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `VendorId` | Unique identifier for this vendor. Matches the VendorComponent's VendorId. |
+| `VendorName` | Display name of the vendor. |
+| `Items` | The items this vendor buys and sells. |
+
+### VendorManager (static)
+
+Manages vendor registration, persistence, and buy/sell operations. VendorComponents register/unregister themselves on enable/disable.
+
+```csharp
+static VendorComponent GetVendor( string vendorId )
+static IReadOnlyDictionary<string, VendorComponent> GetAllVendors()
+static void SaveVendor( VendorData data )
+static VendorData LoadVendor( string vendorId )
+```
+
+| Member | Description |
+|--------|-------------|
+| `GetVendor` | Get a vendor component by its ID. |
+| `GetAllVendors` | Get all registered vendors. |
+| `SaveVendor` | Save vendor data to the database. |
+| `LoadVendor` | Load vendor data from the database. |
+
+---
+
+## Listener Interfaces
+
+All listener interfaces for the Hexagon event system. Implement on a Component for auto-discovery via `Scene.GetAll<T>()`.
+
+### Core
+
+```csharp
+// Called when the Hexagon framework has finished initializing all systems.
+interface IFrameworkInitListener
+{
+    void OnFrameworkInit();
+}
+
+// Called when the Hexagon framework is shutting down.
+interface IFrameworkShutdownListener
+{
+    void OnFrameworkShutdown();
+}
+
+```
+
+### Attributes
+
+```csharp
+// Fired when a character's effective attribute value changes (base or boost change).
+interface IAttributeChangedListener
+{
+    void OnAttributeChanged( HexCharacter character, string attributeId, float oldValue, float newValue );
+}
+
+```
+
+### Characters
+
+```csharp
+// Called when a player has fully connected and their GameObject is spawned.
+interface IPlayerConnectedListener
+{
+    void OnPlayerConnected( HexPlayerComponent player, Connection connection );
+}
+
+// Called when a player disconnects.
+interface IPlayerDisconnectedListener
+{
+    void OnPlayerDisconnected( HexPlayerComponent player, Connection connection );
+}
+
+// Override spawn positions for connecting players.
+interface IPlayerSpawnListener
+{
+    Vector3 GetSpawnPosition( Connection connection, Vector3 currentPosition );
+}
+
+// Called when a character is loaded for a player.
+interface ICharacterLoadedListener
+{
+    void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character );
+}
+
+// Called when a character is unloaded (player switches or disconnects).
+interface ICharacterUnloadedListener
+{
+    void OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character );
+}
+
+// Permission hook: can a player create a character? Return false to block.
+interface ICanCharacterCreate
+{
+    bool CanCharacterCreate( HexPlayerComponent player, HexCharacterData data );
+}
+
+// Called after a new character is created.
+interface ICharacterCreatedListener
+{
+    void OnCharacterCreated( HexPlayerComponent player, HexCharacter character );
+}
+
+// Permission hook: can a character be recognized? Return false to block (e.g., disguise system).
+interface ICanRecognizeListener
+{
+    bool CanRecognize( HexCharacter observer, HexCharacter target );
+}
+
+// Fired after a character is recognized by another through introduction.
+interface ICharacterRecognizedListener
+{
+    void OnCharacterRecognized( HexPlayerComponent introducer, HexPlayerComponent recognizer );
+}
+
+```
+
+### Chat
+
+```csharp
+// Permission hook: can a player send a chat message? Return false to block.
+interface ICanSendChatMessage
+{
+    bool CanSendChatMessage( HexPlayerComponent sender, IChatClass chatClass, string message );
+}
+
+// Server-side: fired after a chat message is sent.
+interface IChatMessageListener
+{
+    void OnChatMessage( HexPlayerComponent sender, IChatClass chatClass, string rawMessage, string formattedMessage );
+}
+
+// Client-side: fired when a chat message is received.
+interface IChatMessageReceivedListener
+{
+    void OnChatMessageReceived( string senderName, string chatClassName, string formattedMessage, Color color );
+}
+
+```
+
+### Commands
+
+```csharp
+// Permission hook: can a player run a command? Return false to block.
+interface ICanRunCommandListener
+{
+    bool CanRunCommand( HexPlayerComponent player, HexCommand command );
+}
+
+```
+
+### Currency
+
+```csharp
+// Permission hook: can a money change occur? Return false to block.
+interface ICanMoneyChangeListener
+{
+    bool CanMoneyChange( HexCharacter character, int oldAmount, int newAmount, string reason );
+}
+
+// Fired after a money change has occurred.
+interface IMoneyChangedListener
+{
+    void OnMoneyChanged( HexCharacter character, int oldAmount, int newAmount, string reason );
+}
+
+```
+
+### Doors
+
+```csharp
+// Permission hook: can a player use this door? Return false to block.
+interface ICanUseDoorListener
+{
+    bool CanUseDoor( HexPlayerComponent player, DoorComponent door );
+}
+
+// Fired after a player uses a door (toggle, lock/unlock).
+interface IDoorUsedListener
+{
+    void OnDoorUsed( HexPlayerComponent player, DoorComponent door );
+}
+
+// Fired when door ownership changes.
+interface IDoorOwnerChangedListener
+{
+    void OnDoorOwnerChanged( DoorComponent door, string oldOwnerId, string newOwnerId, bool isFaction );
+}
+
+// Fired when a door's lock takes damage from shooting or kicking.
+interface IDoorDamagedListener
+{
+    void OnDoorDamaged( HexPlayerComponent attacker, DoorComponent door, float damage, int remainingHealth ); // Called when a door's lock is damaged.
+}
+
+// Fired when a door's lock is destroyed and the door is breached open.
+interface IDoorBreachedListener
+{
+    void OnDoorBreached( HexPlayerComponent attacker, DoorComponent door ); // Called when a door's lock breaks and the door swings open.
+}
+
+// Permission hook: can a player kick this door? Return false to block.
+interface ICanKickDoorListener
+{
+    bool CanKickDoor( HexPlayerComponent player, DoorComponent door ); // Called before a player attempts to kick a door.
+}
+
+```
+
+### Factions
+
+```csharp
+// Permission hook: can this loadout be applied? Return false to block.
+interface ICanApplyLoadoutListener
+{
+    bool CanApplyLoadout( HexPlayerComponent player, Characters.HexCharacter character, ClassDefinition classDef ); // Called before a class loadout is applied to a character.
+}
+
+// Fired after a class loadout has been applied to a character.
+interface ILoadoutAppliedListener
+{
+    void OnLoadoutApplied( HexPlayerComponent player, Characters.HexCharacter character, List<Items.ItemInstance> items ); // Called after loadout items have been granted to a character.
+}
+
+```
+
+### Interaction
+
+```csharp
+// Permission hook: can this timed action start? Return false to block.
+interface ICanStartActionListener
+{
+    bool CanStartAction( HexPlayerComponent player, string actionText );
+}
+
+// Fired when a timed action completes successfully.
+interface IActionCompletedListener
+{
+    void OnActionCompleted( HexPlayerComponent player, string actionText );
+}
+
+// Fired when a timed action is cancelled (looked away, moved too far, or explicit cancel).
+interface IActionCancelledListener
+{
+    void OnActionCancelled( HexPlayerComponent player, string actionText );
+}
+
+// Client-side: fired when action bar state changes (for UI updates).
+interface IActionBarUpdatedListener
+{
+    void OnActionBarUpdated( HexPlayerComponent player );
+}
+
+// Permission hook: can this player raise their weapon? Return false to block.
+interface ICanRaiseWeaponListener
+{
+    bool CanRaiseWeapon( HexPlayerComponent player );
+}
+
+// Fired when a player's weapon raise state changes.
+interface IWeaponRaisedListener
+{
+    void OnWeaponRaised( HexPlayerComponent player, bool isRaised );
+}
+
+// Permission hook: can this player fire their weapon? Schema weapon code should check both this hook and WeaponRaiseComponent.CanFire.
+interface ICanFireWeaponListener
+{
+    bool CanFireWeapon( HexPlayerComponent player );
+}
+
+```
+
+### Inventory
+
+```csharp
+// Client-side: fired when an inventory snapshot is received or updated.
+interface IInventoryUpdatedListener
+{
+    void OnInventoryUpdated( string inventoryId );
+}
+
+// Client-side: fired when an inventory is no longer available (e.g. closed storage).
+interface IInventoryRemovedListener
+{
+    void OnInventoryRemoved( string inventoryId );
+}
+
+// Client-side: fired when a vendor catalog is received.
+interface IVendorCatalogReceivedListener
+{
+    void OnVendorCatalogReceived( string vendorId, string vendorName, List<VendorCatalogEntry> items );
+}
+
+// Client-side: fired when a vendor buy/sell result is received.
+interface IVendorResultListener
+{
+    void OnVendorResult( bool success, string message );
+}
+
+```
+
+### Items.Bases
+
+```csharp
+// Fired after a consumable item is successfully consumed.
+interface IItemConsumedListener
+{
+    void OnItemConsumed( HexPlayerComponent player, ItemInstance item ); // Called after a consumable item has been used and consumed.
+}
+
+```
+
+### Logging
+
+```csharp
+// Listener interface for receiving log entries in real-time.
+interface ILogListener
+{
+    void OnLog( LogEntry entry );
+}
+
+```
+
+### Permissions
+
+```csharp
+// Hook for schema-defined permission checks beyond simple flags. Return false to deny the permission.
+interface IPermissionCheckListener
+{
+    bool OnPermissionCheck( HexPlayerComponent player, string permission );
+}
+
+```
+
+### Storage
+
+```csharp
+// Permission hook: can a player open this storage container? Return false to block.
+interface ICanOpenStorageListener
+{
+    bool CanOpenStorage( HexPlayerComponent player, StorageComponent storage );
+}
+
+// Fired when a player opens a storage container.
+interface IStorageOpenedListener
+{
+    void OnStorageOpened( HexPlayerComponent player, StorageComponent storage );
+}
+
+// Fired when a player closes a storage container (release or look away).
+interface IStorageClosedListener
+{
+    void OnStorageClosed( HexPlayerComponent player, StorageComponent storage );
+}
+
+```
+
+### UI
+
+```csharp
+// Client-side: fired when the chat input should be focused (ENTER pressed).
+interface IChatFocusRequestListener
+{
+    void OnChatFocusRequested();
+}
+
+// Fired when the death screen respawn button is pressed. Schema devs implement this to handle respawn logic.
+interface IDeathScreenRespawnListener
+{
+    void OnRespawnRequested( HexPlayerComponent player );
+}
+
+// Client-side: fired when a notification toast is received.
+interface INotificationReceivedListener
+{
+    void OnNotificationReceived( string message, float duration ); // Called on the client when a toast notification arrives.
+}
+
+```
+
+### Vendors
+
+```csharp
+// Permission hook: can a player buy this item? Return false to block.
+interface ICanBuyItemListener
+{
+    bool CanBuyItem( HexPlayerComponent player, VendorComponent vendor, VendorItem item );
+}
+
+// Permission hook: can a player sell this item? Return false to block.
+interface ICanSellItemListener
+{
+    bool CanSellItem( HexPlayerComponent player, VendorComponent vendor, VendorItem item, ItemInstance instance );
+}
+
+// Fired after a player buys an item from a vendor.
+interface IItemBoughtListener
+{
+    void OnItemBought( HexPlayerComponent player, VendorComponent vendor, VendorItem item, ItemInstance instance );
+}
+
+// Fired after a player sells an item to a vendor.
+interface IItemSoldListener
+{
+    void OnItemSold( HexPlayerComponent player, VendorComponent vendor, VendorItem item );
+}
+
+// Fired when a player opens/interacts with a vendor.
+interface IVendorOpenedListener
+{
+    void OnVendorOpened( HexPlayerComponent player, VendorComponent vendor );
+}
+
+```
+

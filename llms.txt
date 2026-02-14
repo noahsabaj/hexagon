@@ -1,0 +1,12 @@
+﻿# Hexagon
+
+> Roleplay framework library for s&box (Source 2, C#). Successor to NutScript and Helix from Garry's Mod, rebuilt for s&box's Scene/Component architecture. A "schema" is a separate s&box Game project that references the Hexagon library to create a specific RP gamemode.
+
+## Docs
+
+- [Schema Developer Guide](https://raw.githubusercontent.com/noahsabaj/hexagon/main/docs/schema-guide.md): How to build schemas -- characters, items, inventory, chat, commands, permissions, UI, and more
+- [API Reference](https://raw.githubusercontent.com/noahsabaj/hexagon/main/docs/api-reference.md): Complete public API surface, auto-generated from source code XML doc comments
+
+## Full Documentation
+
+- [llms-full.txt](https://raw.githubusercontent.com/noahsabaj/hexagon/main/llms-full.txt): Complete documentation in a single file for LLM context
