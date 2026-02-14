@@ -75,12 +75,7 @@ public static class AttributeManager
 
 		character.SetData( $"hex_attr_{attributeId}", clamped );
 
-		var newValue = GetAttribute( character, attributeId );
-		if ( Math.Abs( oldValue - newValue ) > 0.001f )
-		{
-			HexEvents.Fire<IAttributeChangedListener>(
-				x => x.OnAttributeChanged( character, attributeId, oldValue, newValue ) );
-		}
+		FireIfChanged( character, attributeId, oldValue );
 	}
 
 	/// <summary>
@@ -120,12 +115,7 @@ public static class AttributeManager
 		boosts.Add( boost );
 		SaveBoosts( character, boosts );
 
-		var newValue = GetAttribute( character, attributeId );
-		if ( Math.Abs( oldValue - newValue ) > 0.001f )
-		{
-			HexEvents.Fire<IAttributeChangedListener>(
-				x => x.OnAttributeChanged( character, attributeId, oldValue, newValue ) );
-		}
+		FireIfChanged( character, attributeId, oldValue );
 	}
 
 	/// <summary>
@@ -143,13 +133,7 @@ public static class AttributeManager
 		boosts.Remove( boost );
 		SaveBoosts( character, boosts );
 
-		var newValue = GetAttribute( character, boost.AttributeId );
-		if ( Math.Abs( oldValue - newValue ) > 0.001f )
-		{
-			HexEvents.Fire<IAttributeChangedListener>(
-				x => x.OnAttributeChanged( character, boost.AttributeId, oldValue, newValue ) );
-		}
-
+		FireIfChanged( character, boost.AttributeId, oldValue );
 		return true;
 	}
 
@@ -164,12 +148,7 @@ public static class AttributeManager
 		boosts.RemoveAll( b => b.AttributeId == attributeId );
 		SaveBoosts( character, boosts );
 
-		var newValue = GetAttribute( character, attributeId );
-		if ( Math.Abs( oldValue - newValue ) > 0.001f )
-		{
-			HexEvents.Fire<IAttributeChangedListener>(
-				x => x.OnAttributeChanged( character, attributeId, oldValue, newValue ) );
-		}
+		FireIfChanged( character, attributeId, oldValue );
 	}
 
 	/// <summary>
@@ -208,6 +187,16 @@ public static class AttributeManager
 			{
 				character.SetData( key, def.StartValue );
 			}
+		}
+	}
+
+	private static void FireIfChanged( HexCharacter character, string attributeId, float oldValue )
+	{
+		var newValue = GetAttribute( character, attributeId );
+		if ( Math.Abs( oldValue - newValue ) > 0.001f )
+		{
+			HexEvents.Fire<IAttributeChangedListener>(
+				x => x.OnAttributeChanged( character, attributeId, oldValue, newValue ) );
 		}
 	}
 

@@ -82,19 +82,7 @@ public class HexCharacter
 	/// Get a value from the character's generic data store.
 	/// </summary>
 	public T GetData<T>( string key, T defaultValue = default )
-	{
-		if ( Data.Data == null || !Data.Data.TryGetValue( key, out var value ) )
-			return defaultValue;
-
-		try
-		{
-			return (T)Convert.ChangeType( value, typeof( T ) );
-		}
-		catch
-		{
-			return defaultValue;
-		}
-	}
+		=> Core.DataHelper.GetValue( Data.Data, key, defaultValue );
 
 	/// <summary>
 	/// Set a value in the character's generic data store.

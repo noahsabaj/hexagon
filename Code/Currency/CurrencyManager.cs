@@ -36,15 +36,7 @@ public static class CurrencyManager
 		if ( amount <= 0 ) return;
 
 		var current = GetMoney( character );
-		var newAmount = current + amount;
-
-		if ( !HexEvents.CanAll<ICanMoneyChangeListener>(
-			x => x.CanMoneyChange( character, current, newAmount, reason ) ) )
-			return;
-
-		character.SetVar( "Money", newAmount );
-		HexEvents.Fire<IMoneyChangedListener>(
-			x => x.OnMoneyChanged( character, current, newAmount, reason ) );
+		TryChangeMoney( character, current, current + amount, reason );
 	}
 
 	/// <summary>
@@ -57,16 +49,7 @@ public static class CurrencyManager
 		var current = GetMoney( character );
 		if ( current < amount ) return false;
 
-		var newAmount = current - amount;
-
-		if ( !HexEvents.CanAll<ICanMoneyChangeListener>(
-			x => x.CanMoneyChange( character, current, newAmount, reason ) ) )
-			return false;
-
-		character.SetVar( "Money", newAmount );
-		HexEvents.Fire<IMoneyChangedListener>(
-			x => x.OnMoneyChanged( character, current, newAmount, reason ) );
-		return true;
+		return TryChangeMoney( character, current, current - amount, reason );
 	}
 
 	/// <summary>
@@ -77,13 +60,19 @@ public static class CurrencyManager
 		var current = GetMoney( character );
 		if ( current == amount ) return;
 
-		if ( !HexEvents.CanAll<ICanMoneyChangeListener>(
-			x => x.CanMoneyChange( character, current, amount, reason ) ) )
-			return;
+		TryChangeMoney( character, current, amount, reason );
+	}
 
-		character.SetVar( "Money", amount );
+	private static bool TryChangeMoney( HexCharacter character, int current, int newAmount, string reason )
+	{
+		if ( !HexEvents.CanAll<ICanMoneyChangeListener>(
+			x => x.CanMoneyChange( character, current, newAmount, reason ) ) )
+			return false;
+
+		character.SetVar( "Money", newAmount );
 		HexEvents.Fire<IMoneyChangedListener>(
-			x => x.OnMoneyChanged( character, current, amount, reason ) );
+			x => x.OnMoneyChanged( character, current, newAmount, reason ) );
+		return true;
 	}
 
 	/// <summary>

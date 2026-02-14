@@ -32,6 +32,18 @@ Complete API reference for the Hexagon roleplay framework for s&box (Source 2, C
 
 ## Hexagon.Core
 
+### DataHelper (static)
+
+Utility for typed access to Dictionary&lt;string, object&gt; stores with safe type conversion and fallback defaults.
+
+```csharp
+static T GetValue<T>( Dictionary<string, object> dict, string key, T defaultValue )
+```
+
+| Member | Description |
+|--------|-------------|
+| `GetValue` | Get a typed value from a dictionary with safe type conversion. Returns defaultValue if the key is missing, the dict is null, or conversion fails. |
+
 ### HexagonFramework (sealed) : Component
 
 The core bootstrap component for the Hexagon roleplay framework. Attach this to a persistent GameObject in your scene to initialize all systems.
@@ -115,6 +127,14 @@ int Priority { get; set; }
 TypeDescription Type { get; set; }
 IHexPlugin Instance { get; set; }
 ```
+
+### PressableHelper (static)
+
+Utility for IPressable implementations.
+
+### RpcHelper (static)
+
+Utility for resolving the calling player in RPC handlers. Eliminates repeated caller validation boilerplate.
 
 ---
 

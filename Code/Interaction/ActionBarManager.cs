@@ -97,12 +97,7 @@ public static class ActionBarManager
 		if ( _actions.TryGetValue( player.SteamId, out var action ) )
 		{
 			_actions.Remove( player.SteamId );
-			action.OnCancel?.Invoke();
-
-			player.ReceiveActionBarReset();
-
-			HexEvents.Fire<IActionCancelledListener>( x => x.OnActionCancelled( player, action.Text ) );
-			HexEvents.Fire<IActionBarUpdatedListener>( x => x.OnActionBarUpdated( player ) );
+			CancelAndNotify( player, action );
 		}
 	}
 
@@ -193,15 +188,10 @@ public static class ActionBarManager
 		{
 			if ( !_actions.TryGetValue( steamId, out var action ) ) continue;
 			_actions.Remove( steamId );
-			action.OnCancel?.Invoke();
 
 			var player = HexGameManager.GetPlayer( steamId );
 			if ( player != null )
-			{
-				player.ReceiveActionBarReset();
-				HexEvents.Fire<IActionCancelledListener>( x => x.OnActionCancelled( player, action.Text ) );
-				HexEvents.Fire<IActionBarUpdatedListener>( x => x.OnActionBarUpdated( player ) );
-			}
+				CancelAndNotify( player, action );
 		}
 
 		// Process completions
@@ -227,6 +217,14 @@ public static class ActionBarManager
 			HexEvents.Fire<IActionCompletedListener>( x => x.OnActionCompleted( player, action.Text ) );
 			HexEvents.Fire<IActionBarUpdatedListener>( x => x.OnActionBarUpdated( player ) );
 		}
+	}
+
+	private static void CancelAndNotify( HexPlayerComponent player, ActiveAction action )
+	{
+		action.OnCancel?.Invoke();
+		player.ReceiveActionBarReset();
+		HexEvents.Fire<IActionCancelledListener>( x => x.OnActionCancelled( player, action.Text ) );
+		HexEvents.Fire<IActionBarUpdatedListener>( x => x.OnActionBarUpdated( player ) );
 	}
 
 	/// <summary>

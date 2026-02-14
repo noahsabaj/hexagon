@@ -250,14 +250,11 @@ public sealed class HexInventoryComponent : Component
 	[Rpc.Host]
 	public void RequestMoveItem( string inventoryId, string itemId, int newX, int newY )
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player?.Character == null ) return;
 
 		var inv = InventoryManager.Get( inventoryId );
-		if ( inv == null || !inv.GetReceivers().Contains( caller ) ) return;
+		if ( inv == null || !inv.GetReceivers().Contains( player.Connection ) ) return;
 
 		inv.Move( itemId, newX, newY );
 	}
@@ -268,17 +265,14 @@ public sealed class HexInventoryComponent : Component
 	[Rpc.Host]
 	public void RequestTransferItem( string sourceInvId, string itemId, string targetInvId, int x, int y )
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player?.Character == null ) return;
 
 		var source = InventoryManager.Get( sourceInvId );
 		var target = InventoryManager.Get( targetInvId );
 
 		if ( source == null || target == null ) return;
-		if ( !source.GetReceivers().Contains( caller ) || !target.GetReceivers().Contains( caller ) ) return;
+		if ( !source.GetReceivers().Contains( player.Connection ) || !target.GetReceivers().Contains( player.Connection ) ) return;
 
 		source.Transfer( itemId, target, x, y );
 	}
@@ -289,14 +283,11 @@ public sealed class HexInventoryComponent : Component
 	[Rpc.Host]
 	public void RequestDropItem( string inventoryId, string itemId )
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player?.Character == null ) return;
 
 		var inv = InventoryManager.Get( inventoryId );
-		if ( inv == null || !inv.GetReceivers().Contains( caller ) ) return;
+		if ( inv == null || !inv.GetReceivers().Contains( player.Connection ) ) return;
 
 		var item = Items.ItemManager.GetInstance( itemId );
 		if ( item == null ) return;
@@ -317,14 +308,11 @@ public sealed class HexInventoryComponent : Component
 	[Rpc.Host]
 	public void RequestUseItem( string inventoryId, string itemId )
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player?.Character == null ) return;
 
 		var inv = InventoryManager.Get( inventoryId );
-		if ( inv == null || !inv.GetReceivers().Contains( caller ) ) return;
+		if ( inv == null || !inv.GetReceivers().Contains( player.Connection ) ) return;
 
 		var item = Items.ItemManager.GetInstance( itemId );
 		if ( item == null ) return;
@@ -348,10 +336,7 @@ public sealed class HexInventoryComponent : Component
 	[Rpc.Host]
 	public void RequestBuyItem( string vendorId, string definitionId )
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player?.Character == null ) return;
 
 		var vendor = Vendors.VendorManager.GetVendor( vendorId );
@@ -360,7 +345,7 @@ public sealed class HexInventoryComponent : Component
 		var (success, message) = Vendors.VendorManager.Buy( player, vendor, definitionId );
 
 		// Send result to the caller
-		using ( Rpc.FilterInclude( caller ) )
+		using ( Rpc.FilterInclude( player.Connection ) )
 		{
 			ReceiveVendorResult( success, message );
 		}
@@ -378,10 +363,7 @@ public sealed class HexInventoryComponent : Component
 	[Rpc.Host]
 	public void RequestSellItem( string vendorId, string itemInstanceId )
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player?.Character == null ) return;
 
 		var vendor = Vendors.VendorManager.GetVendor( vendorId );
@@ -390,7 +372,7 @@ public sealed class HexInventoryComponent : Component
 		var (success, message) = Vendors.VendorManager.Sell( player, vendor, itemInstanceId );
 
 		// Send result to the caller
-		using ( Rpc.FilterInclude( caller ) )
+		using ( Rpc.FilterInclude( player.Connection ) )
 		{
 			ReceiveVendorResult( success, message );
 		}

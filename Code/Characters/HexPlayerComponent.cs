@@ -102,10 +102,7 @@ public sealed class HexPlayerComponent : Component
 	[Rpc.Host]
 	public void RequestCharacterList()
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player == null || player != this ) return;
 
 		SendCharacterListToOwner();
@@ -117,10 +114,7 @@ public sealed class HexPlayerComponent : Component
 	[Rpc.Host]
 	public void RequestLoadCharacter( string characterId )
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player == null || player != this ) return;
 
 		if ( string.IsNullOrEmpty( characterId ) ) return;
@@ -138,10 +132,7 @@ public sealed class HexPlayerComponent : Component
 	[Rpc.Host]
 	public void RequestCreateCharacter( string json )
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player == null || player != this ) return;
 
 		if ( string.IsNullOrEmpty( json ) )
@@ -221,10 +212,7 @@ public sealed class HexPlayerComponent : Component
 	[Rpc.Host]
 	public void RequestDeleteCharacter( string characterId )
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player == null || player != this ) return;
 
 		if ( string.IsNullOrEmpty( characterId ) ) return;
@@ -462,10 +450,7 @@ public sealed class HexPlayerComponent : Component
 	[Rpc.Host]
 	public void RequestIntroduce( int level )
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player == null || player != this ) return;
 
 		if ( player.Character == null )

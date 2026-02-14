@@ -92,14 +92,9 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 
 	// --- IPressable ---
 
-	private HexPlayerComponent GetPlayer( Component.IPressable.Event e )
-	{
-		return e.Source?.GetComponentInParent<HexPlayerComponent>();
-	}
-
 	public bool CanPress( Component.IPressable.Event e )
 	{
-		var player = GetPlayer( e );
+		var player = Core.PressableHelper.GetPlayer( e );
 		if ( player?.Character == null ) return false;
 
 		return HexEvents.CanAll<ICanUseDoorListener>(
@@ -108,7 +103,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 
 	public bool Press( Component.IPressable.Event e )
 	{
-		var player = GetPlayer( e );
+		var player = Core.PressableHelper.GetPlayer( e );
 		if ( player?.Character == null ) return false;
 
 		if ( !_data.HasOwner )

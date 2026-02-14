@@ -59,20 +59,15 @@ public sealed class VendorComponent : Component, Component.IPressable
 
 	// --- IPressable ---
 
-	private HexPlayerComponent GetPlayer( Component.IPressable.Event e )
-	{
-		return e.Source?.GetComponentInParent<HexPlayerComponent>();
-	}
-
 	public bool CanPress( Component.IPressable.Event e )
 	{
-		var player = GetPlayer( e );
+		var player = Core.PressableHelper.GetPlayer( e );
 		return player?.Character != null;
 	}
 
 	public bool Press( Component.IPressable.Event e )
 	{
-		var player = GetPlayer( e );
+		var player = Core.PressableHelper.GetPlayer( e );
 		if ( player?.Character == null ) return false;
 
 		HexEvents.Fire<IVendorOpenedListener>(

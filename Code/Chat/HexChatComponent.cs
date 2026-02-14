@@ -34,10 +34,7 @@ public sealed class HexChatComponent : Component
 	[Rpc.Host]
 	public void SendMessage( string rawMessage )
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player == null ) return;
 
 		ChatManager.ProcessMessage( player, rawMessage );

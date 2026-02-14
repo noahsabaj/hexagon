@@ -60,22 +60,7 @@ public class ItemInstance
 	/// Get a per-instance data value.
 	/// </summary>
 	public T GetData<T>( string key, T defaultValue = default )
-	{
-		if ( Data == null || !Data.TryGetValue( key, out var value ) )
-			return defaultValue;
-
-		try
-		{
-			if ( value is T typed )
-				return typed;
-
-			return (T)Convert.ChangeType( value, typeof( T ) );
-		}
-		catch
-		{
-			return defaultValue;
-		}
-	}
+		=> Core.DataHelper.GetValue( Data, key, defaultValue );
 
 	/// <summary>
 	/// Set a per-instance data value. Marks the item as dirty.

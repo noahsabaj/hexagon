@@ -41,6 +41,33 @@ $SchemaSectionMap = [ordered]@{
 # API reference namespace mapping is discovered dynamically from api-reference.md headers.
 # No hardcoded namespace list — adding/removing namespaces in Code/ is automatically reflected.
 
+# --- Helper functions ---
+
+function Trim-TrailingLines($list, [switch]$IncludeSeparators) {
+    if ($IncludeSeparators) {
+        while ($list.Count -gt 0 -and ($list[$list.Count - 1].Trim() -eq '' -or $list[$list.Count - 1].Trim() -eq '---')) {
+            $list.RemoveAt($list.Count - 1)
+        }
+    } else {
+        while ($list.Count -gt 0 -and $list[$list.Count - 1].Trim() -eq '') {
+            $list.RemoveAt($list.Count - 1)
+        }
+    }
+}
+
+function Get-ApiFileName($ns) {
+    if ($ns -eq "Listener Interfaces") { return "API-Listener-Interfaces" }
+    return "API-$ns"
+}
+
+function Add-ApiLinks($lines, $namespaces) {
+    foreach ($ns in $namespaces) {
+        $file = Get-ApiFileName $ns
+        $title = if ($ns -eq "Listener Interfaces") { "Listener Interfaces" } else { $ns }
+        $lines.Add("- [[$title|$file]]")
+    }
+}
+
 # ============================================================
 # Split schema guide
 # ============================================================
@@ -98,9 +125,7 @@ foreach ($sectionNum in $schemaChunks.Keys) {
 
     # Trim trailing blank lines and --- from this chunk before merging
     $chunk = $schemaChunks[$sectionNum]
-    while ($chunk.Count -gt 0 -and ($chunk[$chunk.Count - 1].Trim() -eq '' -or $chunk[$chunk.Count - 1].Trim() -eq '---')) {
-        $chunk.RemoveAt($chunk.Count - 1)
-    }
+    Trim-TrailingLines $chunk -IncludeSeparators
 
     if (-not $mergedFiles.ContainsKey($fileName)) {
         $mergedFiles[$fileName] = [System.Collections.Generic.List[string]]::new()
@@ -120,10 +145,7 @@ foreach ($sectionNum in $schemaChunks.Keys) {
 # Trim trailing blank lines and write schema pages
 foreach ($fileName in $mergedFiles.Keys) {
     $content = $mergedFiles[$fileName]
-    # Trim trailing empty lines
-    while ($content.Count -gt 0 -and $content[$content.Count - 1].Trim() -eq '') {
-        $content.RemoveAt($content.Count - 1)
-    }
+    Trim-TrailingLines $content
     $outPath = Join-Path $OutDir "$fileName.md"
     $content | Out-File -FilePath $outPath -Encoding UTF8
     Write-Host "  Schema: $fileName.md ($($content.Count) lines)"
@@ -173,17 +195,9 @@ foreach ($line in $apiLines) {
 
 # Write API pages (filenames derived dynamically from namespace)
 foreach ($ns in $apiChunks.Keys) {
-    if ($ns -eq "Listener Interfaces") {
-        $fileName = "API-Listener-Interfaces"
-    } else {
-        $fileName = "API-$ns"
-    }
+    $fileName = Get-ApiFileName $ns
     $content = $apiChunks[$ns]
-
-    # Trim trailing empty lines
-    while ($content.Count -gt 0 -and $content[$content.Count - 1].Trim() -eq '') {
-        $content.RemoveAt($content.Count - 1)
-    }
+    Trim-TrailingLines $content
 
     $outPath = Join-Path $OutDir "$fileName.md"
     $content | Out-File -FilePath $outPath -Encoding UTF8
@@ -221,13 +235,7 @@ $homeLines.Add("Full public API surface, auto-generated from source code.")
 $homeLines.Add("")
 
 # API links (dynamically from discovered namespaces)
-foreach ($ns in $apiChunks.Keys) {
-    if ($ns -eq "Listener Interfaces") {
-        $homeLines.Add("- [[Listener Interfaces|API-Listener-Interfaces]]")
-    } else {
-        $homeLines.Add("- [[$ns|API-$ns]]")
-    }
-}
+Add-ApiLinks $homeLines $apiChunks.Keys
 
 $homeContent = $homeLines -join "`n"
 $homeContent | Out-File -FilePath (Join-Path $OutDir "Home.md") -Encoding UTF8
@@ -257,13 +265,7 @@ $sidebarLines.Add("**API Reference**")
 $sidebarLines.Add("")
 
 # API reference sidebar entries (dynamically from discovered namespaces)
-foreach ($ns in $apiChunks.Keys) {
-    if ($ns -eq "Listener Interfaces") {
-        $sidebarLines.Add("- [[Listener Interfaces|API-Listener-Interfaces]]")
-    } else {
-        $sidebarLines.Add("- [[$ns|API-$ns]]")
-    }
-}
+Add-ApiLinks $sidebarLines $apiChunks.Keys
 
 $sidebarContent = $sidebarLines -join "`n"
 $sidebarContent | Out-File -FilePath (Join-Path $OutDir "_Sidebar.md") -Encoding UTF8

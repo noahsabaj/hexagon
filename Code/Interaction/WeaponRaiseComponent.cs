@@ -35,10 +35,7 @@ public sealed class WeaponRaiseComponent : Component
 	[Rpc.Host]
 	public void RequestToggleRaise()
 	{
-		var caller = Rpc.Caller;
-		if ( caller == null ) return;
-
-		var player = HexGameManager.GetPlayer( caller );
+		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player == null || player.GameObject != GameObject ) return;
 
 		// Check global override
