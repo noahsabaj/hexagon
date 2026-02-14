@@ -42,8 +42,49 @@ public sealed class HexUIManager : Component, ICharacterLoadedListener, ICharact
 
 		Instance = this;
 
+		// Disable framework defaults that schema panels override
+		DisableOverriddenDefaults();
+
 		// Start in character select state
 		SetState( UIState.CharacterSelect );
+	}
+
+	/// <summary>
+	/// Scan for schema panels that share a PanelName with framework defaults.
+	/// When found, the framework default is disabled so the schema panel takes over.
+	/// </summary>
+	private void DisableOverriddenDefaults()
+	{
+		var byName = new Dictionary<string, List<IHexPanel>>();
+
+		foreach ( var panel in Scene.GetAll<IHexPanel>() )
+		{
+			if ( !byName.TryGetValue( panel.PanelName, out var list ) )
+			{
+				list = new();
+				byName[panel.PanelName] = list;
+			}
+			list.Add( panel );
+		}
+
+		foreach ( var (name, group) in byName )
+		{
+			if ( group.Count <= 1 ) continue;
+
+			bool hasSchemaOverride = group.Any( p =>
+				p is Component c && c.GameObject != HexUISetup.UIObject );
+
+			if ( !hasSchemaOverride ) continue;
+
+			foreach ( var panel in group )
+			{
+				if ( panel is Component comp && comp.GameObject == HexUISetup.UIObject )
+				{
+					comp.Enabled = false;
+					Log.Info( $"Hexagon: Default '{name}' panel overridden by schema" );
+				}
+			}
+		}
 	}
 
 	protected override void OnDestroy()
@@ -196,17 +237,24 @@ public sealed class HexUIManager : Component, ICharacterLoadedListener, ICharact
 	// --- Panel Management ---
 
 	/// <summary>
-	/// Find a panel by name.
+	/// Find a panel by name. Schema panels take priority over framework defaults.
 	/// </summary>
 	public IHexPanel FindPanel( string name )
 	{
+		IHexPanel fallback = null;
+
 		foreach ( var panel in Scene.GetAll<IHexPanel>() )
 		{
-			if ( panel.PanelName == name )
+			if ( panel.PanelName != name ) continue;
+
+			// Schema panel (not on the framework UI object) wins immediately
+			if ( panel is Component comp && comp.GameObject != HexUISetup.UIObject )
 				return panel;
+
+			fallback ??= panel;
 		}
 
-		return null;
+		return fallback;
 	}
 
 	/// <summary>

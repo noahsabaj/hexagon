@@ -1815,7 +1815,7 @@ static HexPlayerComponent GetLocalPlayer()
 | `Instance` |  |
 | `State` | Current UI state. |
 | `SetState` | Transition to a new UI state. Hides/shows panels appropriate to that state. |
-| `FindPanel` | Find a panel by name. |
+| `FindPanel` | Find a panel by name. Schema panels take priority over framework defaults. |
 | `OpenPanel` | Open a panel by name. |
 | `ClosePanel` | Close a panel by name. |
 | `TogglePanel` | Toggle a panel open/closed by name. |
@@ -1829,16 +1829,18 @@ static HexPlayerComponent GetLocalPlayer()
 Static helper that auto-creates the full Hexagon UI hierarchy if not already present. Creates a ScreenPanel root with HexUIManager and all 9 default panels.
 
 ```csharp
+static GameObject UIObject { get; set; }
 static void EnsureUI( Scene scene )
 ```
 
 | Member | Description |
 |--------|-------------|
+| `UIObject` | The runtime-created UI GameObject containing all default panels. Used by HexUIManager to identify framework defaults vs schema overrides. |
 | `EnsureUI` | Ensure HexUIManager and all default panels exist in the scene. If a HexUIManager is already present, this is a no-op. |
 
 ### IHexPanel (interface)
 
-Interface for all Hexagon UI panels. Implement on PanelComponents to allow HexUIManager to discover and coordinate them. Schema devs can replace default panels by disabling the built-in ones and adding their own IHexPanel implementations.
+Interface for all Hexagon UI panels. Implement on PanelComponents to allow HexUIManager to discover and coordinate them. To override a default panel, create your own PanelComponent implementing IHexPanel with the same PanelName (e.g. "CharacterSelect") on any GameObject in your scene. The framework default is automatically disabled — no configuration needed.
 
 ```csharp
 string PanelName { get; }

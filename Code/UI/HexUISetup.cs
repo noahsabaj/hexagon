@@ -7,6 +7,12 @@ namespace Hexagon.UI;
 public static class HexUISetup
 {
 	/// <summary>
+	/// The runtime-created UI GameObject containing all default panels.
+	/// Used by HexUIManager to identify framework defaults vs schema overrides.
+	/// </summary>
+	public static GameObject UIObject { get; private set; }
+
+	/// <summary>
 	/// Ensure HexUIManager and all default panels exist in the scene.
 	/// If a HexUIManager is already present, this is a no-op.
 	/// </summary>
@@ -19,6 +25,7 @@ public static class HexUISetup
 		if ( scene.GetAll<HexUIManager>().Any() ) return;
 
 		var go = new GameObject( true, "Hexagon UI" );
+		UIObject = go;
 
 		// ScreenPanel is the root for all Razor panel components
 		go.AddComponent<ScreenPanel>();

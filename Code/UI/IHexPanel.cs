@@ -4,8 +4,9 @@ namespace Hexagon.UI;
 /// Interface for all Hexagon UI panels. Implement on PanelComponents to allow
 /// HexUIManager to discover and coordinate them.
 ///
-/// Schema devs can replace default panels by disabling the built-in ones and
-/// adding their own IHexPanel implementations.
+/// To override a default panel, create your own PanelComponent implementing IHexPanel
+/// with the same PanelName (e.g. "CharacterSelect") on any GameObject in your scene.
+/// The framework default is automatically disabled — no configuration needed.
 /// </summary>
 public interface IHexPanel
 {
