@@ -50,7 +50,7 @@ StoragePanel {
 		font-size: 10px;
 		text-align: center;
 		padding: 2px;
-		word-wrap: break-word;
+		word-break: break-all;
 		pointer-events: none;
 	}
 }
