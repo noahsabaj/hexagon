@@ -451,6 +451,8 @@ string Description { get; set; }
 [Property] Model ClassModel { get; set; }
 [Property] int MaxPlayers { get; set; }
 [Property] int Order { get; set; }
+[Property] List<LoadoutEntry> Loadout { get; set; }
+[Property] LoadoutMode LoadoutMode { get; set; }
 ```
 
 | Member | Description |
@@ -462,6 +464,26 @@ string Description { get; set; }
 | `ClassModel` | Override model when this class is active. Empty = use faction default. |
 | `MaxPlayers` | Maximum active players in this class (0 = unlimited). |
 | `Order` | Sort order within the faction. Lower = appears first. |
+| `Loadout` | Items to grant when a character selects this class. |
+| `LoadoutMode` | When to apply the loadout: OnCreate (once) or OnLoad (every time the character loads). |
+
+### LoadoutEntry
+
+A single item entry in a class loadout.
+
+```csharp
+[Property] string ItemDefinitionId { get; set; }
+[Property] int Count { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `ItemDefinitionId` | The UniqueId of the ItemDefinition to grant. |
+| `Count` | How many of this item to grant. |
+
+### LoadoutMode (enum)
+
+Controls when a class loadout is applied to characters.
 
 ### FactionDefinition : GameResource
 
@@ -528,6 +550,18 @@ static bool CanJoinClass( string classId )
 | `CanJoinFaction` | Check if a faction has room for another player. |
 | `GetClassPlayerCount` | Check how many active players are in a class. |
 | `CanJoinClass` | Check if a class has room for another player. |
+
+### LoadoutManager (static)
+
+Manages class-based loadout distribution. When a character is created or loaded, the loadout system checks their class for configured items and grants them.
+
+```csharp
+static void ApplyLoadout( HexPlayerComponent player, Characters.HexCharacter character )
+```
+
+| Member | Description |
+|--------|-------------|
+| `ApplyLoadout` | Apply the loadout for a character's class. Creates items and adds them to the character's main inventory. |
 
 ---
 
@@ -714,6 +748,28 @@ override void OnRemoved( ItemInstance item )
 | `OpenBag` | Open this bag for a player (adds them as a receiver of the bag's inventory). |
 | `CloseBag` | Close this bag for a player. |
 | `OnRemoved` |  |
+
+### ConsumableItemDef : ItemDefinition
+
+Base definition for consumable items (food, drinks, medical supplies, etc.). When used, runs a timed action (if UseTime > 0) then calls OnConsume for schema-defined effects. Return true from OnConsume to destroy the item, false to keep it.
+
+```csharp
+[Property] float UseTime { get; set; }
+[Property] string UseSound { get; set; }
+[Property] string ConsumeVerb { get; set; }
+override Dictionary<string, ItemAction> GetActions()
+override bool OnUse( HexPlayerComponent player, ItemInstance item )
+virtual bool OnConsume( HexPlayerComponent player, ItemInstance item )
+```
+
+| Member | Description |
+|--------|-------------|
+| `UseTime` | Time in seconds to consume the item. 0 = instant consumption. If > 0, uses ActionBarManager.DoStaredAction with the ConsumeVerb text. |
+| `UseSound` | Optional sound to play when consumption starts. |
+| `ConsumeVerb` | Action bar text shown during timed consumption (e.g. "Eating...", "Drinking..."). |
+| `GetActions` |  |
+| `OnUse` |  |
+| `OnConsume` | Called when consumption completes. Override in schema subclasses for custom effects (healing, buffs, etc.). Return true to destroy the item, false to keep it. |
 
 ### CurrencyItemDef : ItemDefinition
 
@@ -1485,9 +1541,9 @@ static List<LogEntry> GetLogsForPlayer( DateTime date, ulong steamId )
 
 ## Hexagon.Doors
 
-### DoorComponent (sealed) : Component, Component.IPressable
+### DoorComponent (sealed) : Component, Component.IPressable, Component.IDamageable
 
-A world-placed door that supports ownership, locking, and access control. Interacted with via the USE key (IPressable). Place on any GameObject in the scene. Set DoorId in the editor or let it auto-generate. Schema devs bind IsOpen to their door animation system. Authorization hierarchy: admin flag ("a") > character owner > faction member > access list
+A world-placed door that supports ownership, locking, access control, and breach mechanics. Interacted with via the USE key (IPressable). Locks can be damaged via IDamageable (shootlock) or the TryKick() API. Place on any GameObject in the scene. Set DoorId in the editor or let it auto-generate. Schema devs bind IsOpen to their door animation system. Authorization hierarchy: admin flag ("a") > character owner > faction member > access list
 
 ```csharp
 [Property] string DoorId { get; set; }
@@ -1495,11 +1551,16 @@ A world-placed door that supports ownership, locking, and access control. Intera
 [Sync] bool IsLocked { get; set; }
 [Sync] bool IsOpen { get; set; }
 [Sync] string OwnerDisplay { get; set; }
+[Sync] int LockHealth { get; set; }
+int MaxLockHealth { get; set; }
 DoorData Data
 bool CanPress( Component.IPressable.Event e )
 bool Press( Component.IPressable.Event e )
+void OnDamage( in DamageInfo damage )
 void ToggleOpen()
 void SetLocked( bool locked )
+void TryKick( HexPlayerComponent player )
+void RepairLock()
 bool IsAuthorized( HexPlayerComponent player )
 void SetOwnerCharacter( string characterId, string displayName )
 bool SetOwnerFaction( string factionId )
@@ -1515,11 +1576,16 @@ void RemoveAccess( string characterId )
 | `IsLocked` | Whether the door is currently locked. Synced to all players. |
 | `IsOpen` | Whether the door is currently open. Schema binds this to door animation. |
 | `OwnerDisplay` | Display name of the current owner. Synced to all players for tooltip display. |
+| `LockHealth` | Current lock health. When reduced to 0, the lock is breached. |
+| `MaxLockHealth` | Maximum lock health for this door. |
 | `Data` | The underlying door data. Loaded from the database on enable. |
 | `CanPress` |  |
 | `Press` |  |
+| `OnDamage` | Called when the door takes damage (e.g. from gunfire). Damages the lock if applicable. |
 | `ToggleOpen` | Toggle the door between open and closed. |
 | `SetLocked` | Set the door's locked state. |
+| `TryKick` | Attempt to kick the door. Uses ActionBarManager for a timed action. Schema decides how to trigger this (keybind, alt-use, command, etc.). |
+| `RepairLock` | Repair the lock to full health and re-lock the door. Schema decides when to call this (admin command, timed auto-repair, map reset, etc.). |
 | `IsAuthorized` | Check if a player is authorized to use this door when locked. Hierarchy: admin flag > character owner > faction member > access list |
 | `SetOwnerCharacter` | Set a character as the owner. Clears faction ownership and access list. |
 | `SetOwnerFaction` | Set a faction as the owner. Clears character ownership and access list. Returns false if faction ownership is disabled by config. |
@@ -1537,6 +1603,8 @@ string OwnerCharacterId { get; set; }
 string OwnerFactionId { get; set; }
 bool IsLocked { get; set; }
 List<string> AccessList { get; set; }
+int LockHealth { get; set; }
+int MaxLockHealth { get; set; }
 bool HasOwner
 ```
 
@@ -1547,6 +1615,8 @@ bool HasOwner
 | `OwnerFactionId` | Faction ID of the owner. Mutually exclusive with OwnerCharacterId. |
 | `IsLocked` | Whether the door is currently locked. |
 | `AccessList` | Additional character IDs that have access to this door. |
+| `LockHealth` | Current lock health. -1 = use config default; 0 = broken. |
+| `MaxLockHealth` | Maximum lock health. -1 = use config default. |
 | `HasOwner` | Whether this door has any owner. |
 
 ### DoorManager (static)
@@ -1977,6 +2047,24 @@ interface IDoorUsedListener
 interface IDoorOwnerChangedListener
 {
     void OnDoorOwnerChanged( DoorComponent door, string oldOwnerId, string newOwnerId, bool isFaction );
+}
+
+// Fired when a door's lock takes damage from shooting or kicking.
+interface IDoorDamagedListener
+{
+    void OnDoorDamaged( HexPlayerComponent attacker, DoorComponent door, float damage, int remainingHealth ); // Called when a door's lock is damaged.
+}
+
+// Fired when a door's lock is destroyed and the door is breached open.
+interface IDoorBreachedListener
+{
+    void OnDoorBreached( HexPlayerComponent attacker, DoorComponent door ); // Called when a door's lock breaks and the door swings open.
+}
+
+// Permission hook: can a player kick this door? Return false to block.
+interface ICanKickDoorListener
+{
+    bool CanKickDoor( HexPlayerComponent player, DoorComponent door ); // Called before a player attempts to kick a door.
 }
 
 ```

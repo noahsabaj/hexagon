@@ -213,6 +213,9 @@ public static class CharacterManager
 		// Fire event
 		HexEvents.Fire<ICharacterCreatedListener>( x => x.OnCharacterCreated( player, character ) );
 
+		// Apply class loadout
+		Factions.LoadoutManager.OnCharacterCreated( player, character );
+
 		Log.Info( $"Hexagon: Character '{data.Id}' created for {player.DisplayName}" );
 
 		return character;
@@ -275,6 +278,9 @@ public static class CharacterManager
 
 		// Fire event
 		HexEvents.Fire<ICharacterLoadedListener>( x => x.OnCharacterLoaded( player, character ) );
+
+		// Apply class loadout (if OnLoad mode)
+		Factions.LoadoutManager.OnCharacterLoaded( player, character );
 
 		Log.Info( $"Hexagon: Character loaded for {player.DisplayName} (faction: {data.Faction ?? "none"})" );
 

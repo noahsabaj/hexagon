@@ -45,6 +45,16 @@ public class ClassDefinition : GameResource
 	[Property] public int Order { get; set; } = 100;
 
 	/// <summary>
+	/// Items to grant when a character selects this class.
+	/// </summary>
+	[Property] public List<LoadoutEntry> Loadout { get; set; } = new();
+
+	/// <summary>
+	/// When to apply the loadout: OnCreate (once) or OnLoad (every time the character loads).
+	/// </summary>
+	[Property] public LoadoutMode LoadoutMode { get; set; } = LoadoutMode.OnCreate;
+
+	/// <summary>
 	/// Called when the asset is loaded. Registers with FactionManager.
 	/// </summary>
 	protected override void PostLoad()
@@ -62,4 +72,32 @@ public class ClassDefinition : GameResource
 		if ( !string.IsNullOrEmpty( UniqueId ) )
 			FactionManager.RegisterClass( this );
 	}
+}
+
+/// <summary>
+/// A single item entry in a class loadout.
+/// </summary>
+public class LoadoutEntry
+{
+	/// <summary>
+	/// The UniqueId of the ItemDefinition to grant.
+	/// </summary>
+	[Property] public string ItemDefinitionId { get; set; }
+
+	/// <summary>
+	/// How many of this item to grant.
+	/// </summary>
+	[Property] public int Count { get; set; } = 1;
+}
+
+/// <summary>
+/// Controls when a class loadout is applied to characters.
+/// </summary>
+public enum LoadoutMode
+{
+	/// <summary>Items given once when the character is first created.</summary>
+	OnCreate,
+
+	/// <summary>Items given every time the character loads (including creation).</summary>
+	OnLoad
 }

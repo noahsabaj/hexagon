@@ -1,15 +1,16 @@
 namespace Hexagon.Doors;
 
 /// <summary>
-/// A world-placed door that supports ownership, locking, and access control.
-/// Interacted with via the USE key (IPressable).
+/// A world-placed door that supports ownership, locking, access control, and breach mechanics.
+/// Interacted with via the USE key (IPressable). Locks can be damaged via IDamageable (shootlock)
+/// or the TryKick() API.
 ///
 /// Place on any GameObject in the scene. Set DoorId in the editor or let it auto-generate.
 /// Schema devs bind IsOpen to their door animation system.
 ///
 /// Authorization hierarchy: admin flag ("a") > character owner > faction member > access list
 /// </summary>
-public sealed class DoorComponent : Component, Component.IPressable
+public sealed class DoorComponent : Component, Component.IPressable, Component.IDamageable
 {
 	/// <summary>
 	/// Unique identifier for this door. Auto-generated if empty on enable.
@@ -36,6 +37,16 @@ public sealed class DoorComponent : Component, Component.IPressable
 	/// </summary>
 	[Sync] public string OwnerDisplay { get; set; } = "";
 
+	/// <summary>
+	/// Current lock health. When reduced to 0, the lock is breached.
+	/// </summary>
+	[Sync] public int LockHealth { get; set; }
+
+	/// <summary>
+	/// Maximum lock health for this door.
+	/// </summary>
+	public int MaxLockHealth { get; private set; }
+
 	private DoorData _data;
 
 	/// <summary>
@@ -60,6 +71,12 @@ public sealed class DoorComponent : Component, Component.IPressable
 		}
 
 		IsLocked = _data.IsLocked;
+
+		// Initialize lock health from saved data or config defaults
+		var defaultHealth = Config.HexConfig.Get<int>( "door.lockHealth", 100 );
+		MaxLockHealth = _data.MaxLockHealth >= 0 ? _data.MaxLockHealth : defaultHealth;
+		LockHealth = _data.LockHealth >= 0 ? _data.LockHealth : MaxLockHealth;
+
 		UpdateOwnerDisplay();
 
 		DoorManager.Register( this );
@@ -142,6 +159,22 @@ public sealed class DoorComponent : Component, Component.IPressable
 		return new Component.IPressable.Tooltip( DoorName, "door_front", desc );
 	}
 
+	// --- IDamageable (Shootlock) ---
+
+	/// <summary>
+	/// Called when the door takes damage (e.g. from gunfire). Damages the lock if applicable.
+	/// </summary>
+	public void OnDamage( in DamageInfo damage )
+	{
+		if ( !IsLocked ) return;
+		if ( LockHealth <= 0 ) return;
+		if ( !Config.HexConfig.Get<bool>( "door.breachable", true ) ) return;
+
+		var attacker = damage.Attacker?.GetComponentInParent<HexPlayerComponent>();
+
+		ApplyLockDamage( attacker, damage.Damage );
+	}
+
 	// --- Door Actions ---
 
 	/// <summary>
@@ -159,6 +192,75 @@ public sealed class DoorComponent : Component, Component.IPressable
 	{
 		IsLocked = locked;
 		_data.IsLocked = locked;
+	}
+
+	// --- Breach / Kick ---
+
+	/// <summary>
+	/// Attempt to kick the door. Uses ActionBarManager for a timed action.
+	/// Schema decides how to trigger this (keybind, alt-use, command, etc.).
+	/// </summary>
+	public void TryKick( HexPlayerComponent player )
+	{
+		if ( player == null ) return;
+		if ( !IsLocked || LockHealth <= 0 ) return;
+		if ( !Config.HexConfig.Get<bool>( "door.kickEnabled", true ) ) return;
+
+		// Permission hook
+		if ( !HexEvents.CanAll<ICanKickDoorListener>(
+			x => x.CanKickDoor( player, this ) ) )
+			return;
+
+		var kickTime = Config.HexConfig.Get<float>( "door.kickTime", 3.0f );
+
+		Interaction.ActionBarManager.DoStaredAction( player, GameObject, "Kicking...", kickTime,
+			( p ) =>
+			{
+				if ( !IsLocked || LockHealth <= 0 ) return;
+
+				var kickDamage = Config.HexConfig.Get<int>( "door.kickDamage", 34 );
+				ApplyLockDamage( p, kickDamage );
+			}
+		);
+	}
+
+	/// <summary>
+	/// Apply damage to the lock. If health reaches 0, the lock is breached.
+	/// </summary>
+	private void ApplyLockDamage( HexPlayerComponent attacker, float damage )
+	{
+		LockHealth = Math.Max( 0, LockHealth - (int)damage );
+
+		HexEvents.Fire<IDoorDamagedListener>(
+			x => x.OnDoorDamaged( attacker, this, damage, LockHealth ) );
+
+		if ( LockHealth <= 0 )
+		{
+			// Breach the lock
+			IsLocked = false;
+			_data.IsLocked = false;
+			IsOpen = true;
+
+			HexLog.Add( LogType.Door, attacker,
+				$"Breached door \"{DoorName}\" ({DoorId})" );
+
+			HexEvents.Fire<IDoorBreachedListener>(
+				x => x.OnDoorBreached( attacker, this ) );
+
+			SaveData();
+		}
+	}
+
+	/// <summary>
+	/// Repair the lock to full health and re-lock the door.
+	/// Schema decides when to call this (admin command, timed auto-repair, map reset, etc.).
+	/// </summary>
+	public void RepairLock()
+	{
+		LockHealth = MaxLockHealth;
+		_data.LockHealth = MaxLockHealth;
+		SetLocked( true );
+		SaveData();
 	}
 
 	// --- Authorization ---
@@ -280,6 +382,11 @@ public sealed class DoorComponent : Component, Component.IPressable
 	internal void SaveData()
 	{
 		if ( _data == null ) return;
+
+		// Persist lock health
+		_data.LockHealth = LockHealth;
+		_data.MaxLockHealth = MaxLockHealth;
+
 		DoorManager.SaveDoor( _data );
 	}
 
@@ -324,4 +431,37 @@ public interface IDoorUsedListener
 public interface IDoorOwnerChangedListener
 {
 	void OnDoorOwnerChanged( DoorComponent door, string oldOwnerId, string newOwnerId, bool isFaction );
+}
+
+/// <summary>
+/// Fired when a door's lock takes damage from shooting or kicking.
+/// </summary>
+public interface IDoorDamagedListener
+{
+	/// <summary>
+	/// Called when a door's lock is damaged.
+	/// </summary>
+	void OnDoorDamaged( HexPlayerComponent attacker, DoorComponent door, float damage, int remainingHealth );
+}
+
+/// <summary>
+/// Fired when a door's lock is destroyed and the door is breached open.
+/// </summary>
+public interface IDoorBreachedListener
+{
+	/// <summary>
+	/// Called when a door's lock breaks and the door swings open.
+	/// </summary>
+	void OnDoorBreached( HexPlayerComponent attacker, DoorComponent door );
+}
+
+/// <summary>
+/// Permission hook: can a player kick this door? Return false to block.
+/// </summary>
+public interface ICanKickDoorListener
+{
+	/// <summary>
+	/// Called before a player attempts to kick a door.
+	/// </summary>
+	bool CanKickDoor( HexPlayerComponent player, DoorComponent door );
 }

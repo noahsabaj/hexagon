@@ -38,6 +38,7 @@ public sealed class HexagonFramework : Component
 
 		// Phase 2 - Characters & Factions
 		Factions.FactionManager.Initialize();
+		Factions.LoadoutManager.Initialize();
 		Characters.CharacterManager.Initialize();
 		Characters.RecognitionManager.Initialize();
 

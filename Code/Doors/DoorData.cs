@@ -32,6 +32,16 @@ public class DoorData
 	public List<string> AccessList { get; set; } = new();
 
 	/// <summary>
+	/// Current lock health. -1 = use config default; 0 = broken.
+	/// </summary>
+	public int LockHealth { get; set; } = -1;
+
+	/// <summary>
+	/// Maximum lock health. -1 = use config default.
+	/// </summary>
+	public int MaxLockHealth { get; set; } = -1;
+
+	/// <summary>
 	/// Whether this door has any owner.
 	/// </summary>
 	public bool HasOwner => !string.IsNullOrEmpty( OwnerCharacterId ) || !string.IsNullOrEmpty( OwnerFactionId );

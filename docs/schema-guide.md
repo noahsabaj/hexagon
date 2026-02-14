@@ -363,6 +363,47 @@ List<ClassDefinition> classes = FactionManager.GetClassesForFaction( "police" );
 bool canJoin = FactionManager.CanJoinFaction( "police" ); // checks MaxPlayers
 ```
 
+### Class Loadouts
+
+Classes can define a **loadout** -- a list of items automatically granted to characters. Configure when the loadout is applied using `LoadoutMode`:
+
+- **`OnCreate`** (default) -- items given once when the character is first created.
+- **`OnLoad`** -- items given every time the character loads (including creation).
+
+```csharp
+var officer = TypeLibrary.Create<ClassDefinition>();
+officer.UniqueId = "officer";
+officer.Name = "Officer";
+officer.FactionId = "police";
+officer.LoadoutMode = LoadoutMode.OnCreate;
+officer.Loadout = new List<LoadoutEntry>
+{
+    new LoadoutEntry { ItemDefinitionId = "weapon_pistol", Count = 1 },
+    new LoadoutEntry { ItemDefinitionId = "ammo_9mm", Count = 2 },
+    new LoadoutEntry { ItemDefinitionId = "outfit_police", Count = 1 }
+};
+FactionManager.RegisterClass( officer );
+```
+
+With asset files, configure the `Loadout` and `LoadoutMode` properties in the `.class` asset editor.
+
+**Hooks:**
+
+- `ICanApplyLoadoutListener` -- return false to block a loadout from being applied.
+- `ILoadoutAppliedListener` -- fired after loadout items are granted.
+
+```csharp
+public interface ICanApplyLoadoutListener
+{
+    bool CanApplyLoadout( HexPlayerComponent player, HexCharacter character, ClassDefinition classDef );
+}
+
+public interface ILoadoutAppliedListener
+{
+    void OnLoadoutApplied( HexPlayerComponent player, HexCharacter character, List<ItemInstance> items );
+}
+```
+
 ---
 
 ## 5. Items
@@ -385,6 +426,7 @@ Hexagon ships with several `ItemDefinition` subclasses for common RP item types:
 | `OutfitItemDef` | `OutfitModel`, `Bodygroups`, `Slot` | Wear/take off actions. Applies clothing to the character model. |
 | `CurrencyItemDef` | `DefaultAmount` | Adds to character money on use. Pick up action. |
 | `AmmoItemDef` | `AmmoType`, `AmmoAmount` | Loads into compatible weapons. Use action. |
+| `ConsumableItemDef` | `UseTime`, `UseSound`, `ConsumeVerb` | Timed or instant consumption. Override `OnConsume` for effects. |
 
 ### Registering Items
 
@@ -446,6 +488,18 @@ ammo.Category = "Ammo";
 ammo.AmmoType = "9mm";
 ammo.AmmoAmount = 12;
 ItemManager.Register( ammo );
+
+// Consumable
+var medkit = TypeLibrary.Create<ConsumableItemDef>();
+medkit.UniqueId = "consumable_medkit";
+medkit.DisplayName = "Medkit";
+medkit.Description = "A first-aid kit. Restores health.";
+medkit.Width = 1;
+medkit.Height = 1;
+medkit.Category = "Medical";
+medkit.UseTime = 3f;
+medkit.ConsumeVerb = "Healing...";
+ItemManager.Register( medkit );
 ```
 
 **Note:** Use `DisplayName` (not `Name`) for the item's display name.
@@ -457,6 +511,46 @@ ItemInstance item = ItemManager.CreateInstance( "weapon_pistol", characterId );
 ```
 
 This creates a new database-backed instance of the "weapon_pistol" definition, owned by the specified character.
+
+### Consumable Items
+
+`ConsumableItemDef` provides a base class for food, drinks, medical supplies, and other items consumed on use. It supports both instant and timed consumption with an action bar.
+
+**Creating a custom consumable:**
+
+```csharp
+public class MedkitDef : ConsumableItemDef
+{
+    [Property] public int HealAmount { get; set; } = 50;
+
+    public override bool OnConsume( HexPlayerComponent player, ItemInstance item )
+    {
+        // Apply healing effect
+        var health = AttributeManager.GetAttribute( player.Character, "health" );
+        AttributeManager.SetAttribute( player.Character, "health", health + HealAmount );
+        return true; // true = destroy the item, false = keep it
+    }
+}
+```
+
+**ConsumableItemDef properties:**
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `UseTime` | `float` | 0 | Seconds to consume. 0 = instant. |
+| `UseSound` | `string` | "" | Sound to play when consumption starts. |
+| `ConsumeVerb` | `string` | "Using" | Action bar text (e.g. "Eating...", "Drinking..."). |
+
+If `UseTime > 0`, the framework uses `ActionBarManager.DoStaredAction` -- the player must stay still and looking at their target for the duration. If they move or look away, consumption is cancelled.
+
+**Hook:** `IItemConsumedListener` fires after successful consumption:
+
+```csharp
+public interface IItemConsumedListener
+{
+    void OnItemConsumed( HexPlayerComponent player, ItemInstance item );
+}
+```
 
 ### Custom Item Behavior
 
@@ -1010,6 +1104,42 @@ A player can use a door if any of the following are true (checked in order):
 
 **Hooks:** `ICanUseDoorListener`, `IDoorUsedListener`, `IDoorOwnerChangedListener`.
 
+##### Door Breach System
+
+Doors support lock breaching via damage (shootlock) and kicking. When a locked door's `LockHealth` reaches 0, the lock breaks and the door swings open.
+
+**Shootlock:** `DoorComponent` implements `Component.IDamageable`. Any damage source (bullets, explosions) reduces lock health when the door is locked and `door.breachable` is enabled.
+
+**Kicking:** Call `DoorComponent.TryKick(player)` to start a timed kick action. The framework handles the action bar and damage. Schema decides how to trigger it (keybind, alt-use, command, etc.).
+
+```csharp
+// In a command or keybind handler:
+var door = trace.GameObject?.GetComponent<DoorComponent>();
+if ( door != null )
+    door.TryKick( player );
+
+// Repair a breached lock:
+door.RepairLock(); // Resets health to max and re-locks
+```
+
+**Breach config:**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `door.breachable` | bool | true | Enable shootlock globally. |
+| `door.lockHealth` | int | 100 | Default lock HP. |
+| `door.kickEnabled` | bool | true | Enable door kicking. |
+| `door.kickDamage` | int | 34 | Damage per kick (3 kicks to breach at default). |
+| `door.kickTime` | float | 3.0 | Kick action duration in seconds. |
+
+Per-door lock health is persisted in `DoorData.LockHealth` and `DoorData.MaxLockHealth`. Set to -1 to use config defaults.
+
+**Breach hooks:**
+
+- `IDoorDamagedListener` -- fired when a lock takes damage.
+- `IDoorBreachedListener` -- fired when a lock breaks.
+- `ICanKickDoorListener` -- return false to prevent kicking.
+
 #### StorageComponent
 
 World containers with grid inventories. Place this component on a prop in your scene.
@@ -1314,6 +1444,11 @@ HexConfig.Add( "gameplay.walkSpeed", 200f, "Walk speed", "Gameplay",
 | `notification.maxVisible` | 5 | Max simultaneous toast notifications. |
 | `crosshair.enabled` | true | Show crosshair on screen. |
 | `crosshair.hideWhenLowered` | true | Hide crosshair when weapon is lowered. |
+| `door.breachable` | true | Enable shootlock (lock damage) globally. |
+| `door.lockHealth` | 100 | Default lock HP for breachable doors. |
+| `door.kickEnabled` | true | Enable door kicking globally. |
+| `door.kickDamage` | 34 | Damage per kick (3 kicks to breach at default). |
+| `door.kickTime` | 3.0 | Kick action duration in seconds. |
 
 ---
 
@@ -1472,7 +1607,45 @@ public interface IDoorUsedListener
 
 public interface IDoorOwnerChangedListener
 {
-    void OnDoorOwnerChanged( DoorComponent door, string oldOwner, string newOwner );
+    void OnDoorOwnerChanged( DoorComponent door, string oldOwnerId, string newOwnerId, bool isFaction );
+}
+
+public interface IDoorDamagedListener
+{
+    void OnDoorDamaged( HexPlayerComponent attacker, DoorComponent door, float damage, int remainingHealth );
+}
+
+public interface IDoorBreachedListener
+{
+    void OnDoorBreached( HexPlayerComponent attacker, DoorComponent door );
+}
+
+public interface ICanKickDoorListener
+{
+    bool CanKickDoor( HexPlayerComponent player, DoorComponent door );
+}
+```
+
+#### Items
+
+```csharp
+public interface IItemConsumedListener
+{
+    void OnItemConsumed( HexPlayerComponent player, ItemInstance item );
+}
+```
+
+#### Loadouts
+
+```csharp
+public interface ICanApplyLoadoutListener
+{
+    bool CanApplyLoadout( HexPlayerComponent player, HexCharacter character, ClassDefinition classDef );
+}
+
+public interface ILoadoutAppliedListener
+{
+    void OnLoadoutApplied( HexPlayerComponent player, HexCharacter character, List<ItemInstance> items );
 }
 ```
 

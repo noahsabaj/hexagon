@@ -45,6 +45,11 @@ internal static class DefaultConfigs
 
 		// Doors
 		HexConfig.Add( "door.allowFactionOwnership", true, "Allow factions to own doors", "Doors" );
+		HexConfig.Add( "door.breachable", true, "Enable shootlock (lock damage) globally", "Doors" );
+		HexConfig.Add( "door.lockHealth", 100, "Default lock HP for breachable doors", "Doors" );
+		HexConfig.Add( "door.kickEnabled", true, "Enable door kicking globally", "Doors" );
+		HexConfig.Add( "door.kickDamage", 34, "Damage per kick (3 kicks to break at default)", "Doors" );
+		HexConfig.Add( "door.kickTime", 3.0f, "Kick action duration in seconds", "Doors" );
 
 		// Vendors
 		HexConfig.Add( "vendor.maxItems", 50, "Maximum items per vendor catalog", "Vendors" );
