@@ -62,3 +62,10 @@ Code/
 ## License
 
 Hexagon is dual-licensed under the [MIT License](LICENSE-MIT) and [Apache License 2.0](LICENSE-APACHE), at your option.
+
+**What does this mean?** Both are permissive open-source licenses — you can freely use, modify, and distribute Hexagon in your own projects (including commercial servers) without paying anything. You just pick whichever license you prefer:
+
+- **MIT** — The simplest option. Just keep the copyright notice in your project and you're good.
+- **Apache 2.0** — Same freedom as MIT, but also includes explicit patent protection (useful for larger projects or organizations).
+
+**TL;DR:** Use Hexagon however you want. Build your schema, run your server, sell VIP packages — no restrictions. Just don't remove the license file.

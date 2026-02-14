@@ -31,7 +31,7 @@ ChatPanel {
 	}
 
 	.message-text {
-		word-wrap: break-word;
+		word-break: break-all;
 	}
 
 	.chat-input-area {

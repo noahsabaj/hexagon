@@ -1,11 +1,50 @@
 namespace Hexagon.Characters;
 
 /// <summary>
-/// Static helper that builds a default player GameObject when no custom PlayerPrefab is assigned.
-/// Adds PlayerController (movement, camera, interaction), citizen model, and Dresser.
+/// Static helper that builds and tears down player bodies.
+/// On connect, players are bare networked objects. When a character loads,
+/// BuildPlayerBody() adds the full player (PlayerController, model, Dresser).
+/// When a character unloads, StripPlayerBody() removes everything.
 /// </summary>
 public static class HexPlayerSetup
 {
+	/// <summary>
+	/// Build the full player body on an existing networked GameObject.
+	/// Called when a character is loaded for the first time (or after switching characters).
+	/// </summary>
+	public static void BuildPlayerBody( HexPlayerComponent player, GameObject prefab = null )
+	{
+		if ( prefab != null )
+		{
+			// Clone prefab as child of the existing networked GO
+			var clone = prefab.Clone();
+			clone.Parent = player.GameObject;
+			clone.LocalPosition = Vector3.Zero;
+		}
+		else
+		{
+			BuildDefaultPlayer( player.GameObject );
+		}
+	}
+
+	/// <summary>
+	/// Strip the player body back to a bare networked object.
+	/// Removes PlayerController, WeaponRaise, and all child objects (Body, etc.).
+	/// </summary>
+	public static void StripPlayerBody( GameObject playerGo )
+	{
+		var controller = playerGo.GetComponent<PlayerController>();
+		if ( controller != null ) controller.Destroy();
+
+		var weaponRaise = playerGo.GetComponent<Interaction.WeaponRaiseComponent>();
+		if ( weaponRaise != null ) weaponRaise.Destroy();
+
+		foreach ( var child in playerGo.Children.ToList() )
+		{
+			child.Destroy();
+		}
+	}
+
 	/// <summary>
 	/// Configure a bare GameObject as a fully functional first-person player.
 	/// Adds PlayerController, SkinnedModelRenderer (citizen), and Dresser.

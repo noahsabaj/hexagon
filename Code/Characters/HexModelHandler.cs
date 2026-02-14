@@ -7,10 +7,17 @@ namespace Hexagon.Characters;
 public sealed class HexModelHandler : Component, ICharacterLoadedListener
 {
 	/// <summary>
-	/// When a character loads, apply their model and speed settings.
+	/// When a character loads, build the player body (if needed) and apply model/speeds.
 	/// </summary>
 	public void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
 	{
+		// Build player body if not yet built
+		if ( player.GetComponent<PlayerController>() == null )
+		{
+			var prefab = player.Scene.GetAll<HexGameManager>().FirstOrDefault()?.PlayerPrefab;
+			HexPlayerSetup.BuildPlayerBody( player, prefab );
+		}
+
 		HexPlayerSetup.ApplyCharacterToPlayer( player, character );
 	}
 }

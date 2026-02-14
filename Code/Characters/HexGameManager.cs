@@ -1,24 +1,20 @@
 namespace Hexagon.Characters;
 
 /// <summary>
-/// Handles player connections and spawning. Attach this to a GameObject in your scene
-/// alongside HexagonFramework.
+/// Handles player connections and spawning. Auto-added to HexagonFramework.
 ///
 /// When a player connects:
-/// 1. Spawns the PlayerPrefab (or a default first-person player if no prefab is assigned)
-/// 2. Loads their character list
-/// 3. Fires IPlayerConnectedListener
-/// 4. Auto-loads their last character (or sends character list to client)
+/// 1. Creates a bare networked GameObject with HexPlayerComponent (no body yet)
+/// 2. Loads their character list and shows CharacterSelect UI
+/// 3. After character selection, builds the full player body (PlayerController, model, etc.)
 ///
-/// When no PlayerPrefab is set, the default player includes PlayerController (movement,
-/// camera, interaction), a citizen model with Dresser, configured for first-person RP.
+/// The player has no physical presence until they select a character.
 /// </summary>
 public sealed class HexGameManager : Component, Component.INetworkListener
 {
 	/// <summary>
-	/// Optional prefab to spawn for each connecting player. If null, a default first-person
-	/// player is created with PlayerController, citizen model, and Dresser.
-	/// If set, must have a HexPlayerComponent (one will be added automatically if missing).
+	/// Optional prefab to spawn for each player when their character loads.
+	/// If null, a default first-person player is built (PlayerController, citizen model, Dresser).
 	/// </summary>
 	[Property] public GameObject PlayerPrefab { get; set; }
 
@@ -52,42 +48,27 @@ public sealed class HexGameManager : Component, Component.INetworkListener
 	{
 		Log.Info( $"Hexagon: Player connecting - {connection.DisplayName} ({connection.SteamId})" );
 
-		// Determine spawn position
+		// Determine spawn position (stored for when body is built later)
 		var spawnPos = SpawnPosition;
 		spawnPos = HexEvents.Reduce<IPlayerSpawnListener, Vector3>(
 			spawnPos, ( listener, pos ) => listener.GetSpawnPosition( connection, pos )
 		);
 
-		// Spawn player GameObject
-		GameObject playerGo;
+		// Create bare networking object — no body until character loads
+		var playerGo = new GameObject( true, $"Player - {connection.DisplayName}" );
+		playerGo.WorldPosition = spawnPos;
 
-		if ( PlayerPrefab != null )
-		{
-			playerGo = PlayerPrefab.Clone( new Transform( spawnPos ) );
-		}
-		else
-		{
-			playerGo = new GameObject( true, $"Player - {connection.DisplayName}" );
-			playerGo.WorldPosition = spawnPos;
-			HexPlayerSetup.BuildDefaultPlayer( playerGo );
-		}
-
-		// Ensure HexPlayerComponent exists
 		var player = playerGo.GetOrAddComponent<HexPlayerComponent>();
 		player.SteamId = connection.SteamId;
 		player.DisplayName = connection.DisplayName;
 		player.Connection = connection;
 
-		// Network the player GameObject
 		playerGo.NetworkSpawn( connection );
 
-		// Track the player
 		Players[connection.SteamId] = player;
 
-		// Fire connection event
 		HexEvents.Fire<IPlayerConnectedListener>( x => x.OnPlayerConnected( player, connection ) );
 
-		// Load character data
 		CharacterManager.OnPlayerConnected( player );
 	}
 

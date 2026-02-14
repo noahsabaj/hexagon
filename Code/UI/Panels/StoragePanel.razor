@@ -10,7 +10,8 @@
 @implements IInventoryUpdatedListener
 @implements IInventoryRemovedListener
 
-<root class="storage-panel hex-overlay" style="display: @(IsOpen ? "flex" : "none")">
+<root style="display: @(IsOpen ? "flex" : "none")">
+	<div class="storage-panel-overlay">
 	<div class="storage-container hex-panel">
 		<div class="storage-header">
 			<span class="storage-title">Storage</span>
@@ -78,6 +79,7 @@
 				}
 			</div>
 		</div>
+	</div>
 	</div>
 </root>
 

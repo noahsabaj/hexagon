@@ -387,7 +387,7 @@ void SetValue( HexCharacterData data, object value )
 
 ### HexGameManager (sealed) : Component, Component.INetworkListener
 
-Handles player connections and spawning. Attach this to a GameObject in your scene alongside HexagonFramework. When a player connects: 1. Spawns the PlayerPrefab (or a default first-person player if no prefab is assigned) 2. Loads their character list 3. Fires IPlayerConnectedListener 4. Auto-loads their last character (or sends character list to client) When no PlayerPrefab is set, the default player includes PlayerController (movement, camera, interaction), a citizen model with Dresser, configured for first-person RP.
+Handles player connections and spawning. Auto-added to HexagonFramework. When a player connects: 1. Creates a bare networked GameObject with HexPlayerComponent (no body yet) 2. Loads their character list and shows CharacterSelect UI 3. After character selection, builds the full player body (PlayerController, model, etc.) The player has no physical presence until they select a character.
 
 ```csharp
 [Property] GameObject PlayerPrefab { get; set; }
@@ -401,7 +401,7 @@ void OnDisconnected( Connection connection )
 
 | Member | Description |
 |--------|-------------|
-| `PlayerPrefab` | Optional prefab to spawn for each connecting player. If null, a default first-person player is created with PlayerController, citizen model, and Dresser. If set, must have a HexPlayerComponent (one will be added automatically if missing). |
+| `PlayerPrefab` | Optional prefab to spawn for each player when their character loads. If null, a default first-person player is built (PlayerController, citizen model, Dresser). |
 | `SpawnPosition` | World position to spawn players at. Override via IPlayerSpawnListener. |
 | `Players` | All currently connected players. |
 | `GetPlayer` | Get a player component by Steam ID. |
@@ -419,7 +419,7 @@ void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
 
 | Member | Description |
 |--------|-------------|
-| `OnCharacterLoaded` | When a character loads, apply their model and speed settings. |
+| `OnCharacterLoaded` | When a character loads, build the player body (if needed) and apply model/speeds. |
 
 ### CharacterListEntry
 
@@ -498,15 +498,19 @@ bool DoesRecognizeLocal( HexPlayerComponent target )
 
 ### HexPlayerSetup (static)
 
-Static helper that builds a default player GameObject when no custom PlayerPrefab is assigned. Adds PlayerController (movement, camera, interaction), citizen model, and Dresser.
+Static helper that builds and tears down player bodies. On connect, players are bare networked objects. When a character loads, BuildPlayerBody() adds the full player (PlayerController, model, Dresser). When a character unloads, StripPlayerBody() removes everything.
 
 ```csharp
+static void BuildPlayerBody( HexPlayerComponent player, GameObject prefab )
+static void StripPlayerBody( GameObject playerGo )
 static void BuildDefaultPlayer( GameObject playerGo )
 static void ApplyCharacterToPlayer( HexPlayerComponent player, HexCharacter character )
 ```
 
 | Member | Description |
 |--------|-------------|
+| `BuildPlayerBody` | Build the full player body on an existing networked GameObject. Called when a character is loaded for the first time (or after switching characters). |
+| `StripPlayerBody` | Strip the player body back to a bare networked object. Removes PlayerController, WeaponRaise, and all child objects (Body, etc.). |
 | `BuildDefaultPlayer` | Configure a bare GameObject as a fully functional first-person player. Adds PlayerController, SkinnedModelRenderer (citizen), and Dresser. |
 | `ApplyCharacterToPlayer` | Apply character-specific data to an existing player (model, speeds). Called when a character loads or changes. |
 

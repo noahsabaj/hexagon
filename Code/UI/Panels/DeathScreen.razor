@@ -7,7 +7,8 @@
 @inherits PanelComponent
 @implements IHexPanel
 
-<root class="death-screen hex-overlay" style="display: @(IsOpen ? "flex" : "none")">
+<root style="display: @(IsOpen ? "flex" : "none")">
+	<div class="death-screen-overlay">
 	<div class="death-content">
 		<div class="death-title">YOU DIED</div>
 		<div class="death-subtitle text-muted">
@@ -25,6 +26,7 @@
 				onclick="@OnRespawn">
 			Respawn
 		</button>
+	</div>
 	</div>
 </root>
 

@@ -11,7 +11,8 @@
 @implements IVendorCatalogReceivedListener
 @implements IVendorResultListener
 
-<root class="vendor-panel hex-overlay" style="display: @(IsOpen ? "flex" : "none")">
+<root style="display: @(IsOpen ? "flex" : "none")">
+	<div class="vendor-panel-overlay">
 	<div class="vendor-container hex-panel">
 		<div class="vendor-header">
 			<span class="vendor-title">@VendorName</span>
@@ -77,6 +78,7 @@
 				}
 			}
 		</div>
+	</div>
 	</div>
 </root>
 

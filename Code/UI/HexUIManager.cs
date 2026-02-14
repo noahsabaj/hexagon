@@ -297,6 +297,9 @@ public sealed class HexUIManager : Component, ICharacterLoadedListener, ICharact
 	{
 		if ( player.IsProxy ) return;
 
+		// Strip player body back to bare networking object
+		HexPlayerSetup.StripPlayerBody( player.GameObject );
+
 		SetState( UIState.CharacterSelect );
 	}
 
