@@ -38,29 +38,8 @@ $SchemaSectionMap = [ordered]@{
     "18" = @{ File = "Complete-Example"; Title = "Complete Example" }
 }
 
-# --- API reference namespace mapping ---
-# Namespace -> (filename without .md, display title for sidebar)
-$ApiSectionMap = [ordered]@{
-    "Hexagon.Core"         = @{ File = "API-Hexagon.Core"; Title = "Hexagon.Core" }
-    "Hexagon.Characters"   = @{ File = "API-Hexagon.Characters"; Title = "Hexagon.Characters" }
-    "Hexagon.Factions"     = @{ File = "API-Hexagon.Factions"; Title = "Hexagon.Factions" }
-    "Hexagon.Items"        = @{ File = "API-Hexagon.Items"; Title = "Hexagon.Items" }
-    "Hexagon.Items.Bases"  = @{ File = "API-Hexagon.Items.Bases"; Title = "Hexagon.Items.Bases" }
-    "Hexagon.Inventory"    = @{ File = "API-Hexagon.Inventory"; Title = "Hexagon.Inventory" }
-    "Hexagon.Chat"         = @{ File = "API-Hexagon.Chat"; Title = "Hexagon.Chat" }
-    "Hexagon.Commands"     = @{ File = "API-Hexagon.Commands"; Title = "Hexagon.Commands" }
-    "Hexagon.Permissions"  = @{ File = "API-Hexagon.Permissions"; Title = "Hexagon.Permissions" }
-    "Hexagon.Currency"     = @{ File = "API-Hexagon.Currency"; Title = "Hexagon.Currency" }
-    "Hexagon.Attributes"   = @{ File = "API-Hexagon.Attributes"; Title = "Hexagon.Attributes" }
-    "Hexagon.Config"       = @{ File = "API-Hexagon.Config"; Title = "Hexagon.Config" }
-    "Hexagon.Logging"      = @{ File = "API-Hexagon.Logging"; Title = "Hexagon.Logging" }
-    "Hexagon.Doors"        = @{ File = "API-Hexagon.Doors"; Title = "Hexagon.Doors" }
-    "Hexagon.Storage"      = @{ File = "API-Hexagon.Storage"; Title = "Hexagon.Storage" }
-    "Hexagon.Vendors"      = @{ File = "API-Hexagon.Vendors"; Title = "Hexagon.Vendors" }
-    "Hexagon.UI"           = @{ File = "API-Hexagon.UI"; Title = "Hexagon.UI" }
-    "Hexagon.Persistence"  = @{ File = "API-Hexagon.Persistence"; Title = "Hexagon.Persistence" }
-    "Listener Interfaces"  = @{ File = "API-Listener-Interfaces"; Title = "Listener Interfaces" }
-}
+# API reference namespace mapping is discovered dynamically from api-reference.md headers.
+# No hardcoded namespace list — adding/removing namespaces in Code/ is automatically reflected.
 
 # ============================================================
 # Split schema guide
@@ -192,14 +171,13 @@ foreach ($line in $apiLines) {
     }
 }
 
-# Write API pages
+# Write API pages (filenames derived dynamically from namespace)
 foreach ($ns in $apiChunks.Keys) {
-    $mapping = $ApiSectionMap[$ns]
-    if ($null -eq $mapping) {
-        Write-Host "  WARNING: No mapping for namespace '$ns'" -ForegroundColor Yellow
-        continue
+    if ($ns -eq "Listener Interfaces") {
+        $fileName = "API-Listener-Interfaces"
+    } else {
+        $fileName = "API-$ns"
     }
-    $fileName = $mapping.File
     $content = $apiChunks[$ns]
 
     # Trim trailing empty lines
@@ -216,60 +194,42 @@ foreach ($ns in $apiChunks.Keys) {
 # Generate Home.md
 # ============================================================
 
-$homeContent = @"
-# Hexagon
+# Build Home.md with static schema guide + dynamic API links
+$homeLines = [System.Collections.Generic.List[string]]::new()
+$homeLines.Add("# Hexagon")
+$homeLines.Add("")
+$homeLines.Add("**Hexagon** is a roleplay framework library for s&box (Source 2, C#). It is the successor to [NutScript](https://github.com/NutScript/NutScript) and [Helix](https://github.com/NebulousCloud/helix) from Garry's Mod, rebuilt from the ground up for s&box's Scene/Component architecture.")
+$homeLines.Add("")
+$homeLines.Add("A **schema** is a separate s&box Game project that references the Hexagon library to create a specific RP gamemode. Hexagon provides the underlying systems; your schema defines the content, rules, and flavor of your server.")
+$homeLines.Add("")
+$homeLines.Add("## Schema Developer Guide")
+$homeLines.Add("")
+$homeLines.Add("Start here if you're building a schema.")
+$homeLines.Add("")
 
-**Hexagon** is a roleplay framework library for s&box (Source 2, C#). It is the successor to [NutScript](https://github.com/NutScript/NutScript) and [Helix](https://github.com/NebulousCloud/helix) from Garry's Mod, rebuilt from the ground up for s&box's Scene/Component architecture.
+# Schema guide links (from SchemaSectionMap — these are hand-authored sections)
+foreach ($sectionNum in $SchemaSectionMap.Keys) {
+    $mapping = $SchemaSectionMap[$sectionNum]
+    if ($null -eq $mapping.Title) { continue }
+    $homeLines.Add("- [[$($mapping.Title)|$($mapping.File)]]")
+}
 
-A **schema** is a separate s&box Game project that references the Hexagon library to create a specific RP gamemode. Hexagon provides the underlying systems; your schema defines the content, rules, and flavor of your server.
+$homeLines.Add("")
+$homeLines.Add("## API Reference")
+$homeLines.Add("")
+$homeLines.Add("Full public API surface, auto-generated from source code.")
+$homeLines.Add("")
 
-## Schema Developer Guide
+# API links (dynamically from discovered namespaces)
+foreach ($ns in $apiChunks.Keys) {
+    if ($ns -eq "Listener Interfaces") {
+        $homeLines.Add("- [[Listener Interfaces|API-Listener-Interfaces]]")
+    } else {
+        $homeLines.Add("- [[$ns|API-$ns]]")
+    }
+}
 
-Start here if you're building a schema.
-
-- [[Getting Started|Schema-Guide]] -- Project setup and first steps
-- [[Characters]] -- Multi-character system with custom data fields
-- [[Factions and Classes|Factions-and-Classes]] -- Organizational groups with per-faction classes
-- [[Items]] -- Item definitions and custom item types
-- [[Inventory]] -- Grid-based inventory system
-- [[Plugins]] -- Plugin architecture for modular features
-- [[Chat]] -- Class-based chat routing (IC, OOC, yell, whisper)
-- [[Commands]] -- Typed argument parsing, permission-gated commands
-- [[Permissions]] -- Flag-based character permissions
-- [[Currency]] -- Money management with hooks
-- [[Attributes]] -- Character stats with boost/debuff system
-- [[World Interaction|World-Interaction]] -- Doors, storage, vendors
-- [[UI Customization|UI-Customization]] -- Default Razor panels (all overridable)
-- [[Configuration]] -- Server and schema configuration
-- [[Events and Hooks|Events-and-Hooks]] -- Event system and listener interfaces
-- [[Logging]] -- Date-partitioned server logs
-- [[Complete Example|Complete-Example]] -- Full working schema
-
-## API Reference
-
-Full public API surface, auto-generated from source code.
-
-- [[Hexagon.Core|API-Hexagon.Core]] -- Framework entry point, events, plugins
-- [[Hexagon.Characters|API-Hexagon.Characters]] -- Character data, runtime, networking
-- [[Hexagon.Factions|API-Hexagon.Factions]] -- Factions and classes
-- [[Hexagon.Items|API-Hexagon.Items]] -- Item definitions and instances
-- [[Hexagon.Items.Bases|API-Hexagon.Items.Bases]] -- Built-in item base classes
-- [[Hexagon.Inventory|API-Hexagon.Inventory]] -- Inventory management
-- [[Hexagon.Chat|API-Hexagon.Chat]] -- Chat classes and routing
-- [[Hexagon.Commands|API-Hexagon.Commands]] -- Command definitions and parsing
-- [[Hexagon.Permissions|API-Hexagon.Permissions]] -- Permission checks
-- [[Hexagon.Currency|API-Hexagon.Currency]] -- Currency operations
-- [[Hexagon.Attributes|API-Hexagon.Attributes]] -- Attribute definitions and boosts
-- [[Hexagon.Config|API-Hexagon.Config]] -- Configuration system
-- [[Hexagon.Logging|API-Hexagon.Logging]] -- Log manager
-- [[Hexagon.Doors|API-Hexagon.Doors]] -- Door system
-- [[Hexagon.Storage|API-Hexagon.Storage]] -- World storage containers
-- [[Hexagon.Vendors|API-Hexagon.Vendors]] -- Vendor buy/sell system
-- [[Hexagon.UI|API-Hexagon.UI]] -- UI manager and panels
-- [[Hexagon.Persistence|API-Hexagon.Persistence]] -- Database manager
-- [[Listener Interfaces|API-Listener-Interfaces]] -- All hook/event interfaces
-"@
-
+$homeContent = $homeLines -join "`n"
 $homeContent | Out-File -FilePath (Join-Path $OutDir "Home.md") -Encoding UTF8
 Write-Host "  Generated: Home.md"
 
@@ -296,12 +256,13 @@ $sidebarLines.Add("")
 $sidebarLines.Add("**API Reference**")
 $sidebarLines.Add("")
 
-# API reference sidebar entries
-foreach ($ns in $ApiSectionMap.Keys) {
-    $mapping = $ApiSectionMap[$ns]
-    $file = $mapping.File
-    $title = $mapping.Title
-    $sidebarLines.Add("- [[$title|$file]]")
+# API reference sidebar entries (dynamically from discovered namespaces)
+foreach ($ns in $apiChunks.Keys) {
+    if ($ns -eq "Listener Interfaces") {
+        $sidebarLines.Add("- [[Listener Interfaces|API-Listener-Interfaces]]")
+    } else {
+        $sidebarLines.Add("- [[$ns|API-$ns]]")
+    }
 }
 
 $sidebarContent = $sidebarLines -join "`n"

@@ -11,66 +11,8 @@ $RootDir = Split-Path -Parent $ScriptDir
 $CodeDir = Join-Path $RootDir "Code"
 $OutputFile = Join-Path (Join-Path $RootDir "docs") "api-reference.md"
 
-# Namespace display order
-$NamespaceOrder = @(
-    "Hexagon.Core"
-    "Hexagon.Characters"
-    "Hexagon.Factions"
-    "Hexagon.Items"
-    "Hexagon.Items.Bases"
-    "Hexagon.Inventory"
-    "Hexagon.Chat"
-    "Hexagon.Commands"
-    "Hexagon.Permissions"
-    "Hexagon.Currency"
-    "Hexagon.Attributes"
-    "Hexagon.Config"
-    "Hexagon.Logging"
-    "Hexagon.Doors"
-    "Hexagon.Storage"
-    "Hexagon.Vendors"
-    "Hexagon.UI"
-    "Hexagon.Persistence"
-)
-
-# Friendly namespace display names
-$NamespaceNames = @{
-    "Hexagon.Core"        = "Hexagon.Core"
-    "Hexagon.Characters"  = "Hexagon.Characters"
-    "Hexagon.Factions"    = "Hexagon.Factions"
-    "Hexagon.Items"       = "Hexagon.Items"
-    "Hexagon.Items.Bases" = "Hexagon.Items.Bases"
-    "Hexagon.Inventory"   = "Hexagon.Inventory"
-    "Hexagon.Chat"        = "Hexagon.Chat"
-    "Hexagon.Commands"    = "Hexagon.Commands"
-    "Hexagon.Permissions" = "Hexagon.Permissions"
-    "Hexagon.Currency"    = "Hexagon.Currency"
-    "Hexagon.Attributes"  = "Hexagon.Attributes"
-    "Hexagon.Config"      = "Hexagon.Config"
-    "Hexagon.Logging"     = "Hexagon.Logging"
-    "Hexagon.Doors"       = "Hexagon.Doors"
-    "Hexagon.Storage"     = "Hexagon.Storage"
-    "Hexagon.Vendors"     = "Hexagon.Vendors"
-    "Hexagon.UI"          = "Hexagon.UI"
-    "Hexagon.Persistence" = "Hexagon.Persistence"
-}
-
-# Listener interface category mapping (namespace -> category name)
-$ListenerCategories = @{
-    "Hexagon.Core"        = "Framework Lifecycle"
-    "Hexagon.Characters"  = "Characters & Players"
-    "Hexagon.Chat"        = "Chat"
-    "Hexagon.Commands"    = "Commands"
-    "Hexagon.Permissions" = "Permissions"
-    "Hexagon.Currency"    = "Currency"
-    "Hexagon.Attributes"  = "Attributes"
-    "Hexagon.Doors"       = "Doors"
-    "Hexagon.Storage"     = "Storage"
-    "Hexagon.Vendors"     = "Vendors"
-    "Hexagon.Inventory"   = "Inventory"
-    "Hexagon.UI"          = "UI"
-    "Hexagon.Logging"     = "Logging"
-}
+# Namespace order and listener categories are discovered dynamically from parsed source.
+# No hardcoded namespace lists — adding/removing namespaces in Code/ is automatically reflected.
 
 # ---- Data Model ----
 
@@ -386,7 +328,7 @@ foreach ($ns in $byNamespace.Keys) {
     $regularTypes[$ns] = @()
     foreach ($type in $byNamespace[$ns]) {
         if ($type.IsListener) {
-            $cat = if ($ListenerCategories.ContainsKey($ns)) { $ListenerCategories[$ns] } else { $ns }
+            $cat = if ($ns -match '^Hexagon\.(.+)$') { $Matches[1] } else { $ns }
             if (-not $listeners.ContainsKey($cat)) {
                 $listeners[$cat] = @()
             }
@@ -396,6 +338,9 @@ foreach ($ns in $byNamespace.Keys) {
         }
     }
 }
+
+# Build namespace order dynamically: Hexagon.Core first, then alphabetical
+$NamespaceOrder = @("Hexagon.Core") + @($regularTypes.Keys | Where-Object { $_ -ne "Hexagon.Core" } | Sort-Object)
 
 # ---- Generate Markdown ----
 
@@ -493,21 +438,8 @@ foreach ($ns in $NamespaceOrder) {
 [void]$sb.AppendLine("")
 
 # Sort categories by the namespace order
-$listenerCategoryOrder = @(
-    "Framework Lifecycle"
-    "Characters & Players"
-    "Chat"
-    "Commands"
-    "Permissions"
-    "Currency"
-    "Attributes"
-    "Doors"
-    "Storage"
-    "Vendors"
-    "Inventory"
-    "UI"
-    "Logging"
-)
+# Build listener category order dynamically: Core first, then alphabetical
+$listenerCategoryOrder = @("Core") + @($listeners.Keys | Where-Object { $_ -ne "Core" } | Sort-Object)
 
 foreach ($cat in $listenerCategoryOrder) {
     if (-not $listeners.ContainsKey($cat) -or $listeners[$cat].Count -eq 0) { continue }
