@@ -470,7 +470,7 @@ public sealed class HexPlayerComponent : Component
 
 		if ( player.Character == null )
 		{
-			Chat.ChatManager.SendSystemMessage( player, "You have no active character." );
+			UI.NotificationManager.Send( player, "You have no active character." );
 			return;
 		}
 
@@ -494,18 +494,18 @@ public sealed class HexPlayerComponent : Component
 					if ( targetPlayer != null && targetPlayer.Character != null )
 					{
 						if ( RecognitionManager.IntroduceToTarget( player, targetPlayer ) )
-							Chat.ChatManager.SendSystemMessage( player, "You introduced yourself." );
+							UI.NotificationManager.Send( player, "You introduced yourself." );
 						else
-							Chat.ChatManager.SendSystemMessage( player, "They already know who you are." );
+							UI.NotificationManager.Send( player, "They already know who you are." );
 					}
 					else
 					{
-						Chat.ChatManager.SendSystemMessage( player, "You must be looking at a player." );
+						UI.NotificationManager.Send( player, "You must be looking at a player." );
 					}
 				}
 				else
 				{
-					Chat.ChatManager.SendSystemMessage( player, "You must be looking at a player." );
+					UI.NotificationManager.Send( player, "You must be looking at a player." );
 				}
 				break;
 			}
@@ -513,24 +513,36 @@ public sealed class HexPlayerComponent : Component
 			{
 				var range = Config.HexConfig.Get<float>( "chat.whisperRange", 100f );
 				var count = RecognitionManager.IntroduceToRange( player, range );
-				Chat.ChatManager.SendSystemMessage( player, $"You introduced yourself to {count} nearby people." );
+				UI.NotificationManager.Send( player, $"You introduced yourself to {count} nearby people." );
 				break;
 			}
 			case 2:
 			{
 				var range = Config.HexConfig.Get<float>( "chat.icRange", 300f );
 				var count = RecognitionManager.IntroduceToRange( player, range );
-				Chat.ChatManager.SendSystemMessage( player, $"You introduced yourself to {count} nearby people." );
+				UI.NotificationManager.Send( player, $"You introduced yourself to {count} nearby people." );
 				break;
 			}
 			case 3:
 			{
 				var range = Config.HexConfig.Get<float>( "chat.yellRange", 600f );
 				var count = RecognitionManager.IntroduceToRange( player, range );
-				Chat.ChatManager.SendSystemMessage( player, $"You introduced yourself to {count} nearby people." );
+				UI.NotificationManager.Send( player, $"You introduced yourself to {count} nearby people." );
 				break;
 			}
 		}
+	}
+
+	// --- Notification RPC ---
+
+	/// <summary>
+	/// Server sends a toast notification to the owning client.
+	/// </summary>
+	[Rpc.Owner]
+	internal void ReceiveNotification( string message, float duration )
+	{
+		HexEvents.Fire<UI.INotificationReceivedListener>(
+			x => x.OnNotificationReceived( message, duration ) );
 	}
 
 	// --- Lifecycle ---

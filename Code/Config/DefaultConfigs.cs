@@ -54,6 +54,14 @@ internal static class DefaultConfigs
 		HexConfig.Add( "ui.deathRespawnTime", 5f, "Seconds before respawn is available", "UI" );
 		HexConfig.Add( "ui.inventoryCellSize", 64, "Inventory cell size in pixels", "UI" );
 
+		// Notifications
+		HexConfig.Add( "notification.defaultDuration", 8f, "Default toast notification duration in seconds", "Notifications" );
+		HexConfig.Add( "notification.maxVisible", 5, "Maximum simultaneous toast notifications", "Notifications" );
+
+		// Crosshair
+		HexConfig.Add( "crosshair.enabled", true, "Show crosshair on screen", "Crosshair" );
+		HexConfig.Add( "crosshair.hideWhenLowered", true, "Hide crosshair when weapon is lowered", "Crosshair" );
+
 		// Gameplay
 		HexConfig.Add( "gameplay.walkSpeed", 200f, "Default walk speed", "Gameplay" );
 		HexConfig.Add( "gameplay.runSpeed", 320f, "Default run speed", "Gameplay" );

@@ -61,6 +61,7 @@ public sealed class HexagonFramework : Component
 
 		// Phase 6 - UI Bridge
 		GameObject.GetOrAddComponent<Inventory.HexInventoryComponent>();
+		UI.NotificationManager.Initialize();
 
 		// Phase 7 - Auto-setup
 		UI.HexUISetup.EnsureUI( Scene );

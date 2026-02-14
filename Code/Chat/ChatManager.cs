@@ -111,7 +111,7 @@ public static class ChatManager
 				var result = Commands.CommandManager.Execute( sender, prefix, rest );
 				if ( !string.IsNullOrEmpty( result ) )
 				{
-					SendSystemMessage( sender, result );
+					UI.NotificationManager.Send( sender, result );
 				}
 				return;
 			}

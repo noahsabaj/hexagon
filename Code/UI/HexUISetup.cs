@@ -26,7 +26,7 @@ public static class HexUISetup
 		// State machine
 		go.AddComponent<HexUIManager>();
 
-		// All 9 default panels (must be on same GO as ScreenPanel)
+		// All default panels (must be on same GO as ScreenPanel)
 		go.AddComponent<CharacterSelect>();
 		go.AddComponent<CharacterCreate>();
 		go.AddComponent<HudPanel>();
@@ -38,5 +38,7 @@ public static class HexUISetup
 		go.AddComponent<DeathScreen>();
 		go.AddComponent<ActionBar>();
 		go.AddComponent<IntroduceMenu>();
+		go.AddComponent<NotificationPanel>();
+		go.AddComponent<CrosshairPanel>();
 	}
 }

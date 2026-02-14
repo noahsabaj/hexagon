@@ -1,0 +1,41 @@
+CrosshairPanel {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	justify-content: center;
+	align-items: center;
+	pointer-events: none;
+
+	.crosshair {
+		position: relative;
+		width: 24px;
+		height: 24px;
+		justify-content: center;
+		align-items: center;
+	}
+
+	.crosshair-line {
+		position: absolute;
+		background-color: rgba(255, 255, 255, 0.9);
+	}
+
+	.crosshair-line.horizontal {
+		width: 16px;
+		height: 2px;
+	}
+
+	.crosshair-line.vertical {
+		width: 2px;
+		height: 16px;
+	}
+
+	.crosshair-dot {
+		position: absolute;
+		width: 4px;
+		height: 4px;
+		background-color: rgba(255, 255, 255, 0.9);
+		border-radius: 50%;
+	}
+}

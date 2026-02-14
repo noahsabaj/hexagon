@@ -1755,6 +1755,24 @@ void Close()
 | `Open` | Show the panel. |
 | `Close` | Hide the panel. |
 
+### NotificationManager (static)
+
+Server-side notification system. Sends toast notifications to specific players. Use this for transient feedback (command results, errors) instead of chat messages.
+
+```csharp
+static void Send( HexPlayerComponent target, string message )
+static void Send( HexPlayerComponent target, string message, float duration )
+static void SendAll( string message )
+static void SendAll( string message, float duration )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Send` | Send a notification to a specific player with the default duration. |
+| `Send` | Send a notification to a specific player with a custom duration in seconds. |
+| `SendAll` | Send a notification to all connected players with the default duration. |
+| `SendAll` | Send a notification to all connected players with a custom duration. |
+
 ---
 
 ## Hexagon.Persistence
@@ -2063,6 +2081,12 @@ interface IChatFocusRequestListener
 interface IDeathScreenRespawnListener
 {
     void OnRespawnRequested( HexPlayerComponent player );
+}
+
+// Client-side: fired when a notification toast is received.
+interface INotificationReceivedListener
+{
+    void OnNotificationReceived( string message, float duration ); // Called on the client when a toast notification arrives.
 }
 
 ```

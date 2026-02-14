@@ -1,0 +1,54 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Characters;
+@using Hexagon.Interaction;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+
+<root class="crosshair-panel" style="display: @(IsVisible ? "flex" : "none")">
+	<div class="crosshair">
+		<div class="crosshair-line horizontal"></div>
+		<div class="crosshair-line vertical"></div>
+		<div class="crosshair-dot"></div>
+	</div>
+</root>
+
+@code
+{
+	private bool IsVisible { get; set; }
+
+	protected override void OnUpdate()
+	{
+		var player = HexUIManager.GetLocalPlayer();
+		if ( player == null || !player.HasActiveCharacter || player.IsDead )
+		{
+			IsVisible = false;
+			return;
+		}
+
+		if ( !Config.HexConfig.Get<bool>( "crosshair.enabled", true ) )
+		{
+			IsVisible = false;
+			return;
+		}
+
+		if ( Config.HexConfig.Get<bool>( "crosshair.hideWhenLowered", true ) )
+		{
+			var raiseComp = player.GameObject.GetComponent<WeaponRaiseComponent>();
+			if ( raiseComp != null && !raiseComp.IsWeaponRaised )
+			{
+				IsVisible = false;
+				return;
+			}
+		}
+
+		IsVisible = true;
+	}
+
+	protected override int BuildHash()
+	{
+		return HashCode.Combine( IsVisible );
+	}
+}

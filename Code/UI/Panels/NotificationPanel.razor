@@ -1,0 +1,109 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Characters;
+@using Hexagon.UI;
+@using Hexagon.Core;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+@implements INotificationReceivedListener
+
+<root class="notification-panel">
+	@foreach ( var entry in _visibleEntries )
+	{
+		<div class="notification-entry"
+			 onmouseover=@(() => entry.Pause())
+			 onmouseout=@(() => entry.Resume())>
+			<div class="notification-text">@entry.Message</div>
+			<div class="notification-progress">
+				<div class="notification-fill" style="width: @entry.ProgressPercent%"></div>
+			</div>
+		</div>
+	}
+</root>
+
+@code
+{
+	private List<NotificationEntry> _entries = new();
+	private List<NotificationEntry> _visibleEntries = new();
+
+	public void OnNotificationReceived( string message, float duration )
+	{
+		var maxVisible = Config.HexConfig.Get<int>( "notification.maxVisible", 5 );
+
+		_entries.Add( new NotificationEntry
+		{
+			Message = message,
+			Duration = duration,
+			TimeSinceCreated = 0f
+		} );
+
+		// If we exceed max, remove oldest non-paused entry
+		while ( _entries.Count > maxVisible )
+		{
+			var oldest = _entries.FirstOrDefault( e => !e.IsPaused );
+			if ( oldest != null )
+				_entries.Remove( oldest );
+			else
+				break;
+		}
+	}
+
+	protected override void OnUpdate()
+	{
+		// Remove expired entries
+		_entries.RemoveAll( e => e.IsExpired );
+
+		// Update visible list
+		_visibleEntries = _entries.ToList();
+	}
+
+	protected override int BuildHash()
+	{
+		// Rebuild every frame while entries exist for smooth progress bars
+		if ( _entries.Count > 0 )
+			return HashCode.Combine( Time.Now );
+
+		return HashCode.Combine( _entries.Count );
+	}
+
+	private class NotificationEntry
+	{
+		public string Message { get; set; }
+		public float Duration { get; set; }
+		public TimeSince TimeSinceCreated { get; set; }
+		public float PausedAt { get; set; }
+
+		public bool IsExpired => !IsPaused && TimeSinceCreated > Duration;
+		public bool IsPaused => PausedAt > 0;
+
+		public int ProgressPercent
+		{
+			get
+			{
+				float ratio;
+				if ( IsPaused )
+					ratio = 1f - (PausedAt / Duration);
+				else
+					ratio = 1f - (TimeSinceCreated / Duration);
+
+				return (int)(Math.Clamp( ratio, 0f, 1f ) * 100f);
+			}
+		}
+
+		public void Pause()
+		{
+			if ( !IsPaused )
+				PausedAt = TimeSinceCreated;
+		}
+
+		public void Resume()
+		{
+			if ( IsPaused )
+			{
+				TimeSinceCreated = PausedAt;
+				PausedAt = 0;
+			}
+		}
+	}
+}

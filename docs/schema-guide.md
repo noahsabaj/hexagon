@@ -1111,6 +1111,8 @@ Transitions:
 | `Vendor` | Gameplay | Vendor buy/sell panel. |
 | `Scoreboard` | Gameplay | Player list. |
 | `DeathScreen` | Dead | Death overlay with respawn button. |
+| `NotificationPanel` | Always | Toast notifications (top-right, auto-dismiss). |
+| `CrosshairPanel` | Gameplay | Screen-center crosshair (hides when weapon lowered). |
 
 ### IHexPanel Interface
 
@@ -1191,6 +1193,55 @@ HexPlayerComponent localPlayer = HexUIManager.GetLocalPlayer();
 
 This uses `HexUIManager.Instance.Scene` internally, which is more reliable than `Scene.Active`.
 
+### Notification Toasts
+
+Hexagon includes a toast notification system for transient player feedback (command results, errors, confirmations). Notifications stack in the top-right corner with a purple progress bar that depletes over time.
+
+#### Sending Notifications (Server-Side)
+
+```csharp
+// Send with default duration (notification.defaultDuration config, default 8s)
+NotificationManager.Send( player, "Item added to inventory." );
+
+// Send with custom duration
+NotificationManager.Send( player, "You have been warned.", 12f );
+
+// Send to all connected players
+NotificationManager.SendAll( "Server restarting in 5 minutes." );
+NotificationManager.SendAll( "Event starting!", 15f );
+```
+
+Command results (from `CommandManager.Execute`) are automatically routed to toast notifications instead of chat messages.
+
+#### Listening for Notifications (Client-Side)
+
+Implement `INotificationReceivedListener` on a Component to react to incoming toasts:
+
+```csharp
+public class MyNotificationLogger : Component, INotificationReceivedListener
+{
+    public void OnNotificationReceived( string message, float duration )
+    {
+        Log.Info( $"Toast received: {message} ({duration}s)" );
+    }
+}
+```
+
+#### Hover-to-Pause
+
+Players can hover over a notification to pause its timer. The progress bar freezes and the toast won't dismiss until the mouse leaves.
+
+### Crosshair
+
+Hexagon provides a simple Razor-based crosshair panel (white cross with center dot). It integrates with the weapon raise/lower system.
+
+The crosshair is visible when:
+- The player has an active character and is alive
+- `crosshair.enabled` config is true (default)
+- The weapon is raised (when `crosshair.hideWhenLowered` is true, default)
+
+To replace the crosshair with a custom design, remove the `CrosshairPanel` component from the UI GameObject and add your own `PanelComponent` with custom SCSS.
+
 ---
 
 ## 15. Configuration
@@ -1259,6 +1310,10 @@ HexConfig.Add( "gameplay.walkSpeed", 200f, "Walk speed", "Gameplay",
 | `inventory.defaultHeight` | 4 | Default inventory grid height. |
 | `currency.symbol` | "$" | Currency display symbol. |
 | `currency.startingAmount` | 0 | Default starting money. |
+| `notification.defaultDuration` | 8 | Toast notification duration in seconds. |
+| `notification.maxVisible` | 5 | Max simultaneous toast notifications. |
+| `crosshair.enabled` | true | Show crosshair on screen. |
+| `crosshair.hideWhenLowered` | true | Hide crosshair when weapon is lowered. |
 
 ---
 
@@ -1480,6 +1535,11 @@ public interface IDeathScreenRespawnListener
 public interface IChatFocusRequestListener
 {
     void OnChatFocusRequested();
+}
+
+public interface INotificationReceivedListener
+{
+    void OnNotificationReceived( string message, float duration );
 }
 ```
 
