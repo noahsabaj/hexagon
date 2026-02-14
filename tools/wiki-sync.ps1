@@ -59,7 +59,6 @@ $ApiSectionMap = [ordered]@{
     "Hexagon.Vendors"      = @{ File = "API-Hexagon.Vendors"; Title = "Hexagon.Vendors" }
     "Hexagon.UI"           = @{ File = "API-Hexagon.UI"; Title = "Hexagon.UI" }
     "Hexagon.Persistence"  = @{ File = "API-Hexagon.Persistence"; Title = "Hexagon.Persistence" }
-    "Hexagon.Schema"       = @{ File = "API-Hexagon.Schema"; Title = "Hexagon.Schema" }
     "Listener Interfaces"  = @{ File = "API-Listener-Interfaces"; Title = "Listener Interfaces" }
 }
 
@@ -268,7 +267,6 @@ Full public API surface, auto-generated from source code.
 - [[Hexagon.Vendors|API-Hexagon.Vendors]] -- Vendor buy/sell system
 - [[Hexagon.UI|API-Hexagon.UI]] -- UI manager and panels
 - [[Hexagon.Persistence|API-Hexagon.Persistence]] -- Database manager
-- [[Hexagon.Schema|API-Hexagon.Schema]] -- Skeleton schema reference
 - [[Listener Interfaces|API-Listener-Interfaces]] -- All hook/event interfaces
 "@
 

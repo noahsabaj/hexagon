@@ -31,7 +31,6 @@ $NamespaceOrder = @(
     "Hexagon.Vendors"
     "Hexagon.UI"
     "Hexagon.Persistence"
-    "Hexagon.Schema"
 )
 
 # Friendly namespace display names
@@ -54,7 +53,6 @@ $NamespaceNames = @{
     "Hexagon.Vendors"     = "Hexagon.Vendors"
     "Hexagon.UI"          = "Hexagon.UI"
     "Hexagon.Persistence" = "Hexagon.Persistence"
-    "Hexagon.Schema"      = "Hexagon.Schema"
 }
 
 # Listener interface category mapping (namespace -> category name)
