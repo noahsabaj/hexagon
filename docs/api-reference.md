@@ -44,35 +44,39 @@ static T GetValue<T>( Dictionary<string, object> dict, string key, T defaultValu
 |--------|-------------|
 | `GetValue` | Get a typed value from a dictionary with safe type conversion. Returns defaultValue if the key is missing, the dict is null, or conversion fails. |
 
-### HexagonFramework (sealed) : Component
+### HexagonConfigComponent (sealed) : Component
 
-The core bootstrap component for the Hexagon roleplay framework. Attach this to a persistent GameObject in your scene to initialize all systems.
+Scene-placed configuration for the Hexagon framework. Place this on a GameObject in your scene to configure spawn and player settings. Read by <see cref="HexagonSystem"/> during initialization and player connection.
 
 ```csharp
-static HexagonFramework Instance { get; set; }
+[Property] GameObject PlayerPrefab { get; set; }
+[Property] Vector3 SpawnPosition { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `PlayerPrefab` | Optional prefab to spawn for each player when their character loads. If null, a default first-person player is built (PlayerController, citizen model, Dresser). |
+| `SpawnPosition` | World position to spawn players at. Can be further modified via <see cref="IHexPlayerEvent.GetSpawnPosition"/>. |
+
+### HexagonSystem (sealed) : GameObjectSystem<HexagonSystem>, Component.INetworkListener, ISceneStartup
+
+Core Hexagon framework system. Initializes all subsystems on scene startup and manages player connections/disconnections. This is a GameObjectSystem (scene-level singleton), following the walker pattern. Place a <see cref="HexagonConfigComponent"/> in your scene to configure spawn settings.
+
+```csharp
 static bool IsInitialized { get; set; }
+readonly Dictionary<ulong, HexPlayerComponent> Players
+static HexPlayerComponent GetPlayer( ulong steamId )
+static HexPlayerComponent GetPlayer( Connection connection )
+override void Dispose()
 ```
 
 | Member | Description |
 |--------|-------------|
-| `Instance` |  |
 | `IsInitialized` | Whether the framework has finished initialization. |
-
-### HexEvents (static)
-
-Central event system for Hexagon. Provides two mechanisms: 1. Interface-based: Components implement listener interfaces and are auto-discovered via Scene. 2. Static events: Non-Component code subscribes to Action delegates.
-
-```csharp
-static void Fire<T>( Action<T> action )
-static bool CanAll<T>( Func<T, bool> check )
-static T Reduce<TListener, T>( T initial, Func<TListener, T, T> reducer )
-```
-
-| Member | Description |
-|--------|-------------|
-| `Fire` | Fires an event to all Components in the scene that implement interface T. |
-| `CanAll` | Fires a Can-style permission hook. All listeners must return true for the action to proceed. If any listener returns false, the action is blocked. |
-| `Reduce` | Fires a hook that collects a value, passing it through each listener in sequence. Each listener can modify the value before passing it to the next. |
+| `Players` | All currently connected players keyed by Steam ID. |
+| `GetPlayer` | Get a player component by Steam ID. |
+| `GetPlayer` | Get a player component by Connection. |
+| `Dispose` |  |
 
 ### IHexPlugin (interface)
 
@@ -135,6 +139,29 @@ Utility for IPressable implementations.
 ### RpcHelper (static)
 
 Utility for resolving the calling player in RPC handlers. Eliminates repeated caller validation boilerplate.
+
+### SceneEventExtensions (static)
+
+Extension methods providing CanAll and Reduce semantics on top of ISceneEvent. These patterns are not built into s&box but are essential for permission hooks and value-folding scenarios in the Hexagon framework.
+
+```csharp
+static bool CanAll<T>( Func<T, bool> check )
+static T Reduce<TListener, T>( T initial, Func<TListener, T, T> reducer )
+```
+
+| Member | Description |
+|--------|-------------|
+| `CanAll` | Permission-gate: fires a check on all listeners in the scene. All must return true for the action to proceed. If any listener returns false, the action is blocked. |
+| `Reduce` | Value-fold: passes a value through each listener in sequence, allowing each to modify it before passing to the next. |
+
+### IHexFrameworkEvent (interface) : ISceneEvent<IHexFrameworkEvent>
+
+Framework lifecycle events.
+
+```csharp
+void OnFrameworkInit()
+void OnFrameworkShutdown()
+```
 
 ---
 
@@ -214,13 +241,45 @@ static void InitializeCharacter( HexCharacter character )
 | `GetBoosts` | Get all active (non-expired) boosts for a character. |
 | `InitializeCharacter` | Initialize all registered attributes on a character with their start values. Call this when a character is first created. |
 
+### IHexAttributeEvent (interface) : ISceneEvent<IHexAttributeEvent>
+
+Character attribute value change events.
+
+```csharp
+void OnAttributeChanged( HexCharacter character, string attributeId, float oldValue, float newValue )
+```
+
 ---
 
 ## Hexagon.Characters
 
+### CharacterCrudComponent (sealed) : Component
+
+Handles character CRUD RPCs (list, create, load, delete). Satellite component on the player GameObject alongside HexPlayerComponent.
+
+```csharp
+List<CharacterListEntry> ClientCharacterList { get; set; }
+event Action OnCharacterListReceived
+event Action<bool, string
+[Rpc.Host] void RequestCharacterList()
+[Rpc.Host] void RequestLoadCharacter( string characterId )
+[Rpc.Host] void RequestCreateCharacter( string json )
+[Rpc.Host] void RequestDeleteCharacter( string characterId )
+```
+
+| Member | Description |
+|--------|-------------|
+| `ClientCharacterList` | Client-side character list received from the server. |
+| `OnCharacterListReceived` | Fired on the client when the character list is received from the server. |
+| `string` | Fired on the client when a character creation result is received. |
+| `RequestCharacterList` | Client requests their character list from the server. |
+| `RequestLoadCharacter` | Client requests to load a specific character. |
+| `RequestCreateCharacter` | Client requests to create a new character from JSON data. |
+| `RequestDeleteCharacter` | Client requests to delete a character. |
+
 ### CharacterManager (static)
 
-Manages character CRUD operations, auto-save, and CharVar metadata discovery. Initialized by HexagonFramework on startup.
+Manages character CRUD operations and CharVar metadata discovery. Initialized by HexagonSystem on startup. Auto-save is handled by <see cref="Persistence.AutoSaveSystem"/>.
 
 ```csharp
 static IReadOnlyDictionary<string, CharVarInfo> CharVars
@@ -385,41 +444,9 @@ object GetValue( HexCharacterData data )
 void SetValue( HexCharacterData data, object value )
 ```
 
-### HexGameManager (sealed) : Component, Component.INetworkListener
+### HexModelHandler (sealed) : Component, IHexCharacterEvent
 
-Handles player connections and spawning. Auto-added to HexagonFramework. When a player connects: 1. Creates a bare networked GameObject with HexPlayerComponent (no body yet) 2. Loads their character list and shows CharacterSelect UI 3. After character selection, builds the full player body (PlayerController, model, etc.) The player has no physical presence until they select a character.
-
-```csharp
-[Property] GameObject PlayerPrefab { get; set; }
-[Property] Vector3 SpawnPosition { get; set; }
-readonly Dictionary<ulong, HexPlayerComponent> Players
-static HexPlayerComponent GetPlayer( ulong steamId )
-static HexPlayerComponent GetPlayer( Connection connection )
-void OnActive( Connection connection )
-void OnDisconnected( Connection connection )
-```
-
-| Member | Description |
-|--------|-------------|
-| `PlayerPrefab` | Optional prefab to spawn for each player when their character loads. If null, a default first-person player is built (PlayerController, citizen model, Dresser). |
-| `SpawnPosition` | World position to spawn players at. Override via IPlayerSpawnListener. |
-| `Players` | All currently connected players. |
-| `GetPlayer` | Get a player component by Steam ID. |
-| `GetPlayer` | Get a player component by Connection. |
-| `OnActive` |  |
-| `OnDisconnected` |  |
-
-### HexModelHandler (sealed) : Component, ICharacterLoadedListener
-
-Listens for character load events and applies character model/speeds to the player. Added to the HexagonFramework GameObject during initialization.
-
-```csharp
-void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
-```
-
-| Member | Description |
-|--------|-------------|
-| `OnCharacterLoaded` | When a character loads, build the player body (if needed) and apply model/speeds. |
+Listens for character load events and applies character model/speeds to the player. Added to the Hexagon Services GameObject during initialization. Potential optimization: This could be converted to a per-player satellite component placed on each player's GameObject, using PostToGameObject() to only receive events for its own player. However, the current scene-wide listener approach works correctly and the overhead is negligible since only one instance processes the event for the correct player via the player parameter. The conversion would also require changing the IHexCharacterEvent broadcast mechanism in CharacterManager, which affects all other listeners (HexUIManager, RecognitionManager, etc.).
 
 ### CharacterListEntry
 
@@ -436,7 +463,7 @@ DateTime LastPlayed { get; set; }
 
 ### HexPlayerComponent (sealed) : Component
 
-Component attached to each player's GameObject. Holds the networked character data that other players need to see, plus a server-side reference to the full HexCharacter. Public data ([Sync]): visible to all players (name, model, faction). Private data: synced only to the owner via RPC when it changes.
+Core player component. Holds networked character identity data visible to all players, plus server-side references to the full character and connection. Satellite components handle specific subsystems: <list type="bullet"> <item><see cref="CharacterCrudComponent"/> — character list/create/load/delete RPCs</item> <item><see cref="Interaction.ActionBarPlayerComponent"/> — action bar client state</item> <item><see cref="RecognitionPlayerComponent"/> — recognition client state</item> <item><see cref="IntroducePlayerComponent"/> — introduce mechanic RPC</item> <item><see cref="UI.NotificationPlayerComponent"/> — notification RPC</item> </list>
 
 ```csharp
 [Sync] ulong SteamId { get; set; }
@@ -451,20 +478,7 @@ Component attached to each player's GameObject. Holds the networked character da
 [Sync] bool IsDead { get; set; }
 HexCharacter Character { get; set; }
 Connection Connection { get; set; }
-List<CharacterListEntry> ClientCharacterList { get; set; }
-event Action OnCharacterListReceived
-event Action<bool, string
-float ActionStartTime { get; set; }
-float ActionEndTime { get; set; }
-string ActionText { get; set; }
-event Action OnActionBarChanged
-[Rpc.Host] void RequestCharacterList()
-[Rpc.Host] void RequestLoadCharacter( string characterId )
-[Rpc.Host] void RequestCreateCharacter( string json )
-[Rpc.Host] void RequestDeleteCharacter( string characterId )
 T GetPrivateVar<T>( string name, T defaultValue )
-bool DoesRecognizeLocal( HexPlayerComponent target )
-[Rpc.Host] void RequestIntroduce( int level )
 ```
 
 | Member | Description |
@@ -481,20 +495,7 @@ bool DoesRecognizeLocal( HexPlayerComponent target )
 | `IsDead` |  |
 | `Character` | The active character for this player. Only valid on the server. |
 | `Connection` | The network connection for this player. |
-| `ClientCharacterList` | Client-side character list received from the server. |
-| `OnCharacterListReceived` | Fired on the client when the character list is received from the server. |
-| `string` | Fired on the client when a character creation result is received. |
-| `ActionStartTime` | Client-side: start time of the current action bar. |
-| `ActionEndTime` | Client-side: end time of the current action bar. |
-| `ActionText` | Client-side: text label for the current action bar. |
-| `OnActionBarChanged` | Client-side: fired when action bar state changes. |
-| `RequestCharacterList` | Client requests their character list from the server. |
-| `RequestLoadCharacter` | Client requests to load a specific character. |
-| `RequestCreateCharacter` | Client requests to create a new character from JSON data. |
-| `RequestDeleteCharacter` | Client requests to delete a character. |
 | `GetPrivateVar` | Client-side: get a private CharVar value that was synced from the server. |
-| `DoesRecognizeLocal` | Client-side: check if this player recognizes a target player. |
-| `RequestIntroduce` | Client requests to introduce themselves. Level: 0=look-at, 1=whisper, 2=talk, 3=yell. |
 
 ### HexPlayerSetup (static)
 
@@ -513,6 +514,18 @@ static void ApplyCharacterToPlayer( HexPlayerComponent player, HexCharacter char
 | `StripPlayerBody` | Strip the player body back to a bare networked object. Removes PlayerController, WeaponRaise, and all child objects (Body, etc.). |
 | `BuildDefaultPlayer` | Configure a bare GameObject as a fully functional first-person player. Adds PlayerController, SkinnedModelRenderer (citizen), and Dresser. |
 | `ApplyCharacterToPlayer` | Apply character-specific data to an existing player (model, speeds). Called when a character loads or changes. |
+
+### IntroducePlayerComponent (sealed) : Component
+
+Handles the introduce mechanic RPC. Satellite component on the player GameObject alongside HexPlayerComponent.
+
+```csharp
+[Rpc.Host] void RequestIntroduce( int level )
+```
+
+| Member | Description |
+|--------|-------------|
+| `RequestIntroduce` | Client requests to introduce themselves. Level: 0=look-at, 1=whisper, 2=talk, 3=yell. |
 
 ### RecognitionManager (static)
 
@@ -537,6 +550,41 @@ static string FormatForListener( HexPlayerComponent observer, HexPlayerComponent
 | `GetDisplayName` | Server-side: get the display name for a target as seen by an observer. Returns "Unknown" if not recognized. |
 | `GetDisplayNameForChat` | Server-side: get a chat-friendly display name with truncated description for unknowns. |
 | `FormatForListener` | Server-side: format a pre-formatted message replacing the speaker's real name with the recognition-aware name for a specific listener. |
+
+### RecognitionPlayerComponent (sealed) : Component
+
+Client-side character recognition state. Satellite component on the player GameObject alongside HexPlayerComponent.
+
+```csharp
+bool DoesRecognizeLocal( HexPlayerComponent target )
+```
+
+| Member | Description |
+|--------|-------------|
+| `DoesRecognizeLocal` | Client-side: check if this player recognizes a target player. |
+
+### IHexCharacterEvent (interface) : ISceneEvent<IHexCharacterEvent>
+
+Character lifecycle events — creation, loading, unloading, recognition.
+
+```csharp
+void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
+void OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character )
+void OnCharacterCreated( HexPlayerComponent player, HexCharacter character )
+bool CanCharacterCreate( HexPlayerComponent player, HexCharacterData data )
+bool CanRecognize( HexCharacter observer, HexCharacter target )
+void OnCharacterRecognized( HexPlayerComponent introducer, HexPlayerComponent recognizer )
+```
+
+### IHexPlayerEvent (interface) : ISceneEvent<IHexPlayerEvent>
+
+Player connection lifecycle events.
+
+```csharp
+void OnPlayerConnected( HexPlayerComponent player, Connection connection )
+void OnPlayerDisconnected( HexPlayerComponent player, Connection connection )
+Vector3 GetSpawnPosition( Connection connection, Vector3 currentPosition )
+```
 
 ---
 
@@ -710,7 +758,7 @@ static void SendDirectMessage( HexPlayerComponent sender, Connection target, ICh
 
 ### HexChatComponent (sealed) : Component
 
-Network bridge for the chat system. Singleton component that lives on the HexagonFramework GameObject. Provides RPCs for sending and receiving chat messages. Color is passed as 3 floats (r, g, b) for RPC safety.
+Network bridge for the chat system. Singleton component that lives on the Hexagon Services GameObject. Provides RPCs for sending and receiving chat messages. Color is passed as 3 floats (r, g, b) for RPC safety.
 
 ```csharp
 static HexChatComponent Instance { get; set; }
@@ -747,6 +795,17 @@ string Format( HexPlayerComponent speaker, string message )
 | `CanHear` | Check if a listener can hear a message from this speaker. Called per-recipient after range filtering. |
 | `CanSay` | Check if a speaker is allowed to send a message in this chat class. Return false to block (e.g. rate limits, permissions). |
 | `Format` | Format the message for display (e.g. '{Name} says "{message}"'). |
+
+### IHexChatEvent (interface) : ISceneEvent<IHexChatEvent>
+
+Chat message events — permission, server-side dispatch, client-side receipt, focus.
+
+```csharp
+bool CanSendChatMessage( HexPlayerComponent sender, IChatClass chatClass, string message )
+void OnChatMessage( HexPlayerComponent sender, IChatClass chatClass, string rawMessage, string formattedMessage )
+void OnChatMessageReceived( string senderName, string chatClassName, string formattedMessage, Color color )
+void OnChatFocusRequested()
+```
 
 ---
 
@@ -852,6 +911,14 @@ Func<HexPlayerComponent, CommandContext, string> OnRun { get; set; }
 | `Arguments` | Argument definitions for this command. |
 | `OnRun` | Handler called when the command is executed. Parameters: (caller, context). Return a string message to send back to the caller. |
 
+### IHexCommandEvent (interface) : ISceneEvent<IHexCommandEvent>
+
+Command execution permission events.
+
+```csharp
+bool CanRunCommand( HexPlayerComponent player, HexCommand command )
+```
+
 ---
 
 ## Hexagon.Config
@@ -918,6 +985,15 @@ static bool CanAfford( HexCharacter character, int amount )
 | `TakeMoney` | Take money from a character. Returns false if they can't afford it. |
 | `SetMoney` | Set a character's money to an exact amount. |
 | `CanAfford` | Check if a character can afford a given amount. |
+
+### IHexCurrencyEvent (interface) : ISceneEvent<IHexCurrencyEvent>
+
+Currency/money permission and change events.
+
+```csharp
+bool CanMoneyChange( HexCharacter character, int oldAmount, int newAmount, string reason )
+void OnMoneyChanged( HexCharacter character, int oldAmount, int newAmount, string reason )
+```
 
 ---
 
@@ -1003,25 +1079,30 @@ bool HasOwner
 
 ### DoorManager (static)
 
-Manages door registration, persistence, and lookup. DoorComponents register/unregister themselves on enable/disable.
+Manages door registration and lookup. DoorComponents register/unregister themselves on enable/disable. Persistence is handled directly by each DoorComponent via DatabaseManager.
 
 ```csharp
 static DoorComponent GetDoor( string doorId )
 static IReadOnlyDictionary<string, DoorComponent> GetAllDoors()
-static void SaveDoor( DoorData data )
-static DoorData LoadDoor( string doorId )
-static void DeleteDoor( string doorId )
-static void SaveAll()
 ```
 
 | Member | Description |
 |--------|-------------|
 | `GetDoor` | Get a door component by its ID. |
 | `GetAllDoors` | Get all registered doors. |
-| `SaveDoor` | Save door data to the database. |
-| `LoadDoor` | Load door data from the database. |
-| `DeleteDoor` | Delete door data from the database. |
-| `SaveAll` | Save all registered doors to the database. |
+
+### IHexDoorEvent (interface) : ISceneEvent<IHexDoorEvent>
+
+Door interaction, damage, and ownership events.
+
+```csharp
+bool CanUseDoor( HexPlayerComponent player, DoorComponent door )
+void OnDoorUsed( HexPlayerComponent player, DoorComponent door )
+void OnDoorOwnerChanged( DoorComponent door, string oldOwnerId, string newOwnerId, bool isFaction )
+void OnDoorDamaged( HexPlayerComponent attacker, DoorComponent door, float damage, int remainingHealth )
+void OnDoorBreached( HexPlayerComponent attacker, DoorComponent door )
+bool CanKickDoor( HexPlayerComponent player, DoorComponent door )
+```
 
 ---
 
@@ -1151,13 +1232,22 @@ static void ApplyLoadout( HexPlayerComponent player, Characters.HexCharacter cha
 |--------|-------------|
 | `ApplyLoadout` | Apply the loadout for a character's class. Creates items and adds them to the character's main inventory. |
 
+### IHexLoadoutEvent (interface) : ISceneEvent<IHexLoadoutEvent>
+
+Class loadout application permission and notification events.
+
+```csharp
+bool CanApplyLoadout( HexPlayerComponent player, Characters.HexCharacter character, ClassDefinition classDef )
+void OnLoadoutApplied( HexPlayerComponent player, Characters.HexCharacter character, List<Items.ItemInstance> items )
+```
+
 ---
 
 ## Hexagon.Interaction
 
-### ActionBarManager (static)
+### ActionBarComponent (sealed) : Component
 
-Manages timed actions with progress bars. Supports basic timed actions and stared actions that cancel if the player looks away from the target. Usage: ActionBarManager.SetAction(player, "Searching...", 3f, callback) Stared: ActionBarManager.DoStaredAction(player, target, "Lockpicking...", 5f, callback, onCancel)
+Per-player server-side action bar logic. Holds the active timed action, performs per-frame stare/distance validation, and fires completion/cancellation. Added to the player GameObject alongside HexPlayerComponent.
 
 ```csharp
 string Text
@@ -1167,10 +1257,10 @@ Action<HexPlayerComponent> Callback
 GameObject StareTarget
 Action OnCancel
 float MaxDistance
-static void SetAction( HexPlayerComponent player, string text, float time, Action<HexPlayerComponent> callback )
-static void DoStaredAction( HexPlayerComponent player, GameObject target, string text, float time, Action<HexPlayerComponent> callback, Action onCancel, float maxDistance )
-static void CancelAction( HexPlayerComponent player )
-static bool HasAction( HexPlayerComponent player )
+bool HasAction
+void SetAction( string text, float time, Action<HexPlayerComponent> callback )
+void DoStaredAction( GameObject target, string text, float time, Action<HexPlayerComponent> callback, Action onCancel, float maxDistance )
+void CancelAction()
 ```
 
 | Member | Description |
@@ -1182,10 +1272,46 @@ static bool HasAction( HexPlayerComponent player )
 | `StareTarget` |  |
 | `OnCancel` |  |
 | `MaxDistance` |  |
+| `HasAction` | Returns true if this player has an active timed action. |
+| `SetAction` | Start a timed action with a progress bar. Any existing action is replaced. |
+| `DoStaredAction` | Start a stared action that cancels if the player looks away or moves too far. |
+| `CancelAction` | Cancel the current action. Fires the cancel callback if set. |
+
+### ActionBarManager (static)
+
+Thin facade over per-player <see cref="ActionBarComponent"/> instances. Preserves the existing static API so callers don't need changes. Usage: ActionBarManager.SetAction(player, "Searching...", 3f, callback) Stared: ActionBarManager.DoStaredAction(player, target, "Lockpicking...", 5f, callback, onCancel)
+
+```csharp
+static void SetAction( HexPlayerComponent player, string text, float time, Action<HexPlayerComponent> callback )
+static void DoStaredAction( HexPlayerComponent player, GameObject target, string text, float time, Action<HexPlayerComponent> callback, Action onCancel, float maxDistance )
+static void CancelAction( HexPlayerComponent player )
+static bool HasAction( HexPlayerComponent player )
+```
+
+| Member | Description |
+|--------|-------------|
 | `SetAction` | Start a timed action with a progress bar for the given player. Any existing action is replaced. |
 | `DoStaredAction` | Start a stared action that cancels if the player looks away from the target or moves too far. |
 | `CancelAction` | Cancel the current action for a player. Fires the cancel callback if set. |
 | `HasAction` | Returns true if the player has an active timed action. |
+
+### ActionBarPlayerComponent (sealed) : Component
+
+Client-side action bar state and RPCs. Satellite component on the player GameObject alongside HexPlayerComponent.
+
+```csharp
+float ActionStartTime { get; set; }
+float ActionEndTime { get; set; }
+string ActionText { get; set; }
+event Action OnActionBarChanged
+```
+
+| Member | Description |
+|--------|-------------|
+| `ActionStartTime` | Client-side: start time of the current action bar. |
+| `ActionEndTime` | Client-side: end time of the current action bar. |
+| `ActionText` | Client-side: text label for the current action bar. |
+| `OnActionBarChanged` | Client-side: fired when action bar state changes. |
 
 ### WeaponRaiseComponent (sealed) : Component
 
@@ -1206,6 +1332,27 @@ void ToggleRaised()
 | `RequestToggleRaise` | Server RPC: client requests to toggle weapon raise state. |
 | `SetRaised` | Server-side: explicitly set the raise state. |
 | `ToggleRaised` | Server-side: toggle between raised and lowered. |
+
+### IHexActionEvent (interface) : ISceneEvent<IHexActionEvent>
+
+Timed action bar events — start permission, completion, cancellation, UI updates.
+
+```csharp
+bool CanStartAction( HexPlayerComponent player, string actionText )
+void OnActionCompleted( HexPlayerComponent player, string actionText )
+void OnActionCancelled( HexPlayerComponent player, string actionText )
+void OnActionBarUpdated( HexPlayerComponent player )
+```
+
+### IHexWeaponEvent (interface) : ISceneEvent<IHexWeaponEvent>
+
+Weapon raise/fire permission and state change events.
+
+```csharp
+bool CanRaiseWeapon( HexPlayerComponent player )
+void OnWeaponRaised( HexPlayerComponent player, bool isRaised )
+bool CanFireWeapon( HexPlayerComponent player )
+```
 
 ---
 
@@ -1301,7 +1448,7 @@ int SellPrice { get; set; }
 
 ### HexInventoryComponent (sealed) : Component
 
-Singleton network bridge for the inventory system. Lives on the HexagonFramework GameObject. Server-side: flushes dirty inventories to receivers via RPCs. Client-side: caches inventory snapshots for UI consumption. Also handles item action RPCs (move, transfer, drop, use) and vendor buy/sell RPCs.
+Singleton network bridge for the inventory system. Lives on the Hexagon Services GameObject. Server-side: flushes dirty inventories to receivers via RPCs. Client-side: caches inventory snapshots for UI consumption. Also handles item action RPCs (move, transfer, drop, use) and vendor buy/sell RPCs.
 
 ```csharp
 static HexInventoryComponent Instance { get; set; }
@@ -1366,6 +1513,17 @@ static void Unload( string inventoryId )
 | `Delete` | Delete an inventory and all its items. |
 | `SaveAll` | Save all dirty inventories and their items. |
 | `Unload` | Unload an inventory from memory (e.g. when a character disconnects). Saves first. |
+
+### IHexInventoryEvent (interface) : ISceneEvent<IHexInventoryEvent>
+
+Client-side inventory update/removal and vendor catalog events.
+
+```csharp
+void OnInventoryUpdated( string inventoryId )
+void OnInventoryRemoved( string inventoryId )
+void OnVendorCatalogReceived( string vendorId, string vendorName, List<VendorCatalogEntry> items )
+void OnVendorResult( bool success, string message )
+```
 
 ---
 
@@ -1508,6 +1666,14 @@ static List<string> GetCategories()
 | `LoadInstancesForCharacter` | Load all item instances for a specific character from the database. |
 | `GetDefinitionsByCategory` | Get all definitions in a specific category. |
 | `GetCategories` | Get all item categories. |
+
+### IHexItemEvent (interface) : ISceneEvent<IHexItemEvent>
+
+Item lifecycle events — consumption, etc.
+
+```csharp
+void OnItemConsumed( HexPlayerComponent player, ItemInstance item )
+```
 
 ---
 
@@ -1691,6 +1857,14 @@ static List<LogEntry> GetLogsForPlayer( DateTime date, ulong steamId )
 | `GetLogs` | Get all log entries for a specific date and type. |
 | `GetLogsForPlayer` | Get all log entries for a specific date and player. |
 
+### IHexLogEvent (interface) : ISceneEvent<IHexLogEvent>
+
+Real-time log entry events.
+
+```csharp
+void OnLog( LogEntry entry )
+```
+
 ---
 
 ## Hexagon.Permissions
@@ -1722,9 +1896,21 @@ static bool HasPermission( HexPlayerComponent player, string requirement )
 | `GetAllFlags` | Get all registered flags. |
 | `HasPermission` | Check if a player has permission for a given requirement. If requirement is 1-2 characters and all are registered flags, checks character flags directly. Otherwise fires IPermissionCheckListener for schema-defined permissions. The 's' (Super Admin) flag bypasses all checks. |
 
+### IHexPermissionEvent (interface) : ISceneEvent<IHexPermissionEvent>
+
+Schema-defined permission check events beyond simple flags.
+
+```csharp
+bool OnPermissionCheck( HexPlayerComponent player, string permission )
+```
+
 ---
 
 ## Hexagon.Persistence
+
+### AutoSaveSystem (sealed) : GameObjectSystem<AutoSaveSystem>
+
+Periodically auto-saves all dirty characters and inventories. Replaces the manual tick that was previously in CharacterManager.Update(). The save interval is read from config: "framework.saveInterval" (default 300 seconds).
 
 ### DatabaseManager (static)
 
@@ -1784,6 +1970,16 @@ void Blur( Component.IPressable.Event e )
 | `Release` |  |
 | `Blur` |  |
 
+### IHexStorageEvent (interface) : ISceneEvent<IHexStorageEvent>
+
+Storage container open/close permission and events.
+
+```csharp
+bool CanOpenStorage( HexPlayerComponent player, StorageComponent storage )
+void OnStorageOpened( HexPlayerComponent player, StorageComponent storage )
+void OnStorageClosed( HexPlayerComponent player, StorageComponent storage )
+```
+
 ---
 
 ## Hexagon.UI
@@ -1792,7 +1988,7 @@ void Blur( Component.IPressable.Event e )
 
 UI state machine states.
 
-### HexUIManager (sealed) : Component, ICharacterLoadedListener, ICharacterUnloadedListener
+### HexUIManager (sealed) : Component, IHexCharacterEvent
 
 Central UI coordinator. Manages panel visibility, input dispatch, cursor state, and the UI state machine. Lives on the ScreenPanel GameObject. Schema devs can replace individual panels by disabling the defaults and adding their own IHexPanel implementations. HexUIManager discovers panels via Scene.GetAll&lt;IHexPanel&gt;().
 
@@ -1805,8 +2001,6 @@ void OpenPanel( string name )
 void ClosePanel( string name )
 void TogglePanel( string name )
 void CloseTopmostPanel()
-void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
-void OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character )
 static HexPlayerComponent GetLocalPlayer()
 ```
 
@@ -1820,8 +2014,6 @@ static HexPlayerComponent GetLocalPlayer()
 | `ClosePanel` | Close a panel by name. |
 | `TogglePanel` | Toggle a panel open/closed by name. |
 | `CloseTopmostPanel` | Close the topmost open overlay panel. |
-| `OnCharacterLoaded` |  |
-| `OnCharacterUnloaded` |  |
 | `GetLocalPlayer` | Get the local player's HexPlayerComponent. |
 
 ### HexUISetup (static)
@@ -1873,6 +2065,19 @@ static void SendAll( string message, float duration )
 | `Send` | Send a notification to a specific player with a custom duration in seconds. |
 | `SendAll` | Send a notification to all connected players with the default duration. |
 | `SendAll` | Send a notification to all connected players with a custom duration. |
+
+### NotificationPlayerComponent (sealed) : Component
+
+Receives toast notifications from the server. Satellite component on the player GameObject alongside HexPlayerComponent.
+
+### IHexUIEvent (interface) : ISceneEvent<IHexUIEvent>
+
+UI notification and death screen events.
+
+```csharp
+void OnNotificationReceived( string message, float duration )
+void OnRespawnRequested( HexPlayerComponent player )
+```
 
 ---
 
@@ -1940,411 +2145,33 @@ List<VendorItem> Items { get; set; }
 
 ### VendorManager (static)
 
-Manages vendor registration, persistence, and buy/sell operations. VendorComponents register/unregister themselves on enable/disable.
+Manages vendor registration, buy/sell operations, and lookup. VendorComponents register/unregister themselves on enable/disable. Persistence is handled directly by each VendorComponent via DatabaseManager.
 
 ```csharp
 static VendorComponent GetVendor( string vendorId )
 static IReadOnlyDictionary<string, VendorComponent> GetAllVendors()
-static void SaveVendor( VendorData data )
-static VendorData LoadVendor( string vendorId )
 ```
 
 | Member | Description |
 |--------|-------------|
 | `GetVendor` | Get a vendor component by its ID. |
 | `GetAllVendors` | Get all registered vendors. |
-| `SaveVendor` | Save vendor data to the database. |
-| `LoadVendor` | Load vendor data from the database. |
+
+### IHexVendorEvent (interface) : ISceneEvent<IHexVendorEvent>
+
+Vendor buy/sell permission, transaction, and interaction events.
+
+```csharp
+bool CanBuyItem( HexPlayerComponent player, VendorComponent vendor, VendorItem item )
+bool CanSellItem( HexPlayerComponent player, VendorComponent vendor, VendorItem item, ItemInstance instance )
+void OnItemBought( HexPlayerComponent player, VendorComponent vendor, VendorItem item, ItemInstance instance )
+void OnItemSold( HexPlayerComponent player, VendorComponent vendor, VendorItem item )
+void OnVendorOpened( HexPlayerComponent player, VendorComponent vendor )
+```
 
 ---
 
 ## Listener Interfaces
 
 All listener interfaces for the Hexagon event system. Implement on a Component for auto-discovery via `Scene.GetAll<T>()`.
-
-### Core
-
-```csharp
-// Called when the Hexagon framework has finished initializing all systems.
-interface IFrameworkInitListener
-{
-    void OnFrameworkInit();
-}
-
-// Called when the Hexagon framework is shutting down.
-interface IFrameworkShutdownListener
-{
-    void OnFrameworkShutdown();
-}
-
-```
-
-### Attributes
-
-```csharp
-// Fired when a character's effective attribute value changes (base or boost change).
-interface IAttributeChangedListener
-{
-    void OnAttributeChanged( HexCharacter character, string attributeId, float oldValue, float newValue );
-}
-
-```
-
-### Characters
-
-```csharp
-// Called when a player has fully connected and their GameObject is spawned.
-interface IPlayerConnectedListener
-{
-    void OnPlayerConnected( HexPlayerComponent player, Connection connection );
-}
-
-// Called when a player disconnects.
-interface IPlayerDisconnectedListener
-{
-    void OnPlayerDisconnected( HexPlayerComponent player, Connection connection );
-}
-
-// Override spawn positions for connecting players.
-interface IPlayerSpawnListener
-{
-    Vector3 GetSpawnPosition( Connection connection, Vector3 currentPosition );
-}
-
-// Called when a character is loaded for a player.
-interface ICharacterLoadedListener
-{
-    void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character );
-}
-
-// Called when a character is unloaded (player switches or disconnects).
-interface ICharacterUnloadedListener
-{
-    void OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character );
-}
-
-// Permission hook: can a player create a character? Return false to block.
-interface ICanCharacterCreate
-{
-    bool CanCharacterCreate( HexPlayerComponent player, HexCharacterData data );
-}
-
-// Called after a new character is created.
-interface ICharacterCreatedListener
-{
-    void OnCharacterCreated( HexPlayerComponent player, HexCharacter character );
-}
-
-// Permission hook: can a character be recognized? Return false to block (e.g., disguise system).
-interface ICanRecognizeListener
-{
-    bool CanRecognize( HexCharacter observer, HexCharacter target );
-}
-
-// Fired after a character is recognized by another through introduction.
-interface ICharacterRecognizedListener
-{
-    void OnCharacterRecognized( HexPlayerComponent introducer, HexPlayerComponent recognizer );
-}
-
-```
-
-### Chat
-
-```csharp
-// Permission hook: can a player send a chat message? Return false to block.
-interface ICanSendChatMessage
-{
-    bool CanSendChatMessage( HexPlayerComponent sender, IChatClass chatClass, string message );
-}
-
-// Server-side: fired after a chat message is sent.
-interface IChatMessageListener
-{
-    void OnChatMessage( HexPlayerComponent sender, IChatClass chatClass, string rawMessage, string formattedMessage );
-}
-
-// Client-side: fired when a chat message is received.
-interface IChatMessageReceivedListener
-{
-    void OnChatMessageReceived( string senderName, string chatClassName, string formattedMessage, Color color );
-}
-
-```
-
-### Commands
-
-```csharp
-// Permission hook: can a player run a command? Return false to block.
-interface ICanRunCommandListener
-{
-    bool CanRunCommand( HexPlayerComponent player, HexCommand command );
-}
-
-```
-
-### Currency
-
-```csharp
-// Permission hook: can a money change occur? Return false to block.
-interface ICanMoneyChangeListener
-{
-    bool CanMoneyChange( HexCharacter character, int oldAmount, int newAmount, string reason );
-}
-
-// Fired after a money change has occurred.
-interface IMoneyChangedListener
-{
-    void OnMoneyChanged( HexCharacter character, int oldAmount, int newAmount, string reason );
-}
-
-```
-
-### Doors
-
-```csharp
-// Permission hook: can a player use this door? Return false to block.
-interface ICanUseDoorListener
-{
-    bool CanUseDoor( HexPlayerComponent player, DoorComponent door );
-}
-
-// Fired after a player uses a door (toggle, lock/unlock).
-interface IDoorUsedListener
-{
-    void OnDoorUsed( HexPlayerComponent player, DoorComponent door );
-}
-
-// Fired when door ownership changes.
-interface IDoorOwnerChangedListener
-{
-    void OnDoorOwnerChanged( DoorComponent door, string oldOwnerId, string newOwnerId, bool isFaction );
-}
-
-// Fired when a door's lock takes damage from shooting or kicking.
-interface IDoorDamagedListener
-{
-    void OnDoorDamaged( HexPlayerComponent attacker, DoorComponent door, float damage, int remainingHealth ); // Called when a door's lock is damaged.
-}
-
-// Fired when a door's lock is destroyed and the door is breached open.
-interface IDoorBreachedListener
-{
-    void OnDoorBreached( HexPlayerComponent attacker, DoorComponent door ); // Called when a door's lock breaks and the door swings open.
-}
-
-// Permission hook: can a player kick this door? Return false to block.
-interface ICanKickDoorListener
-{
-    bool CanKickDoor( HexPlayerComponent player, DoorComponent door ); // Called before a player attempts to kick a door.
-}
-
-```
-
-### Factions
-
-```csharp
-// Permission hook: can this loadout be applied? Return false to block.
-interface ICanApplyLoadoutListener
-{
-    bool CanApplyLoadout( HexPlayerComponent player, Characters.HexCharacter character, ClassDefinition classDef ); // Called before a class loadout is applied to a character.
-}
-
-// Fired after a class loadout has been applied to a character.
-interface ILoadoutAppliedListener
-{
-    void OnLoadoutApplied( HexPlayerComponent player, Characters.HexCharacter character, List<Items.ItemInstance> items ); // Called after loadout items have been granted to a character.
-}
-
-```
-
-### Interaction
-
-```csharp
-// Permission hook: can this timed action start? Return false to block.
-interface ICanStartActionListener
-{
-    bool CanStartAction( HexPlayerComponent player, string actionText );
-}
-
-// Fired when a timed action completes successfully.
-interface IActionCompletedListener
-{
-    void OnActionCompleted( HexPlayerComponent player, string actionText );
-}
-
-// Fired when a timed action is cancelled (looked away, moved too far, or explicit cancel).
-interface IActionCancelledListener
-{
-    void OnActionCancelled( HexPlayerComponent player, string actionText );
-}
-
-// Client-side: fired when action bar state changes (for UI updates).
-interface IActionBarUpdatedListener
-{
-    void OnActionBarUpdated( HexPlayerComponent player );
-}
-
-// Permission hook: can this player raise their weapon? Return false to block.
-interface ICanRaiseWeaponListener
-{
-    bool CanRaiseWeapon( HexPlayerComponent player );
-}
-
-// Fired when a player's weapon raise state changes.
-interface IWeaponRaisedListener
-{
-    void OnWeaponRaised( HexPlayerComponent player, bool isRaised );
-}
-
-// Permission hook: can this player fire their weapon? Schema weapon code should check both this hook and WeaponRaiseComponent.CanFire.
-interface ICanFireWeaponListener
-{
-    bool CanFireWeapon( HexPlayerComponent player );
-}
-
-```
-
-### Inventory
-
-```csharp
-// Client-side: fired when an inventory snapshot is received or updated.
-interface IInventoryUpdatedListener
-{
-    void OnInventoryUpdated( string inventoryId );
-}
-
-// Client-side: fired when an inventory is no longer available (e.g. closed storage).
-interface IInventoryRemovedListener
-{
-    void OnInventoryRemoved( string inventoryId );
-}
-
-// Client-side: fired when a vendor catalog is received.
-interface IVendorCatalogReceivedListener
-{
-    void OnVendorCatalogReceived( string vendorId, string vendorName, List<VendorCatalogEntry> items );
-}
-
-// Client-side: fired when a vendor buy/sell result is received.
-interface IVendorResultListener
-{
-    void OnVendorResult( bool success, string message );
-}
-
-```
-
-### Items.Bases
-
-```csharp
-// Fired after a consumable item is successfully consumed.
-interface IItemConsumedListener
-{
-    void OnItemConsumed( HexPlayerComponent player, ItemInstance item ); // Called after a consumable item has been used and consumed.
-}
-
-```
-
-### Logging
-
-```csharp
-// Listener interface for receiving log entries in real-time.
-interface ILogListener
-{
-    void OnLog( LogEntry entry );
-}
-
-```
-
-### Permissions
-
-```csharp
-// Hook for schema-defined permission checks beyond simple flags. Return false to deny the permission.
-interface IPermissionCheckListener
-{
-    bool OnPermissionCheck( HexPlayerComponent player, string permission );
-}
-
-```
-
-### Storage
-
-```csharp
-// Permission hook: can a player open this storage container? Return false to block.
-interface ICanOpenStorageListener
-{
-    bool CanOpenStorage( HexPlayerComponent player, StorageComponent storage );
-}
-
-// Fired when a player opens a storage container.
-interface IStorageOpenedListener
-{
-    void OnStorageOpened( HexPlayerComponent player, StorageComponent storage );
-}
-
-// Fired when a player closes a storage container (release or look away).
-interface IStorageClosedListener
-{
-    void OnStorageClosed( HexPlayerComponent player, StorageComponent storage );
-}
-
-```
-
-### UI
-
-```csharp
-// Client-side: fired when the chat input should be focused (ENTER pressed).
-interface IChatFocusRequestListener
-{
-    void OnChatFocusRequested();
-}
-
-// Fired when the death screen respawn button is pressed. Schema devs implement this to handle respawn logic.
-interface IDeathScreenRespawnListener
-{
-    void OnRespawnRequested( HexPlayerComponent player );
-}
-
-// Client-side: fired when a notification toast is received.
-interface INotificationReceivedListener
-{
-    void OnNotificationReceived( string message, float duration ); // Called on the client when a toast notification arrives.
-}
-
-```
-
-### Vendors
-
-```csharp
-// Permission hook: can a player buy this item? Return false to block.
-interface ICanBuyItemListener
-{
-    bool CanBuyItem( HexPlayerComponent player, VendorComponent vendor, VendorItem item );
-}
-
-// Permission hook: can a player sell this item? Return false to block.
-interface ICanSellItemListener
-{
-    bool CanSellItem( HexPlayerComponent player, VendorComponent vendor, VendorItem item, ItemInstance instance );
-}
-
-// Fired after a player buys an item from a vendor.
-interface IItemBoughtListener
-{
-    void OnItemBought( HexPlayerComponent player, VendorComponent vendor, VendorItem item, ItemInstance instance );
-}
-
-// Fired after a player sells an item to a vendor.
-interface IItemSoldListener
-{
-    void OnItemSold( HexPlayerComponent player, VendorComponent vendor, VendorItem item );
-}
-
-// Fired when a player opens/interacts with a vendor.
-interface IVendorOpenedListener
-{
-    void OnVendorOpened( HexPlayerComponent player, VendorComponent vendor );
-}
-
-```
 

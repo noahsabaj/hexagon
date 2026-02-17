@@ -63,7 +63,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 			DoorId = Persistence.DatabaseManager.NewId();
 		}
 
-		_data = DoorManager.LoadDoor( DoorId );
+		_data = Persistence.DatabaseManager.Load<DoorData>( "doors", DoorId );
 
 		if ( _data == null )
 		{
@@ -97,7 +97,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 		var player = Core.PressableHelper.GetPlayer( e );
 		if ( player?.Character == null ) return false;
 
-		return HexEvents.CanAll<ICanUseDoorListener>(
+		return SceneEventExtensions.CanAll<IHexDoorEvent>(
 			x => x.CanUseDoor( player, this ) );
 	}
 
@@ -110,7 +110,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 		{
 			// Unowned door — anyone can toggle
 			ToggleOpen();
-			HexEvents.Fire<IDoorUsedListener>( x => x.OnDoorUsed( player, this ) );
+			IHexDoorEvent.Post( x => x.OnDoorUsed( player, this ) );
 			HexLog.Add( LogType.Door, player, $"Toggled unowned door \"{DoorName}\" ({DoorId})" );
 			return true;
 		}
@@ -123,7 +123,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 			{
 				SetLocked( false );
 				HexLog.Add( LogType.Door, player, $"Unlocked door \"{DoorName}\" ({DoorId})" );
-				HexEvents.Fire<IDoorUsedListener>( x => x.OnDoorUsed( player, this ) );
+				IHexDoorEvent.Post( x => x.OnDoorUsed( player, this ) );
 				return true;
 			}
 			else
@@ -135,7 +135,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 		{
 			// Unlocked — anyone can toggle open/close
 			ToggleOpen();
-			HexEvents.Fire<IDoorUsedListener>( x => x.OnDoorUsed( player, this ) );
+			IHexDoorEvent.Post( x => x.OnDoorUsed( player, this ) );
 			HexLog.Add( LogType.Door, player, $"Toggled door \"{DoorName}\" ({DoorId})" );
 			return true;
 		}
@@ -202,7 +202,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 		if ( !Config.HexConfig.Get<bool>( "door.kickEnabled", true ) ) return;
 
 		// Permission hook
-		if ( !HexEvents.CanAll<ICanKickDoorListener>(
+		if ( !SceneEventExtensions.CanAll<IHexDoorEvent>(
 			x => x.CanKickDoor( player, this ) ) )
 			return;
 
@@ -226,7 +226,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 	{
 		LockHealth = Math.Max( 0, LockHealth - (int)damage );
 
-		HexEvents.Fire<IDoorDamagedListener>(
+		IHexDoorEvent.Post(
 			x => x.OnDoorDamaged( attacker, this, damage, LockHealth ) );
 
 		if ( LockHealth <= 0 )
@@ -239,7 +239,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 			HexLog.Add( LogType.Door, attacker,
 				$"Breached door \"{DoorName}\" ({DoorId})" );
 
-			HexEvents.Fire<IDoorBreachedListener>(
+			IHexDoorEvent.Post(
 				x => x.OnDoorBreached( attacker, this ) );
 
 			SaveData();
@@ -303,7 +303,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 		OwnerDisplay = displayName;
 		SaveData();
 
-		HexEvents.Fire<IDoorOwnerChangedListener>(
+		IHexDoorEvent.Post(
 			x => x.OnDoorOwnerChanged( this, oldOwner, characterId, false ) );
 	}
 
@@ -325,7 +325,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 		OwnerDisplay = faction?.Name ?? factionId;
 		SaveData();
 
-		HexEvents.Fire<IDoorOwnerChangedListener>(
+		IHexDoorEvent.Post(
 			x => x.OnDoorOwnerChanged( this, oldOwner, factionId, true ) );
 
 		return true;
@@ -345,7 +345,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 		OwnerDisplay = "";
 		SaveData();
 
-		HexEvents.Fire<IDoorOwnerChangedListener>(
+		IHexDoorEvent.Post(
 			x => x.OnDoorOwnerChanged( this, oldOwner, null, false ) );
 	}
 
@@ -382,7 +382,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 		_data.LockHealth = LockHealth;
 		_data.MaxLockHealth = MaxLockHealth;
 
-		DoorManager.SaveDoor( _data );
+		Persistence.DatabaseManager.Save( "doors", _data.DoorId, _data );
 	}
 
 	private void UpdateOwnerDisplay()
@@ -402,61 +402,4 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 			OwnerDisplay = "";
 		}
 	}
-}
-
-/// <summary>
-/// Permission hook: can a player use this door? Return false to block.
-/// </summary>
-public interface ICanUseDoorListener
-{
-	bool CanUseDoor( HexPlayerComponent player, DoorComponent door );
-}
-
-/// <summary>
-/// Fired after a player uses a door (toggle, lock/unlock).
-/// </summary>
-public interface IDoorUsedListener
-{
-	void OnDoorUsed( HexPlayerComponent player, DoorComponent door );
-}
-
-/// <summary>
-/// Fired when door ownership changes.
-/// </summary>
-public interface IDoorOwnerChangedListener
-{
-	void OnDoorOwnerChanged( DoorComponent door, string oldOwnerId, string newOwnerId, bool isFaction );
-}
-
-/// <summary>
-/// Fired when a door's lock takes damage from shooting or kicking.
-/// </summary>
-public interface IDoorDamagedListener
-{
-	/// <summary>
-	/// Called when a door's lock is damaged.
-	/// </summary>
-	void OnDoorDamaged( HexPlayerComponent attacker, DoorComponent door, float damage, int remainingHealth );
-}
-
-/// <summary>
-/// Fired when a door's lock is destroyed and the door is breached open.
-/// </summary>
-public interface IDoorBreachedListener
-{
-	/// <summary>
-	/// Called when a door's lock breaks and the door swings open.
-	/// </summary>
-	void OnDoorBreached( HexPlayerComponent attacker, DoorComponent door );
-}
-
-/// <summary>
-/// Permission hook: can a player kick this door? Return false to block.
-/// </summary>
-public interface ICanKickDoorListener
-{
-	/// <summary>
-	/// Called before a player attempts to kick a door.
-	/// </summary>
-	bool CanKickDoor( HexPlayerComponent player, DoorComponent door );
 }

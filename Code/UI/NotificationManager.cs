@@ -22,7 +22,7 @@ public static class NotificationManager
 	{
 		if ( target == null || string.IsNullOrEmpty( message ) ) return;
 
-		target.ReceiveNotification( message, duration );
+		target.GetComponent<NotificationPlayerComponent>()?.ReceiveNotification( message, duration );
 	}
 
 	/// <summary>
@@ -41,25 +41,10 @@ public static class NotificationManager
 	{
 		if ( string.IsNullOrEmpty( message ) ) return;
 
-		foreach ( var kvp in Characters.HexGameManager.Players )
+		foreach ( var kvp in HexagonSystem.Players )
 		{
 			Send( kvp.Value, message, duration );
 		}
 	}
 
-	internal static void Initialize()
-	{
-		Log.Info( "Hexagon: NotificationManager initialized." );
-	}
-}
-
-/// <summary>
-/// Client-side: fired when a notification toast is received.
-/// </summary>
-public interface INotificationReceivedListener
-{
-	/// <summary>
-	/// Called on the client when a toast notification arrives.
-	/// </summary>
-	void OnNotificationReceived( string message, float duration );
 }

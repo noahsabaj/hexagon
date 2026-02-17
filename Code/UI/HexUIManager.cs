@@ -20,7 +20,7 @@ public enum UIState
 /// their own IHexPanel implementations. HexUIManager discovers panels via
 /// Scene.GetAll&lt;IHexPanel&gt;().
 /// </summary>
-public sealed class HexUIManager : Component, ICharacterLoadedListener, ICharacterUnloadedListener
+public sealed class HexUIManager : Component, IHexCharacterEvent
 {
 	public static HexUIManager Instance { get; private set; }
 
@@ -185,7 +185,7 @@ public sealed class HexUIManager : Component, ICharacterLoadedListener, ICharact
 				chat.Open();
 
 			// The ChatPanel itself handles focusing the input
-			HexEvents.Fire<IChatFocusRequestListener>( x => x.OnChatFocusRequested() );
+			IHexChatEvent.Post( x => x.OnChatFocusRequested() );
 		}
 
 		// F3 — Toggle introduce menu
@@ -333,7 +333,7 @@ public sealed class HexUIManager : Component, ICharacterLoadedListener, ICharact
 
 	// --- Event Listeners ---
 
-	public void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
+	void IHexCharacterEvent.OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
 	{
 		// Only react to our local player
 		if ( player.IsProxy ) return;
@@ -341,7 +341,7 @@ public sealed class HexUIManager : Component, ICharacterLoadedListener, ICharact
 		SetState( UIState.Gameplay );
 	}
 
-	public void OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character )
+	void IHexCharacterEvent.OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character )
 	{
 		if ( player.IsProxy ) return;
 
@@ -387,12 +387,4 @@ public sealed class HexUIManager : Component, ICharacterLoadedListener, ICharact
 
 		return null;
 	}
-}
-
-/// <summary>
-/// Client-side: fired when the chat input should be focused (ENTER pressed).
-/// </summary>
-public interface IChatFocusRequestListener
-{
-	void OnChatFocusRequested();
 }

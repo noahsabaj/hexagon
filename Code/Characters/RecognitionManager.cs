@@ -8,11 +8,6 @@ namespace Hexagon.Characters;
 /// </summary>
 public static class RecognitionManager
 {
-	internal static void Initialize()
-	{
-		Log.Info( "Hexagon: RecognitionManager initialized." );
-	}
-
 	/// <summary>
 	/// Server-side: check if observer recognizes target.
 	/// </summary>
@@ -32,7 +27,7 @@ public static class RecognitionManager
 		}
 
 		// Hook: ICanRecognizeListener can block recognition
-		if ( !HexEvents.CanAll<ICanRecognizeListener>( x => x.CanRecognize( observer, target ) ) )
+		if ( !SceneEventExtensions.CanAll<IHexCharacterEvent>( x => x.CanRecognize( observer, target ) ) )
 			return false;
 
 		// Check stored recognition data
@@ -71,7 +66,7 @@ public static class RecognitionManager
 
 		var count = 0;
 
-		foreach ( var kvp in HexGameManager.Players )
+		foreach ( var kvp in HexagonSystem.Players )
 		{
 			var other = kvp.Value;
 			if ( other == null || other == player || other.Character == null ) continue;
@@ -84,7 +79,7 @@ public static class RecognitionManager
 				count++;
 
 				// Fire event
-				HexEvents.Fire<ICharacterRecognizedListener>(
+				IHexCharacterEvent.Post(
 					x => x.OnCharacterRecognized( player, other ) );
 			}
 		}
@@ -104,7 +99,7 @@ public static class RecognitionManager
 		var result = Recognize( target.Character, player.Character.Id );
 		if ( result )
 		{
-			HexEvents.Fire<ICharacterRecognizedListener>(
+			IHexCharacterEvent.Post(
 				x => x.OnCharacterRecognized( player, target ) );
 		}
 
@@ -188,22 +183,6 @@ public static class RecognitionManager
 
 		var ids = player.Character.GetRecognizedIds();
 		var json = Json.Serialize( ids );
-		player.ReceiveRecognitionData( json );
+		player.GetComponent<RecognitionPlayerComponent>()?.ReceiveRecognitionData( json );
 	}
-}
-
-/// <summary>
-/// Permission hook: can a character be recognized? Return false to block (e.g., disguise system).
-/// </summary>
-public interface ICanRecognizeListener
-{
-	bool CanRecognize( HexCharacter observer, HexCharacter target );
-}
-
-/// <summary>
-/// Fired after a character is recognized by another through introduction.
-/// </summary>
-public interface ICharacterRecognizedListener
-{
-	void OnCharacterRecognized( HexPlayerComponent introducer, HexPlayerComponent recognizer );
 }

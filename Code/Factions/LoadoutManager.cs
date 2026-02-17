@@ -6,11 +6,6 @@ namespace Hexagon.Factions;
 /// </summary>
 public static class LoadoutManager
 {
-	internal static void Initialize()
-	{
-		Log.Info( "Hexagon: LoadoutManager initialized." );
-	}
-
 	/// <summary>
 	/// Apply the loadout for a character's class. Creates items and adds them to the character's main inventory.
 	/// </summary>
@@ -26,7 +21,7 @@ public static class LoadoutManager
 			return;
 
 		// Permission check
-		if ( !HexEvents.CanAll<ICanApplyLoadoutListener>(
+		if ( !SceneEventExtensions.CanAll<IHexLoadoutEvent>(
 			x => x.CanApplyLoadout( player, character, classDef ) ) )
 			return;
 
@@ -71,7 +66,7 @@ public static class LoadoutManager
 			Logging.HexLog.Add( Logging.LogType.Item, player,
 				$"Loadout applied: {grantedItems.Count} item(s) from class \"{classDef.Name}\"" );
 
-			HexEvents.Fire<ILoadoutAppliedListener>(
+			IHexLoadoutEvent.Post(
 				x => x.OnLoadoutApplied( player, character, grantedItems ) );
 		}
 	}
@@ -100,26 +95,4 @@ public static class LoadoutManager
 			ApplyLoadout( player, character );
 		}
 	}
-}
-
-/// <summary>
-/// Permission hook: can this loadout be applied? Return false to block.
-/// </summary>
-public interface ICanApplyLoadoutListener
-{
-	/// <summary>
-	/// Called before a class loadout is applied to a character.
-	/// </summary>
-	bool CanApplyLoadout( HexPlayerComponent player, Characters.HexCharacter character, ClassDefinition classDef );
-}
-
-/// <summary>
-/// Fired after a class loadout has been applied to a character.
-/// </summary>
-public interface ILoadoutAppliedListener
-{
-	/// <summary>
-	/// Called after loadout items have been granted to a character.
-	/// </summary>
-	void OnLoadoutApplied( HexPlayerComponent player, Characters.HexCharacter character, List<Items.ItemInstance> items );
 }

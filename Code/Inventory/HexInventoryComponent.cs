@@ -39,7 +39,7 @@ public class VendorCatalogEntry
 }
 
 /// <summary>
-/// Singleton network bridge for the inventory system. Lives on the HexagonFramework GameObject.
+/// Singleton network bridge for the inventory system. Lives on the Hexagon Services GameObject.
 ///
 /// Server-side: flushes dirty inventories to receivers via RPCs.
 /// Client-side: caches inventory snapshots for UI consumption.
@@ -189,7 +189,7 @@ public sealed class HexInventoryComponent : Component
 
 			_clientInventories[snapshot.Id] = snapshot;
 
-			HexEvents.Fire<IInventoryUpdatedListener>(
+			IHexInventoryEvent.Post(
 				x => x.OnInventoryUpdated( snapshot.Id ) );
 		}
 		catch ( Exception ex )
@@ -206,7 +206,7 @@ public sealed class HexInventoryComponent : Component
 	{
 		_clientInventories.Remove( inventoryId );
 
-		HexEvents.Fire<IInventoryRemovedListener>(
+		IHexInventoryEvent.Post(
 			x => x.OnInventoryRemoved( inventoryId ) );
 	}
 
@@ -223,7 +223,7 @@ public sealed class HexInventoryComponent : Component
 			CurrentVendorName = vendorName;
 			CurrentVendorCatalog = catalog ?? new();
 
-			HexEvents.Fire<IVendorCatalogReceivedListener>(
+			IHexInventoryEvent.Post(
 				x => x.OnVendorCatalogReceived( vendorId, vendorName, CurrentVendorCatalog ) );
 		}
 		catch ( Exception ex )
@@ -238,7 +238,7 @@ public sealed class HexInventoryComponent : Component
 	[Rpc.Broadcast( NetFlags.HostOnly )]
 	public void ReceiveVendorResult( bool success, string message )
 	{
-		HexEvents.Fire<IVendorResultListener>(
+		IHexInventoryEvent.Post(
 			x => x.OnVendorResult( success, message ) );
 	}
 
@@ -383,38 +383,4 @@ public sealed class HexInventoryComponent : Component
 			player.SyncPrivateData();
 		}
 	}
-}
-
-// --- Listener interfaces ---
-
-/// <summary>
-/// Client-side: fired when an inventory snapshot is received or updated.
-/// </summary>
-public interface IInventoryUpdatedListener
-{
-	void OnInventoryUpdated( string inventoryId );
-}
-
-/// <summary>
-/// Client-side: fired when an inventory is no longer available (e.g. closed storage).
-/// </summary>
-public interface IInventoryRemovedListener
-{
-	void OnInventoryRemoved( string inventoryId );
-}
-
-/// <summary>
-/// Client-side: fired when a vendor catalog is received.
-/// </summary>
-public interface IVendorCatalogReceivedListener
-{
-	void OnVendorCatalogReceived( string vendorId, string vendorName, List<VendorCatalogEntry> items );
-}
-
-/// <summary>
-/// Client-side: fired when a vendor buy/sell result is received.
-/// </summary>
-public interface IVendorResultListener
-{
-	void OnVendorResult( bool success, string message );
 }

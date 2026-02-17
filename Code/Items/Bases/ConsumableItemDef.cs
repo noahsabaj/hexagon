@@ -56,7 +56,7 @@ public class ConsumableItemDef : ItemDefinition
 
 					if ( OnConsume( p, item ) )
 					{
-						HexEvents.Fire<IItemConsumedListener>( x => x.OnItemConsumed( p, item ) );
+						IHexItemEvent.Post( x => x.OnItemConsumed( p, item ) );
 						// Remove the item from inventory
 						var inventories = Inventory.InventoryManager.LoadForCharacter( p.Character?.Data?.Id );
 						foreach ( var inv in inventories )
@@ -76,7 +76,7 @@ public class ConsumableItemDef : ItemDefinition
 		// Instant consumption
 		if ( OnConsume( player, item ) )
 		{
-			HexEvents.Fire<IItemConsumedListener>( x => x.OnItemConsumed( player, item ) );
+			IHexItemEvent.Post( x => x.OnItemConsumed( player, item ) );
 			return true; // Consume the item
 		}
 
@@ -91,15 +91,4 @@ public class ConsumableItemDef : ItemDefinition
 	{
 		return true;
 	}
-}
-
-/// <summary>
-/// Fired after a consumable item is successfully consumed.
-/// </summary>
-public interface IItemConsumedListener
-{
-	/// <summary>
-	/// Called after a consumable item has been used and consumed.
-	/// </summary>
-	void OnItemConsumed( HexPlayerComponent player, ItemInstance item );
 }

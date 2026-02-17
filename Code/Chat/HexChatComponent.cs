@@ -2,7 +2,7 @@ namespace Hexagon.Chat;
 
 /// <summary>
 /// Network bridge for the chat system. Singleton component that lives on the
-/// HexagonFramework GameObject. Provides RPCs for sending and receiving chat messages.
+/// Hexagon Services GameObject. Provides RPCs for sending and receiving chat messages.
 ///
 /// Color is passed as 3 floats (r, g, b) for RPC safety.
 /// </summary>
@@ -51,7 +51,7 @@ public sealed class HexChatComponent : Component
 		var color = new Color( colorR, colorG, colorB );
 
 		// Fire client-side event for UI
-		HexEvents.Fire<IChatMessageReceivedListener>(
+		IHexChatEvent.Post(
 			x => x.OnChatMessageReceived( senderName, chatClassName, formattedMessage, color ) );
 	}
 }

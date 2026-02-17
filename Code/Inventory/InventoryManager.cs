@@ -13,11 +13,6 @@ public static class InventoryManager
 	/// </summary>
 	public static IReadOnlyDictionary<string, HexInventory> Inventories => _inventories;
 
-	internal static void Initialize()
-	{
-		Log.Info( "Hexagon: InventoryManager initialized." );
-	}
-
 	/// <summary>
 	/// Create a new inventory and persist it.
 	/// </summary>

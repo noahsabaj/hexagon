@@ -77,7 +77,7 @@ public static class CommandManager
 			return "You do not have permission to use this command.";
 
 		// Hook: ICanRunCommandListener
-		if ( !HexEvents.CanAll<ICanRunCommandListener>(
+		if ( !SceneEventExtensions.CanAll<IHexCommandEvent>(
 			x => x.CanRunCommand( caller, command ) ) )
 			return "You are not allowed to run this command.";
 
@@ -232,14 +232,14 @@ public static class CommandManager
 		var lower = nameOrPartial.ToLower();
 
 		// Exact match first
-		foreach ( var kvp in HexGameManager.Players )
+		foreach ( var kvp in HexagonSystem.Players )
 		{
 			if ( kvp.Value.DisplayName.ToLower() == lower )
 				return kvp.Value;
 		}
 
 		// Partial match
-		foreach ( var kvp in HexGameManager.Players )
+		foreach ( var kvp in HexagonSystem.Players )
 		{
 			if ( kvp.Value.DisplayName.ToLower().Contains( lower ) )
 				return kvp.Value;
@@ -254,12 +254,4 @@ public static class CommandManager
 			a.IsOptional ? $"[{a.Name}]" : $"<{a.Name}>" ) );
 		return $"Usage: /{command.Name} {argList}";
 	}
-}
-
-/// <summary>
-/// Permission hook: can a player run a command? Return false to block.
-/// </summary>
-public interface ICanRunCommandListener
-{
-	bool CanRunCommand( HexPlayerComponent player, HexCommand command );
 }

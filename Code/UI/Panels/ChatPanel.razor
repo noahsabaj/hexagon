@@ -6,8 +6,7 @@
 @namespace Hexagon.UI
 @inherits PanelComponent
 @implements IHexPanel
-@implements IChatMessageReceivedListener
-@implements IChatFocusRequestListener
+@implements IHexChatEvent
 
 <root class="chat-panel" style="display: @(IsOpen ? "flex" : "none")">
 	<div class="chat-messages hex-scrollable" @ref="MessageContainer">
@@ -69,7 +68,7 @@
 		StateHasChanged();
 	}
 
-	// --- IChatMessageReceivedListener ---
+	// --- IHexChatEvent ---
 	public void OnChatMessageReceived( string senderName, string chatClassName, string formattedMessage, Color color )
 	{
 		Messages.Add( new ChatMessage
@@ -91,7 +90,7 @@
 			MessageContainer.PreferScrollToBottom = true;
 	}
 
-	// --- IChatFocusRequestListener ---
+	// --- IHexChatEvent (focus) ---
 	public void OnChatFocusRequested()
 	{
 		IsInputFocused = true;

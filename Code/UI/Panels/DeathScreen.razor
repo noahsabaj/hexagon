@@ -66,7 +66,7 @@
 		var localPlayer = HexUIManager.GetLocalPlayer();
 		if ( localPlayer == null ) return;
 
-		HexEvents.Fire<IDeathScreenRespawnListener>(
+		IHexUIEvent.Post(
 			x => x.OnRespawnRequested( localPlayer ) );
 	}
 

@@ -20,11 +20,6 @@ public static class FactionManager
 	/// </summary>
 	public static IReadOnlyDictionary<string, ClassDefinition> Classes => _classes;
 
-	internal static void Initialize()
-	{
-		Log.Info( $"Hexagon: FactionManager initialized. {_factions.Count} faction(s), {_classes.Count} class(es)." );
-	}
-
 	/// <summary>
 	/// Register a faction definition. Called automatically by FactionDefinition.PostLoad().
 	/// </summary>

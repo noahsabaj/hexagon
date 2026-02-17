@@ -79,7 +79,8 @@
 		if ( !player.HasActiveCharacter ) return "(No Character)";
 
 		var localPlayer = HexUIManager.GetLocalPlayer();
-		if ( localPlayer != null && localPlayer.DoesRecognizeLocal( player ) )
+		var recognition = localPlayer?.GetComponent<RecognitionPlayerComponent>();
+		if ( recognition != null && recognition.DoesRecognizeLocal( player ) )
 			return player.CharacterName;
 
 		return "Unknown";

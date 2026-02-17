@@ -6,11 +6,6 @@ namespace Hexagon.Currency;
 /// </summary>
 public static class CurrencyManager
 {
-	internal static void Initialize()
-	{
-		Log.Info( "Hexagon: CurrencyManager initialized." );
-	}
-
 	/// <summary>
 	/// Format a money amount with the configured currency symbol (e.g. "$500").
 	/// </summary>
@@ -65,12 +60,12 @@ public static class CurrencyManager
 
 	private static bool TryChangeMoney( HexCharacter character, int current, int newAmount, string reason )
 	{
-		if ( !HexEvents.CanAll<ICanMoneyChangeListener>(
+		if ( !SceneEventExtensions.CanAll<IHexCurrencyEvent>(
 			x => x.CanMoneyChange( character, current, newAmount, reason ) ) )
 			return false;
 
 		character.SetVar( "Money", newAmount );
-		HexEvents.Fire<IMoneyChangedListener>(
+		IHexCurrencyEvent.Post(
 			x => x.OnMoneyChanged( character, current, newAmount, reason ) );
 		return true;
 	}
@@ -82,20 +77,4 @@ public static class CurrencyManager
 	{
 		return GetMoney( character ) >= amount;
 	}
-}
-
-/// <summary>
-/// Permission hook: can a money change occur? Return false to block.
-/// </summary>
-public interface ICanMoneyChangeListener
-{
-	bool CanMoneyChange( HexCharacter character, int oldAmount, int newAmount, string reason );
-}
-
-/// <summary>
-/// Fired after a money change has occurred.
-/// </summary>
-public interface IMoneyChangedListener
-{
-	void OnMoneyChanged( HexCharacter character, int oldAmount, int newAmount, string reason );
 }

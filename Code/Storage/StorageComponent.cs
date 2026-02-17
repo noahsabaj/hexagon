@@ -61,7 +61,7 @@ public sealed class StorageComponent : Component, Component.IPressable
 		var player = Core.PressableHelper.GetPlayer( e );
 		if ( player?.Character == null ) return false;
 
-		return HexEvents.CanAll<ICanOpenStorageListener>(
+		return SceneEventExtensions.CanAll<IHexStorageEvent>(
 			x => x.CanOpenStorage( player, this ) );
 	}
 
@@ -77,7 +77,7 @@ public sealed class StorageComponent : Component, Component.IPressable
 		// Send initial inventory snapshot to the player
 		Hexagon.Inventory.HexInventoryComponent.Instance?.SendSnapshotTo( _inventory, player.Connection );
 
-		HexEvents.Fire<IStorageOpenedListener>(
+		IHexStorageEvent.Post(
 			x => x.OnStorageOpened( player, this ) );
 
 		HexLog.Add( LogType.Item, player, $"Opened storage \"{StorageName}\" ({InventoryId})" );
@@ -111,7 +111,7 @@ public sealed class StorageComponent : Component, Component.IPressable
 			}
 		}
 
-		HexEvents.Fire<IStorageClosedListener>(
+		IHexStorageEvent.Post(
 			x => x.OnStorageClosed( player, this ) );
 	}
 
@@ -119,28 +119,4 @@ public sealed class StorageComponent : Component, Component.IPressable
 	{
 		return new Component.IPressable.Tooltip( StorageName, "inventory_2", "Open container" );
 	}
-}
-
-/// <summary>
-/// Permission hook: can a player open this storage container? Return false to block.
-/// </summary>
-public interface ICanOpenStorageListener
-{
-	bool CanOpenStorage( HexPlayerComponent player, StorageComponent storage );
-}
-
-/// <summary>
-/// Fired when a player opens a storage container.
-/// </summary>
-public interface IStorageOpenedListener
-{
-	void OnStorageOpened( HexPlayerComponent player, StorageComponent storage );
-}
-
-/// <summary>
-/// Fired when a player closes a storage container (release or look away).
-/// </summary>
-public interface IStorageClosedListener
-{
-	void OnStorageClosed( HexPlayerComponent player, StorageComponent storage );
 }

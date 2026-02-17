@@ -87,17 +87,8 @@ public static class PermissionManager
 		}
 
 		// Custom permission — fire hook
-		return HexEvents.CanAll<IPermissionCheckListener>(
+		return SceneEventExtensions.CanAll<IHexPermissionEvent>(
 			x => x.OnPermissionCheck( player, requirement )
 		);
 	}
-}
-
-/// <summary>
-/// Hook for schema-defined permission checks beyond simple flags.
-/// Return false to deny the permission.
-/// </summary>
-public interface IPermissionCheckListener
-{
-	bool OnPermissionCheck( HexPlayerComponent player, string permission );
 }

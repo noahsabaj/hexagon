@@ -15,6 +15,6 @@ public static class RpcHelper
 		var caller = Rpc.Caller;
 		if ( caller == null ) return null;
 
-		return Characters.HexGameManager.GetPlayer( caller );
+		return HexagonSystem.GetPlayer( caller );
 	}
 }

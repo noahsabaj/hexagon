@@ -1,17 +1,13 @@
 namespace Hexagon.Doors;
 
 /// <summary>
-/// Manages door registration, persistence, and lookup.
+/// Manages door registration and lookup.
 /// DoorComponents register/unregister themselves on enable/disable.
+/// Persistence is handled directly by each DoorComponent via DatabaseManager.
 /// </summary>
 public static class DoorManager
 {
 	private static readonly Dictionary<string, DoorComponent> _doors = new();
-
-	internal static void Initialize()
-	{
-		Log.Info( "Hexagon: DoorManager initialized." );
-	}
 
 	/// <summary>
 	/// Register a door component. Called by DoorComponent.OnEnabled.
@@ -43,45 +39,4 @@ public static class DoorManager
 	/// Get all registered doors.
 	/// </summary>
 	public static IReadOnlyDictionary<string, DoorComponent> GetAllDoors() => _doors;
-
-	/// <summary>
-	/// Save door data to the database.
-	/// </summary>
-	public static void SaveDoor( DoorData data )
-	{
-		Persistence.DatabaseManager.Save( "doors", data.DoorId, data );
-	}
-
-	/// <summary>
-	/// Load door data from the database.
-	/// </summary>
-	public static DoorData LoadDoor( string doorId )
-	{
-		return Persistence.DatabaseManager.Load<DoorData>( "doors", doorId );
-	}
-
-	/// <summary>
-	/// Delete door data from the database.
-	/// </summary>
-	public static void DeleteDoor( string doorId )
-	{
-		Persistence.DatabaseManager.Delete( "doors", doorId );
-	}
-
-	/// <summary>
-	/// Save all registered doors to the database.
-	/// </summary>
-	public static void SaveAll()
-	{
-		var saved = 0;
-
-		foreach ( var door in _doors.Values )
-		{
-			door.SaveData();
-			saved++;
-		}
-
-		if ( saved > 0 )
-			Log.Info( $"Hexagon: Saved {saved} door(s)." );
-	}
 }

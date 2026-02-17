@@ -1,17 +1,13 @@
 namespace Hexagon.Vendors;
 
 /// <summary>
-/// Manages vendor registration, persistence, and buy/sell operations.
+/// Manages vendor registration, buy/sell operations, and lookup.
 /// VendorComponents register/unregister themselves on enable/disable.
+/// Persistence is handled directly by each VendorComponent via DatabaseManager.
 /// </summary>
 public static class VendorManager
 {
 	private static readonly Dictionary<string, VendorComponent> _vendors = new();
-
-	internal static void Initialize()
-	{
-		Log.Info( "Hexagon: VendorManager initialized." );
-	}
 
 	/// <summary>
 	/// Register a vendor component. Called by VendorComponent.OnEnabled.
@@ -67,7 +63,7 @@ public static class VendorManager
 			return (false, "Invalid item definition.");
 
 		// Hook: can buy?
-		if ( !HexEvents.CanAll<ICanBuyItemListener>(
+		if ( !SceneEventExtensions.CanAll<IHexVendorEvent>(
 			x => x.CanBuyItem( player, vendor, vendorItem ) ) )
 			return (false, "You are not allowed to buy this item.");
 
@@ -102,7 +98,7 @@ public static class VendorManager
 		inventory.AddAt( instance, slot.Value.x, slot.Value.y );
 
 		// Fire event
-		HexEvents.Fire<IItemBoughtListener>(
+		IHexVendorEvent.Post(
 			x => x.OnItemBought( player, vendor, vendorItem, instance ) );
 
 		HexLog.Add( LogType.Vendor, player,
@@ -137,7 +133,7 @@ public static class VendorManager
 			return (false, "This vendor doesn't buy that item.");
 
 		// Hook: can sell?
-		if ( !HexEvents.CanAll<ICanSellItemListener>(
+		if ( !SceneEventExtensions.CanAll<IHexVendorEvent>(
 			x => x.CanSellItem( player, vendor, vendorItem, instance ) ) )
 			return (false, "You are not allowed to sell this item.");
 
@@ -152,7 +148,7 @@ public static class VendorManager
 		CurrencyManager.GiveMoney( player.Character, vendorItem.SellPrice, "vendor_sell" );
 
 		// Fire event
-		HexEvents.Fire<IItemSoldListener>(
+		IHexVendorEvent.Post(
 			x => x.OnItemSold( player, vendor, vendorItem ) );
 
 		HexLog.Add( LogType.Vendor, player,
@@ -161,61 +157,4 @@ public static class VendorManager
 		return (true, $"Sold {definition.DisplayName} for {CurrencyManager.Format( vendorItem.SellPrice )}.");
 	}
 
-	// --- Persistence ---
-
-	/// <summary>
-	/// Save vendor data to the database.
-	/// </summary>
-	public static void SaveVendor( VendorData data )
-	{
-		Persistence.DatabaseManager.Save( "vendors", data.VendorId, data );
-	}
-
-	/// <summary>
-	/// Load vendor data from the database.
-	/// </summary>
-	public static VendorData LoadVendor( string vendorId )
-	{
-		return Persistence.DatabaseManager.Load<VendorData>( "vendors", vendorId );
-	}
-}
-
-/// <summary>
-/// Permission hook: can a player buy this item? Return false to block.
-/// </summary>
-public interface ICanBuyItemListener
-{
-	bool CanBuyItem( HexPlayerComponent player, VendorComponent vendor, VendorItem item );
-}
-
-/// <summary>
-/// Permission hook: can a player sell this item? Return false to block.
-/// </summary>
-public interface ICanSellItemListener
-{
-	bool CanSellItem( HexPlayerComponent player, VendorComponent vendor, VendorItem item, ItemInstance instance );
-}
-
-/// <summary>
-/// Fired after a player buys an item from a vendor.
-/// </summary>
-public interface IItemBoughtListener
-{
-	void OnItemBought( HexPlayerComponent player, VendorComponent vendor, VendorItem item, ItemInstance instance );
-}
-
-/// <summary>
-/// Fired after a player sells an item to a vendor.
-/// </summary>
-public interface IItemSoldListener
-{
-	void OnItemSold( HexPlayerComponent player, VendorComponent vendor, VendorItem item );
-}
-
-/// <summary>
-/// Fired when a player opens/interacts with a vendor.
-/// </summary>
-public interface IVendorOpenedListener
-{
-	void OnVendorOpened( HexPlayerComponent player, VendorComponent vendor );
 }

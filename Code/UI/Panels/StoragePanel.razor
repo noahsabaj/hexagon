@@ -7,8 +7,7 @@
 @namespace Hexagon.UI
 @inherits PanelComponent
 @implements IHexPanel
-@implements IInventoryUpdatedListener
-@implements IInventoryRemovedListener
+@implements IHexInventoryEvent
 
 <root class="@(IsOpen ? "open" : "")">
 	<div class="storage-container hex-panel">

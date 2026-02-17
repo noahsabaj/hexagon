@@ -30,12 +30,3 @@ public interface IHexPanel
 	/// </summary>
 	void Close();
 }
-
-/// <summary>
-/// Fired when the death screen respawn button is pressed.
-/// Schema devs implement this to handle respawn logic.
-/// </summary>
-public interface IDeathScreenRespawnListener
-{
-	void OnRespawnRequested( HexPlayerComponent player );
-}

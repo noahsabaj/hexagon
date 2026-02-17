@@ -35,7 +35,7 @@ public sealed class VendorComponent : Component, Component.IPressable
 			VendorId = Persistence.DatabaseManager.NewId();
 		}
 
-		_data = VendorManager.LoadVendor( VendorId );
+		_data = Persistence.DatabaseManager.Load<VendorData>( "vendors", VendorId );
 
 		if ( _data == null )
 		{
@@ -70,7 +70,7 @@ public sealed class VendorComponent : Component, Component.IPressable
 		var player = Core.PressableHelper.GetPlayer( e );
 		if ( player?.Character == null ) return false;
 
-		HexEvents.Fire<IVendorOpenedListener>(
+		IHexVendorEvent.Post(
 			x => x.OnVendorOpened( player, this ) );
 
 		// Send vendor catalog to the interacting player
@@ -168,6 +168,6 @@ public sealed class VendorComponent : Component, Component.IPressable
 	{
 		if ( _data == null ) return;
 		_data.VendorName = VendorName;
-		VendorManager.SaveVendor( _data );
+		Persistence.DatabaseManager.Save( "vendors", _data.VendorId, _data );
 	}
 }

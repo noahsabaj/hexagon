@@ -133,8 +133,8 @@ public static class ChatManager
 		if ( !chatClass.CanSay( sender, chatMessage ) )
 			return;
 
-		// Hook: ICanSendChatMessage
-		if ( !HexEvents.CanAll<ICanSendChatMessage>(
+		// Hook: IHexChatEvent.CanSendChatMessage
+		if ( !SceneEventExtensions.CanAll<IHexChatEvent>(
 			x => x.CanSendChatMessage( sender, chatClass, chatMessage ) ) )
 			return;
 
@@ -166,7 +166,7 @@ public static class ChatManager
 			{
 				foreach ( var conn in recipients )
 				{
-					var listener = HexGameManager.GetPlayer( conn );
+					var listener = HexagonSystem.GetPlayer( conn );
 					if ( listener == null ) continue;
 
 					var personalName = Characters.RecognitionManager.GetDisplayNameForChat( listener, sender );
@@ -198,7 +198,7 @@ public static class ChatManager
 		}
 
 		// Fire server-side event
-		HexEvents.Fire<IChatMessageListener>(
+		IHexChatEvent.Post(
 			x => x.OnChatMessage( sender, chatClass, chatMessage, formatted ) );
 	}
 
@@ -268,7 +268,7 @@ public static class ChatManager
 		HexPlayerComponent target = null;
 		var lowerTarget = targetName.ToLower();
 
-		foreach ( var kvp in HexGameManager.Players )
+		foreach ( var kvp in HexagonSystem.Players )
 		{
 			if ( kvp.Value.DisplayName.ToLower().Contains( lowerTarget ) )
 			{
@@ -301,7 +301,7 @@ public static class ChatManager
 			}
 		}
 
-		HexEvents.Fire<IChatMessageListener>(
+		IHexChatEvent.Post(
 			x => x.OnChatMessage( sender, chatClass, pmMessage, formatted ) );
 	}
 
@@ -310,7 +310,7 @@ public static class ChatManager
 		var recipients = new List<Connection>();
 		var range = chatClass.Range;
 
-		foreach ( var kvp in HexGameManager.Players )
+		foreach ( var kvp in HexagonSystem.Players )
 		{
 			var listener = kvp.Value;
 			if ( listener?.Connection == null ) continue;
@@ -366,28 +366,4 @@ public static class ChatManager
 
 		return false;
 	}
-}
-
-/// <summary>
-/// Permission hook: can a player send a chat message? Return false to block.
-/// </summary>
-public interface ICanSendChatMessage
-{
-	bool CanSendChatMessage( HexPlayerComponent sender, IChatClass chatClass, string message );
-}
-
-/// <summary>
-/// Server-side: fired after a chat message is sent.
-/// </summary>
-public interface IChatMessageListener
-{
-	void OnChatMessage( HexPlayerComponent sender, IChatClass chatClass, string rawMessage, string formattedMessage );
-}
-
-/// <summary>
-/// Client-side: fired when a chat message is received.
-/// </summary>
-public interface IChatMessageReceivedListener
-{
-	void OnChatMessageReceived( string senderName, string chatClassName, string formattedMessage, Color color );
 }

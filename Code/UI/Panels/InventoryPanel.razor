@@ -7,7 +7,7 @@
 @namespace Hexagon.UI
 @inherits PanelComponent
 @implements IHexPanel
-@implements IInventoryUpdatedListener
+@implements IHexInventoryEvent
 
 <root class="inventory-panel hex-panel" style="display: @(IsOpen ? "flex" : "none")">
 	<div class="inv-header">

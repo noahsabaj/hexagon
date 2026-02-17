@@ -1,8 +1,9 @@
 namespace Hexagon.Characters;
 
 /// <summary>
-/// Manages character CRUD operations, auto-save, and CharVar metadata discovery.
-/// Initialized by HexagonFramework on startup.
+/// Manages character CRUD operations and CharVar metadata discovery.
+/// Initialized by HexagonSystem on startup.
+/// Auto-save is handled by <see cref="Persistence.AutoSaveSystem"/>.
 /// </summary>
 public static class CharacterManager
 {
@@ -11,7 +12,6 @@ public static class CharacterManager
 	private static readonly Dictionary<string, HexCharacter> _activeCharacters = new();
 
 	private static Type _characterDataType;
-	private static TimeUntil _nextAutoSave;
 
 	/// <summary>
 	/// All discovered CharVar metadata.
@@ -23,21 +23,7 @@ public static class CharacterManager
 		DiscoverCharacterDataType();
 		DiscoverCharVars();
 
-		_nextAutoSave = Config.HexConfig.Get<float>( "framework.saveInterval", 300f );
-
 		Log.Info( $"Hexagon: CharacterManager initialized. Data type: {_characterDataType?.Name ?? "NONE"}, {_charVars.Count} CharVar(s) discovered." );
-	}
-
-	/// <summary>
-	/// Called every frame by the framework to handle auto-save.
-	/// </summary>
-	internal static void Update()
-	{
-		if ( _nextAutoSave <= 0 )
-		{
-			SaveAll();
-			_nextAutoSave = Config.HexConfig.Get<float>( "framework.saveInterval", 300f );
-		}
 	}
 
 	// --- CharVar Discovery ---
@@ -144,7 +130,7 @@ public static class CharacterManager
 		else
 		{
 			// Send character list to client for selection UI
-			player.SendCharacterListToOwner();
+			player.GetComponent<CharacterCrudComponent>()?.SendCharacterListToOwner();
 
 			if ( characters.Count == 0 )
 				Log.Info( $"Hexagon: No characters found for {player.DisplayName}. Awaiting character creation." );
@@ -159,7 +145,7 @@ public static class CharacterManager
 	public static HexCharacter CreateCharacter( HexPlayerComponent player, HexCharacterData data )
 	{
 		// Permission check
-		if ( !HexEvents.CanAll<ICanCharacterCreate>( x => x.CanCharacterCreate( player, data ) ) )
+		if ( !SceneEventExtensions.CanAll<IHexCharacterEvent>( x => x.CanCharacterCreate( player, data ) ) )
 		{
 			Log.Warning( $"Hexagon: Character creation blocked for {player.DisplayName}" );
 			return null;
@@ -211,7 +197,7 @@ public static class CharacterManager
 		var character = new HexCharacter( data );
 
 		// Fire event
-		HexEvents.Fire<ICharacterCreatedListener>( x => x.OnCharacterCreated( player, character ) );
+		IHexCharacterEvent.Post( x => x.OnCharacterCreated( player, character ) );
 
 		// Apply class loadout
 		Factions.LoadoutManager.OnCharacterCreated( player, character );
@@ -277,7 +263,7 @@ public static class CharacterManager
 		player.SyncPrivateData();
 
 		// Fire event
-		HexEvents.Fire<ICharacterLoadedListener>( x => x.OnCharacterLoaded( player, character ) );
+		IHexCharacterEvent.Post( x => x.OnCharacterLoaded( player, character ) );
 
 		// Apply class loadout (if OnLoad mode)
 		Factions.LoadoutManager.OnCharacterLoaded( player, character );
@@ -296,7 +282,7 @@ public static class CharacterManager
 		if ( character == null ) return;
 
 		// Fire event before unloading
-		HexEvents.Fire<ICharacterUnloadedListener>( x => x.OnCharacterUnloaded( player, character ) );
+		IHexCharacterEvent.Post( x => x.OnCharacterUnloaded( player, character ) );
 
 		// Save
 		character.Save();

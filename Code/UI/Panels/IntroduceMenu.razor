@@ -41,7 +41,7 @@
 		var player = HexUIManager.GetLocalPlayer();
 		if ( player == null ) return;
 
-		player.RequestIntroduce( level );
+		player.GetComponent<IntroducePlayerComponent>()?.RequestIntroduce( level );
 
 		Close();
 		HexUIManager.Instance?.ClosePanel( "IntroduceMenu" );

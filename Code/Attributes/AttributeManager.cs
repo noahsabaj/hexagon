@@ -11,11 +11,6 @@ public static class AttributeManager
 	private static readonly Dictionary<string, AttributeDefinition> _definitions = new();
 	private const string BoostDataKey = "hex_boosts";
 
-	internal static void Initialize()
-	{
-		Log.Info( $"Hexagon: AttributeManager initialized with {_definitions.Count} attribute(s)." );
-	}
-
 	/// <summary>
 	/// Register an attribute definition (called by AttributeDefinition.PostLoad).
 	/// </summary>
@@ -195,7 +190,7 @@ public static class AttributeManager
 		var newValue = GetAttribute( character, attributeId );
 		if ( Math.Abs( oldValue - newValue ) > 0.001f )
 		{
-			HexEvents.Fire<IAttributeChangedListener>(
+			IHexAttributeEvent.Post(
 				x => x.OnAttributeChanged( character, attributeId, oldValue, newValue ) );
 		}
 	}
@@ -220,12 +215,4 @@ public static class AttributeManager
 		boosts.RemoveAll( b => b.IsExpired );
 		character.SetData( BoostDataKey, Json.Serialize( boosts ) );
 	}
-}
-
-/// <summary>
-/// Fired when a character's effective attribute value changes (base or boost change).
-/// </summary>
-public interface IAttributeChangedListener
-{
-	void OnAttributeChanged( HexCharacter character, string attributeId, float oldValue, float newValue );
 }

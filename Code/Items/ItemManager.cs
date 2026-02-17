@@ -20,11 +20,6 @@ public static class ItemManager
 	/// </summary>
 	public static IReadOnlyDictionary<string, ItemInstance> Instances => _instances;
 
-	internal static void Initialize()
-	{
-		Log.Info( $"Hexagon: ItemManager initialized. {_definitions.Count} definition(s)." );
-	}
-
 	/// <summary>
 	/// Register an item definition. Called automatically by ItemDefinition.PostLoad().
 	/// </summary>

@@ -1,6 +1,7 @@
 @using Sandbox;
 @using Sandbox.UI;
 @using Hexagon.Characters;
+@using Hexagon.Interaction;
 @using Hexagon.UI;
 
 @namespace Hexagon.UI
@@ -37,9 +38,12 @@
 		var player = HexUIManager.GetLocalPlayer();
 		if ( player == null ) return;
 
-		ActionText = player.ActionText;
-		ActionStartTime = player.ActionStartTime;
-		ActionEndTime = player.ActionEndTime;
+		var actionBar = player.GetComponent<ActionBarPlayerComponent>();
+		if ( actionBar == null ) return;
+
+		ActionText = actionBar.ActionText;
+		ActionStartTime = actionBar.ActionStartTime;
+		ActionEndTime = actionBar.ActionEndTime;
 	}
 
 	protected override int BuildHash()

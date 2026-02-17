@@ -43,14 +43,14 @@ public sealed class WeaponRaiseComponent : Component
 			return;
 
 		// Permission hook (only when raising)
-		if ( !IsWeaponRaised && !HexEvents.CanAll<ICanRaiseWeaponListener>( x => x.CanRaiseWeapon( player ) ) )
+		if ( !IsWeaponRaised && !SceneEventExtensions.CanAll<IHexWeaponEvent>( x => x.CanRaiseWeapon( player ) ) )
 			return;
 
 		ToggleRaised();
 
 		var p = player;
 		var raised = IsWeaponRaised;
-		HexEvents.Fire<IWeaponRaisedListener>( x => x.OnWeaponRaised( p, raised ) );
+		IHexWeaponEvent.Post( x => x.OnWeaponRaised( p, raised ) );
 	}
 
 	/// <summary>
@@ -153,29 +153,4 @@ public sealed class WeaponRaiseComponent : Component
 			controller.Renderer.Set( "holdtype", 0 );
 		}
 	}
-}
-
-/// <summary>
-/// Permission hook: can this player raise their weapon? Return false to block.
-/// </summary>
-public interface ICanRaiseWeaponListener
-{
-	bool CanRaiseWeapon( HexPlayerComponent player );
-}
-
-/// <summary>
-/// Fired when a player's weapon raise state changes.
-/// </summary>
-public interface IWeaponRaisedListener
-{
-	void OnWeaponRaised( HexPlayerComponent player, bool isRaised );
-}
-
-/// <summary>
-/// Permission hook: can this player fire their weapon?
-/// Schema weapon code should check both this hook and WeaponRaiseComponent.CanFire.
-/// </summary>
-public interface ICanFireWeaponListener
-{
-	bool CanFireWeapon( HexPlayerComponent player );
 }

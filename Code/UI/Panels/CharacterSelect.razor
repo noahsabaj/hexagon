@@ -74,26 +74,27 @@
 	public string PanelName => "CharacterSelect";
 	public bool IsOpen { get; private set; }
 
-	private List<CharacterListEntry> Characters => LocalPlayer?.ClientCharacterList ?? new();
+	private List<CharacterListEntry> Characters => CharacterCrud?.ClientCharacterList ?? new();
 	private string SelectedId { get; set; }
 	private bool ShowDeleteConfirm { get; set; }
 	private string DeleteTargetId { get; set; }
 
 	private HexPlayerComponent LocalPlayer => HexUIManager.GetLocalPlayer();
+	private CharacterCrudComponent CharacterCrud => LocalPlayer?.GetComponent<CharacterCrudComponent>();
 
 	public void Open()
 	{
 		IsOpen = true;
 
 		// Request fresh character list
-		LocalPlayer?.RequestCharacterList();
+		CharacterCrud?.RequestCharacterList();
 
 		// Subscribe to updates
-		var player = LocalPlayer;
-		if ( player != null )
+		var crud = CharacterCrud;
+		if ( crud != null )
 		{
-			player.OnCharacterListReceived -= OnListReceived;
-			player.OnCharacterListReceived += OnListReceived;
+			crud.OnCharacterListReceived -= OnListReceived;
+			crud.OnCharacterListReceived += OnListReceived;
 		}
 
 		StateHasChanged();
@@ -104,10 +105,10 @@
 		IsOpen = false;
 		ShowDeleteConfirm = false;
 
-		var player = LocalPlayer;
-		if ( player != null )
+		var crud = CharacterCrud;
+		if ( crud != null )
 		{
-			player.OnCharacterListReceived -= OnListReceived;
+			crud.OnCharacterListReceived -= OnListReceived;
 		}
 
 		StateHasChanged();
@@ -125,7 +126,7 @@
 
 	private void LoadCharacter( string id )
 	{
-		LocalPlayer?.RequestLoadCharacter( id );
+		CharacterCrud?.RequestLoadCharacter( id );
 	}
 
 	private void CreateNew()
@@ -143,7 +144,7 @@
 	{
 		if ( !string.IsNullOrEmpty( DeleteTargetId ) )
 		{
-			LocalPlayer?.RequestDeleteCharacter( DeleteTargetId );
+			CharacterCrud?.RequestDeleteCharacter( DeleteTargetId );
 		}
 
 		ShowDeleteConfirm = false;

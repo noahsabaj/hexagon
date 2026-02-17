@@ -36,11 +36,6 @@ public class LogEntry
 /// </summary>
 public static class HexLog
 {
-	internal static void Initialize()
-	{
-		Log.Info( "Hexagon: HexLog initialized." );
-	}
-
 	/// <summary>
 	/// Record a log entry for a player action.
 	/// </summary>
@@ -113,14 +108,6 @@ public static class HexLog
 
 	private static void NotifyListeners( LogEntry entry )
 	{
-		HexEvents.Fire<ILogListener>( x => x.OnLog( entry ) );
+		IHexLogEvent.Post( x => x.OnLog( entry ) );
 	}
-}
-
-/// <summary>
-/// Listener interface for receiving log entries in real-time.
-/// </summary>
-public interface ILogListener
-{
-	void OnLog( LogEntry entry );
 }

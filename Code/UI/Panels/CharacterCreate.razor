@@ -97,6 +97,7 @@
 	private readonly Dictionary<string, string> _fieldValues = new();
 
 	private HexPlayerComponent LocalPlayer => HexUIManager.GetLocalPlayer();
+	private CharacterCrudComponent CharacterCrud => LocalPlayer?.GetComponent<CharacterCrudComponent>();
 
 	public void Open()
 	{
@@ -114,11 +115,11 @@
 			SelectedFaction = factions[0].UniqueId;
 
 		// Subscribe to result
-		var player = LocalPlayer;
-		if ( player != null )
+		var crud = CharacterCrud;
+		if ( crud != null )
 		{
-			player.OnCharacterCreateResult -= OnCreateResult;
-			player.OnCharacterCreateResult += OnCreateResult;
+			crud.OnCharacterCreateResult -= OnCreateResult;
+			crud.OnCharacterCreateResult += OnCreateResult;
 		}
 
 		StateHasChanged();
@@ -127,10 +128,10 @@
 	public void Close()
 	{
 		IsOpen = false;
-		var player = LocalPlayer;
-		if ( player != null )
+		var crud = CharacterCrud;
+		if ( crud != null )
 		{
-			player.OnCharacterCreateResult -= OnCreateResult;
+			crud.OnCharacterCreateResult -= OnCreateResult;
 		}
 		StateHasChanged();
 	}
@@ -219,7 +220,7 @@
 		IsSubmitting = true;
 
 		var json = Json.Serialize( values );
-		LocalPlayer?.RequestCreateCharacter( json );
+		CharacterCrud?.RequestCreateCharacter( json );
 	}
 
 	private void OnCreateResult( bool success, string message )
