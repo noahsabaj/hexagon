@@ -176,13 +176,13 @@ public static class RecognitionManager
 
 	/// <summary>
 	/// Server-side: sync recognition data to the owning client.
+	/// Writes directly to the NetList — no JSON serialization or RPC needed.
 	/// </summary>
 	internal static void SyncRecognitionToClient( HexPlayerComponent player )
 	{
 		if ( player?.Character == null ) return;
 
 		var ids = player.Character.GetRecognizedIds();
-		var json = Json.Serialize( ids );
-		player.GetComponent<RecognitionPlayerComponent>()?.ReceiveRecognitionData( json );
+		player.GetComponent<RecognitionPlayerComponent>()?.SetRecognizedIds( ids );
 	}
 }

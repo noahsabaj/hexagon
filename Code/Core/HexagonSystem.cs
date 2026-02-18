@@ -45,19 +45,26 @@ public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.I
 	{
 		Log.Info( "Hexagon: Initializing framework..." );
 
-		// Foundation
+		// Foundation — database must come first (everything else persists through it)
 		Persistence.DatabaseManager.Initialize();
+
+		// Configuration — load saved overrides before plugins register their keys
 		Config.DefaultConfigs.Register();
 		Config.HexConfig.Initialize();
+
+		// ConVar bridge — after HexConfig.Initialize() so saved overrides are already loaded
+		Config.ConVarBridge.Initialize();
+
+		// Plugins — before CharacterManager so plugins can register their HexCharacterData
 		PluginManager.Initialize();
 
-		// Systems with required initialization
+		// Systems that depend on plugin registrations being complete
 		Characters.CharacterManager.Initialize();
 		Permissions.PermissionManager.Initialize();
 		Chat.ChatManager.Initialize();
 		Commands.CommandManager.Initialize();
 
-		// Service components
+		// Service components (singleton GameObjects on the server)
 		var servicesGo = new GameObject( true, "Hexagon Services" );
 		servicesGo.GetOrAddComponent<Chat.HexChatComponent>();
 		servicesGo.GetOrAddComponent<Inventory.HexInventoryComponent>();
@@ -139,11 +146,22 @@ public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.I
 			foreach ( var door in Doors.DoorManager.GetAllDoors().Values )
 				door.SaveData();
 
+			// Explicit save order: inventories and characters must complete before DB cache clears
 			Inventory.InventoryManager.SaveAll();
 			Characters.CharacterManager.SaveAll();
 			Config.HexConfig.Save();
+
+			// Clean up ConVar bridge event subscription
+			Config.ConVarBridge.Shutdown();
+
+			// Clean up any dropped world items
+			Items.WorldItemManager.ClearAll();
+
+			// Database and plugin shutdown — GameObjectSystem.Dispose() handles these too,
+			// but calling explicitly here ensures correct ordering (saves above run first).
 			Persistence.DatabaseManager.Shutdown();
 			PluginManager.Shutdown();
+
 			IsInitialized = false;
 			Players.Clear();
 		}

@@ -2,22 +2,52 @@ namespace Hexagon.Inventory;
 
 /// <summary>
 /// Manages inventory lifecycle: creation, restoration, persistence, and dirty tracking.
+///
+/// Converted from a static class to a GameObjectSystem so that per-scene mutable state
+/// (_inventories, _dirtyInventories) is scoped to the scene and cleared on scene reload.
+/// All public methods remain static via facades — callers need no changes.
 /// </summary>
-public static class InventoryManager
+public sealed class InventoryManager : GameObjectSystem<InventoryManager>
 {
-	private static readonly Dictionary<string, HexInventory> _inventories = new();
-	private static readonly HashSet<string> _dirtyInventories = new();
+	private static InventoryManager _instance;
+
+	private readonly Dictionary<string, HexInventory> _inventories = new();
+	private readonly HashSet<string> _dirtyInventories = new();
+
+	public InventoryManager( Scene scene ) : base( scene )
+	{
+		_instance = this;
+	}
+
+	public override void Dispose()
+	{
+		SaveAll();
+		_inventories.Clear();
+		_dirtyInventories.Clear();
+
+		if ( _instance == this )
+			_instance = null;
+
+		base.Dispose();
+	}
+
+	private static InventoryManager Instance => _instance;
+
+	// --- Public Static Facade (unchanged signatures) ---
 
 	/// <summary>
 	/// All active inventories.
 	/// </summary>
-	public static IReadOnlyDictionary<string, HexInventory> Inventories => _inventories;
+	public static IReadOnlyDictionary<string, HexInventory> Inventories =>
+		(IReadOnlyDictionary<string, HexInventory>)Instance?._inventories ?? new Dictionary<string, HexInventory>();
 
 	/// <summary>
 	/// Create a new inventory and persist it.
 	/// </summary>
 	public static HexInventory Create( int width, int height, string ownerId = null, string type = "main" )
 	{
+		if ( Instance == null ) return null;
+
 		var inv = new HexInventory
 		{
 			Id = Persistence.DatabaseManager.NewId(),
@@ -28,7 +58,7 @@ public static class InventoryManager
 		};
 
 		Persistence.DatabaseManager.Save( "inventories", inv.Id, inv );
-		_inventories[inv.Id] = inv;
+		Instance._inventories[inv.Id] = inv;
 
 		return inv;
 	}
@@ -48,9 +78,9 @@ public static class InventoryManager
 	/// </summary>
 	public static HexInventory Get( string inventoryId )
 	{
-		if ( string.IsNullOrEmpty( inventoryId ) ) return null;
+		if ( string.IsNullOrEmpty( inventoryId ) || Instance == null ) return null;
 
-		if ( _inventories.TryGetValue( inventoryId, out var inv ) )
+		if ( Instance._inventories.TryGetValue( inventoryId, out var inv ) )
 			return inv;
 
 		// Try loading from DB
@@ -58,7 +88,7 @@ public static class InventoryManager
 		if ( loaded != null )
 		{
 			loaded.RestoreItems();
-			_inventories[loaded.Id] = loaded;
+			Instance._inventories[loaded.Id] = loaded;
 		}
 
 		return loaded;
@@ -69,6 +99,8 @@ public static class InventoryManager
 	/// </summary>
 	public static List<HexInventory> LoadForCharacter( string characterId )
 	{
+		if ( Instance == null ) return new List<HexInventory>();
+
 		var inventories = Persistence.DatabaseManager.Select<HexInventory>(
 			"inventories",
 			inv => inv.OwnerId == characterId
@@ -77,7 +109,7 @@ public static class InventoryManager
 		foreach ( var inv in inventories )
 		{
 			inv.RestoreItems();
-			_inventories[inv.Id] = inv;
+			Instance._inventories[inv.Id] = inv;
 		}
 
 		return inventories;
@@ -88,18 +120,17 @@ public static class InventoryManager
 	/// </summary>
 	public static void Delete( string inventoryId )
 	{
-		if ( _inventories.TryGetValue( inventoryId, out var inv ) )
+		if ( Instance != null && Instance._inventories.TryGetValue( inventoryId, out var inv ) )
 		{
-			// Remove all items
 			foreach ( var itemId in inv.ItemIds.ToList() )
 			{
 				Items.ItemManager.DestroyInstance( itemId );
 			}
 
-			_inventories.Remove( inventoryId );
+			Instance._inventories.Remove( inventoryId );
 		}
 
-		_dirtyInventories.Remove( inventoryId );
+		Instance?._dirtyInventories.Remove( inventoryId );
 		Persistence.DatabaseManager.Delete( "inventories", inventoryId );
 	}
 
@@ -108,7 +139,7 @@ public static class InventoryManager
 	/// </summary>
 	internal static void MarkDirty( string inventoryId )
 	{
-		_dirtyInventories.Add( inventoryId );
+		Instance?._dirtyInventories.Add( inventoryId );
 	}
 
 	/// <summary>
@@ -117,23 +148,27 @@ public static class InventoryManager
 	/// </summary>
 	internal static HashSet<string> GetDirtyAndClear()
 	{
-		var dirty = new HashSet<string>( _dirtyInventories );
-		_dirtyInventories.Clear();
+		if ( Instance == null ) return new HashSet<string>();
+
+		var dirty = new HashSet<string>( Instance._dirtyInventories );
+		Instance._dirtyInventories.Clear();
 		return dirty;
 	}
 
 	/// <summary>
-	/// Save all dirty inventories and their items.
+	/// Save all active inventories and their items.
 	/// </summary>
 	public static void SaveAll()
 	{
-		foreach ( var inv in _inventories.Values )
+		if ( Instance == null ) return;
+
+		foreach ( var inv in Instance._inventories.Values )
 		{
 			inv.Save();
 		}
 
 		Items.ItemManager.SaveAll();
-		_dirtyInventories.Clear();
+		Instance._dirtyInventories.Clear();
 	}
 
 	/// <summary>
@@ -142,11 +177,13 @@ public static class InventoryManager
 	/// </summary>
 	public static void Unload( string inventoryId )
 	{
-		if ( _inventories.TryGetValue( inventoryId, out var inv ) )
+		if ( Instance == null ) return;
+
+		if ( Instance._inventories.TryGetValue( inventoryId, out var inv ) )
 		{
 			inv.Save();
-			_inventories.Remove( inventoryId );
-			_dirtyInventories.Remove( inventoryId );
+			Instance._inventories.Remove( inventoryId );
+			Instance._dirtyInventories.Remove( inventoryId );
 		}
 	}
 }

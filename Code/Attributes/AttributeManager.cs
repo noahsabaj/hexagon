@@ -34,11 +34,16 @@ public static class AttributeManager
 
 	/// <summary>
 	/// Get the effective attribute value for a character (base + boosts, clamped).
+	/// Logs a warning if the attribute ID is not registered (helps catch typos).
 	/// </summary>
 	public static float GetAttribute( HexCharacter character, string attributeId )
 	{
 		var def = GetDefinition( attributeId );
-		if ( def == null ) return 0f;
+		if ( def == null )
+		{
+			Log.Warning( $"Hexagon: AttributeManager.GetAttribute — attribute '{attributeId}' is not registered." );
+			return 0f;
+		}
 
 		var baseValue = character.GetData<float>( $"hex_attr_{attributeId}", def.StartValue );
 		var boostSum = GetBoostSum( character, attributeId );
@@ -59,11 +64,16 @@ public static class AttributeManager
 
 	/// <summary>
 	/// Set the base attribute value. Fires IAttributeChangedListener.
+	/// Logs a warning if the attribute ID is not registered (helps catch typos).
 	/// </summary>
 	public static void SetAttribute( HexCharacter character, string attributeId, float value )
 	{
 		var def = GetDefinition( attributeId );
-		if ( def == null ) return;
+		if ( def == null )
+		{
+			Log.Warning( $"Hexagon: AttributeManager.SetAttribute — attribute '{attributeId}' is not registered." );
+			return;
+		}
 
 		var clamped = Math.Clamp( value, def.MinValue, def.MaxValue );
 		var oldValue = GetAttribute( character, attributeId );

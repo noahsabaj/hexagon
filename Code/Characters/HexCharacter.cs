@@ -25,9 +25,16 @@ public class HexCharacter
 
 	private readonly HashSet<string> _dirtyFields = new();
 
+	/// <summary>
+	/// Typed accessor for this character's attribute values.
+	/// Equivalent to calling AttributeManager directly, but with nicer syntax.
+	/// </summary>
+	public Attributes.AttributeSet Attributes { get; }
+
 	public HexCharacter( HexCharacterData data )
 	{
 		Data = data;
+		Attributes = new Attributes.AttributeSet( this );
 	}
 
 	// --- Identity ---

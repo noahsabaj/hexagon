@@ -124,11 +124,10 @@ public sealed class HexInventoryComponent : Component
 			if ( receivers.Count == 0 ) continue;
 
 			var snapshot = BuildSnapshot( inv );
-			var json = Json.Serialize( snapshot );
 
 			using ( Rpc.FilterInclude( receivers.ToList() ) )
 			{
-				ReceiveInventorySnapshot( json );
+				ReceiveInventorySnapshot( snapshot );
 			}
 		}
 	}
@@ -166,11 +165,10 @@ public sealed class HexInventoryComponent : Component
 	internal void SendSnapshotTo( HexInventory inv, Connection conn )
 	{
 		var snapshot = BuildSnapshot( inv );
-		var json = Json.Serialize( snapshot );
 
 		using ( Rpc.FilterInclude( conn ) )
 		{
-			ReceiveInventorySnapshot( json );
+			ReceiveInventorySnapshot( snapshot );
 		}
 	}
 
@@ -178,24 +176,17 @@ public sealed class HexInventoryComponent : Component
 
 	/// <summary>
 	/// Server sends an inventory snapshot to filtered receivers.
+	/// InventorySnapshot is passed as a typed parameter — no JSON serialization in the RPC path.
 	/// </summary>
 	[Rpc.Broadcast( NetFlags.HostOnly )]
-	public void ReceiveInventorySnapshot( string json )
+	public void ReceiveInventorySnapshot( InventorySnapshot snapshot )
 	{
-		try
-		{
-			var snapshot = Json.Deserialize<InventorySnapshot>( json );
-			if ( snapshot == null ) return;
+		if ( snapshot == null ) return;
 
-			_clientInventories[snapshot.Id] = snapshot;
+		_clientInventories[snapshot.Id] = snapshot;
 
-			IHexInventoryEvent.Post(
-				x => x.OnInventoryUpdated( snapshot.Id ) );
-		}
-		catch ( Exception ex )
-		{
-			Log.Error( $"Hexagon: ReceiveInventorySnapshot error: {ex}" );
-		}
+		IHexInventoryEvent.Post(
+			x => x.OnInventoryUpdated( snapshot.Id ) );
 	}
 
 	/// <summary>
@@ -212,24 +203,17 @@ public sealed class HexInventoryComponent : Component
 
 	/// <summary>
 	/// Server sends a vendor catalog to the client.
+	/// Catalog is passed as a typed List — no JSON serialization in the RPC path.
 	/// </summary>
 	[Rpc.Broadcast( NetFlags.HostOnly )]
-	public void ReceiveVendorCatalog( string vendorId, string vendorName, string catalogJson )
+	public void ReceiveVendorCatalog( string vendorId, string vendorName, List<VendorCatalogEntry> catalog )
 	{
-		try
-		{
-			var catalog = Json.Deserialize<List<VendorCatalogEntry>>( catalogJson );
-			CurrentVendorId = vendorId;
-			CurrentVendorName = vendorName;
-			CurrentVendorCatalog = catalog ?? new();
+		CurrentVendorId = vendorId;
+		CurrentVendorName = vendorName;
+		CurrentVendorCatalog = catalog ?? new();
 
-			IHexInventoryEvent.Post(
-				x => x.OnVendorCatalogReceived( vendorId, vendorName, CurrentVendorCatalog ) );
-		}
-		catch ( Exception ex )
-		{
-			Log.Error( $"Hexagon: ReceiveVendorCatalog error: {ex}" );
-		}
+		IHexInventoryEvent.Post(
+			x => x.OnVendorCatalogReceived( vendorId, vendorName, CurrentVendorCatalog ) );
 	}
 
 	/// <summary>
@@ -295,10 +279,10 @@ public sealed class HexInventoryComponent : Component
 		var def = item.Definition;
 		if ( def == null || !def.CanDrop ) return;
 
-		// Remove from inventory
+		// Remove from inventory first
 		inv.Remove( itemId );
 
-		// Notify definition
+		// Notify definition — default OnDrop spawns a world item if WorldModel is set
 		def.OnDrop( player, item );
 	}
 

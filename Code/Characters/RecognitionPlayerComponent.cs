@@ -3,28 +3,25 @@ namespace Hexagon.Characters;
 /// <summary>
 /// Client-side character recognition state.
 /// Satellite component on the player GameObject alongside HexPlayerComponent.
+/// Uses a [Sync] NetList for delta-compressed networking — no JSON, no RPC needed.
 /// </summary>
 public sealed class RecognitionPlayerComponent : Component
 {
-	private HashSet<string> _recognizedIds = new();
-	private bool _recognitionDataReceived;
+	/// <summary>
+	/// Synced list of recognized character IDs. Server writes directly; client reads directly.
+	/// NetList sends only deltas, so no full resync on each change.
+	/// </summary>
+	[Sync] public NetList<string> RecognizedIds { get; set; } = new();
 
 	/// <summary>
-	/// Server sends updated recognition data to the owning client.
+	/// Server-side: replace the full recognition set with new IDs.
+	/// Called by RecognitionManager after a character's recognition list changes.
 	/// </summary>
-	[Rpc.Owner]
-	internal void ReceiveRecognitionData( string json )
+	internal void SetRecognizedIds( IEnumerable<string> ids )
 	{
-		try
-		{
-			_recognizedIds = Json.Deserialize<HashSet<string>>( json ) ?? new();
-		}
-		catch
-		{
-			_recognizedIds = new();
-		}
-
-		_recognitionDataReceived = true;
+		RecognizedIds.Clear();
+		foreach ( var id in ids )
+			RecognizedIds.Add( id );
 	}
 
 	/// <summary>
@@ -37,9 +34,6 @@ public sealed class RecognitionPlayerComponent : Component
 		var self = GetComponent<HexPlayerComponent>();
 		if ( target == self ) return true;
 
-		// If recognition data was never synced, feature is likely disabled
-		if ( !_recognitionDataReceived ) return true;
-
 		// Check if target's faction is globally recognized
 		if ( !string.IsNullOrEmpty( target.FactionId ) )
 		{
@@ -48,6 +42,8 @@ public sealed class RecognitionPlayerComponent : Component
 				return true;
 		}
 
-		return _recognizedIds.Contains( target.CharacterId );
+		// RecognizedIds is empty until the server populates it.
+		// If the list has never been populated (fresh spawn), treat as unrecognized.
+		return RecognizedIds.Contains( target.CharacterId );
 	}
 }

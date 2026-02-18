@@ -22,6 +22,13 @@ public static class HexConfig
 	/// </summary>
 	public static IReadOnlyDictionary<string, ConfigEntry> Entries => _entries;
 
+	/// <summary>
+	/// Fired after any config key is changed via Set().
+	/// Parameters: (key, newValue).
+	/// Used by ConVarBridge to push HexConfig changes into ConVars.
+	/// </summary>
+	public static event Action<string, object> OnChanged;
+
 	internal static void Initialize()
 	{
 		Load();
@@ -71,7 +78,8 @@ public static class HexConfig
 	}
 
 	/// <summary>
-	/// Set a config value (creates an override). Triggers OnChange callback if registered.
+	/// Set a config value (creates an override). Triggers OnChange callback if registered
+	/// and fires the static OnChanged event for bridge integrations.
 	/// </summary>
 	public static void Set( string key, object value )
 	{
@@ -82,6 +90,8 @@ public static class HexConfig
 		{
 			entry.OnChange?.Invoke( oldValue, value );
 		}
+
+		OnChanged?.Invoke( key, value );
 	}
 
 	/// <summary>

@@ -93,8 +93,19 @@ public class ItemDefinition : GameResource
 
 	/// <summary>
 	/// Called when this item is dropped into the world.
+	/// Default behavior: spawns a networked WorldItem at the player's feet if WorldModel is set.
+	/// Override to suppress the world spawn or add custom drop effects.
 	/// </summary>
-	public virtual void OnDrop( HexPlayerComponent player, ItemInstance item ) { }
+	public virtual void OnDrop( HexPlayerComponent player, ItemInstance item )
+	{
+		if ( WorldModel == null ) return;
+
+		// Spawn slightly in front of and below the player so it lands at their feet
+		var spawnPos = player.WorldPosition + player.WorldRotation.Forward * 30f;
+		var throwVelocity = player.WorldRotation.Forward * 150f + Vector3.Up * 80f;
+
+		WorldItemManager.SpawnWorldItem( item, spawnPos, throwVelocity );
+	}
 
 	/// <summary>
 	/// Called when this item is picked up from the world.

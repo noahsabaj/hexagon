@@ -47,6 +47,14 @@ public static class PluginManager
 		{
 			var attr = type.GetAttribute<HexPluginAttribute>();
 
+			// Attempt to read package ID from assembly metadata if available
+			var packageId = "";
+			try
+			{
+				packageId = type.TargetType?.Assembly?.GetName()?.Name ?? "";
+			}
+			catch { }
+
 			_plugins.Add( new PluginEntry
 			{
 				Name = attr.Name,
@@ -54,6 +62,7 @@ public static class PluginManager
 				Author = attr.Author ?? "",
 				Version = attr.Version ?? "1.0",
 				Priority = attr.Priority,
+				PackageId = packageId,
 				Type = type,
 				Instance = null // Created during LoadPlugins
 			} );
@@ -101,6 +110,10 @@ public class PluginEntry
 	public string Author { get; set; }
 	public string Version { get; set; }
 	public int Priority { get; set; }
+	/// <summary>
+	/// The package/addon ID this plugin comes from, if determinable from assembly metadata.
+	/// </summary>
+	public string PackageId { get; set; } = "";
 	public TypeDescription Type { get; set; }
 	public IHexPlugin Instance { get; set; }
 }

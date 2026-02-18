@@ -1,47 +1,76 @@
 namespace Hexagon.Persistence;
 
 /// <summary>
-/// JSON-based persistence layer using s&box's FileSystem.Data.
+/// JSON-based persistence layer using FileSystem.Data.
 /// Documents are organized into collections (directories) and identified by string keys.
 /// All data is cached in memory for fast reads, with writes going to disk.
 ///
+/// Converted from a static class to a GameObjectSystem so the in-memory cache is
+/// scoped to the scene and cleared on scene reload. All public methods remain static
+/// via facades — callers need no changes.
+///
 /// Structure on disk: hexagon/{collection}/{key}.json
 /// </summary>
-public static class DatabaseManager
+public sealed class DatabaseManager : GameObjectSystem<DatabaseManager>
 {
-	private static readonly Dictionary<string, Dictionary<string, string>> _cache = new();
-	private static readonly string BasePath = "hexagon";
-	private static bool _initialized;
+	private static DatabaseManager _instance;
+
+	private readonly Dictionary<string, Dictionary<string, string>> _cache = new();
+	private const string BasePath = "hexagon";
+
+	public DatabaseManager( Scene scene ) : base( scene )
+	{
+		_instance = this;
+		FileSystem.Data.CreateDirectory( BasePath );
+		Log.Info( "Hexagon: Database initialized." );
+	}
+
+	public override void Dispose()
+	{
+		_cache.Clear();
+
+		if ( _instance == this )
+			_instance = null;
+
+		base.Dispose();
+	}
+
+	private static DatabaseManager Instance => _instance;
+
+	// --- Explicit initialization (triggers GameObjectSystem creation) ---
 
 	internal static void Initialize()
 	{
-		if ( _initialized ) return;
-
-		FileSystem.Data.CreateDirectory( BasePath );
-		_initialized = true;
-
-		Log.Info( "Hexagon: Database initialized." );
+		// Accessing Instance here is enough — the constructor does the real work.
+		if ( Instance == null )
+		{
+			Log.Warning( "Hexagon: DatabaseManager.Initialize() called but instance not yet created." );
+		}
 	}
 
 	internal static void Shutdown()
 	{
-		_cache.Clear();
-		_initialized = false;
+		// Cache is cleared in Dispose(). This facade exists for call-site compatibility.
+		Instance?._cache.Clear();
 	}
+
+	// --- Public Static Facade (unchanged signatures) ---
 
 	/// <summary>
 	/// Save a document to a collection. Serializes to JSON and writes to disk.
 	/// </summary>
 	public static void Save<T>( string collection, string key, T document )
 	{
-		EnsureCollection( collection );
+		if ( Instance == null ) return;
+
+		Instance.EnsureCollection( collection );
 
 		var json = Json.Serialize( document );
 
-		if ( !_cache.ContainsKey( collection ) )
-			_cache[collection] = new Dictionary<string, string>();
+		if ( !Instance._cache.ContainsKey( collection ) )
+			Instance._cache[collection] = new Dictionary<string, string>();
 
-		_cache[collection][key] = json;
+		Instance._cache[collection][key] = json;
 
 		var path = GetPath( collection, key );
 		FileSystem.Data.WriteAllText( path, json );
@@ -53,8 +82,10 @@ public static class DatabaseManager
 	/// </summary>
 	public static T Load<T>( string collection, string key )
 	{
+		if ( Instance == null ) return default;
+
 		// Check cache
-		if ( _cache.TryGetValue( collection, out var col ) && col.TryGetValue( key, out var cachedJson ) )
+		if ( Instance._cache.TryGetValue( collection, out var col ) && col.TryGetValue( key, out var cachedJson ) )
 		{
 			return Json.Deserialize<T>( cachedJson );
 		}
@@ -70,10 +101,10 @@ public static class DatabaseManager
 			return default;
 
 		// Cache it
-		if ( !_cache.ContainsKey( collection ) )
-			_cache[collection] = new Dictionary<string, string>();
+		if ( !Instance._cache.ContainsKey( collection ) )
+			Instance._cache[collection] = new Dictionary<string, string>();
 
-		_cache[collection][key] = json;
+		Instance._cache[collection][key] = json;
 
 		return Json.Deserialize<T>( json );
 	}
@@ -83,7 +114,7 @@ public static class DatabaseManager
 	/// </summary>
 	public static void Delete( string collection, string key )
 	{
-		if ( _cache.TryGetValue( collection, out var col ) )
+		if ( Instance?._cache.TryGetValue( collection, out var col ) == true )
 			col.Remove( key );
 
 		var path = GetPath( collection, key );
@@ -96,7 +127,7 @@ public static class DatabaseManager
 	/// </summary>
 	public static bool Exists( string collection, string key )
 	{
-		if ( _cache.TryGetValue( collection, out var col ) && col.ContainsKey( key ) )
+		if ( Instance?._cache.TryGetValue( collection, out var col ) == true && col.ContainsKey( key ) )
 			return true;
 
 		return FileSystem.Data.FileExists( GetPath( collection, key ) );
@@ -160,7 +191,7 @@ public static class DatabaseManager
 		return Guid.NewGuid().ToString( "N" );
 	}
 
-	private static void EnsureCollection( string collection )
+	private void EnsureCollection( string collection )
 	{
 		var dirPath = $"{BasePath}/{collection}";
 		if ( !FileSystem.Data.DirectoryExists( dirPath ) )

@@ -56,7 +56,7 @@ public sealed class HexPlayerComponent : Component
 	/// </summary>
 	public Connection Connection { get; internal set; }
 
-	// --- Sync Logic ---
+	// --- Private Sync ---
 
 	private Dictionary<string, string> _privateData = new();
 
@@ -98,33 +98,52 @@ public sealed class HexPlayerComponent : Component
 	}
 
 	/// <summary>
-	/// Send private character data to the owning player.
-	/// Called when local-only CharVar values change.
+	/// Send all private character data to the owning player.
+	/// Each CharVar is sent as an individual typed RPC, enabling delta-style updates.
 	/// </summary>
 	internal void SyncPrivateData()
 	{
 		if ( IsProxy ) return;
 		if ( Character?.Data == null ) return;
 
-		var privateVars = new Dictionary<string, string>();
-
 		foreach ( var varInfo in CharacterManager.GetLocalCharVars() )
 		{
 			var value = varInfo.GetValue( Character.Data );
-			privateVars[varInfo.Name] = value != null ? Json.Serialize( value ) : "";
+			ReceivePrivateVar( varInfo.Name, value != null ? Json.Serialize( value ) : "" );
 		}
 
-		privateVars["Flags"] = Character.Data.Flags ?? "";
-
-		ReceivePrivateData( Json.Serialize( privateVars ) );
+		ReceiveFlagsSync( Character.Data.Flags ?? "" );
 
 		RecognitionManager.SyncRecognitionToClient( this );
 	}
 
-	[Rpc.Owner]
-	private void ReceivePrivateData( string json )
+	/// <summary>
+	/// Send a single private CharVar to the owning player.
+	/// Use for incremental updates (e.g., just money after a purchase) to avoid
+	/// resending the entire private data set.
+	/// </summary>
+	internal void SyncPrivateVar( string name )
 	{
-		_privateData = Json.Deserialize<Dictionary<string, string>>( json );
+		if ( IsProxy ) return;
+		if ( Character?.Data == null ) return;
+
+		var varInfo = CharacterManager.GetCharVarInfo( name );
+		if ( varInfo == null ) return;
+
+		var value = varInfo.GetValue( Character.Data );
+		ReceivePrivateVar( name, value != null ? Json.Serialize( value ) : "" );
+	}
+
+	[Rpc.Owner]
+	private void ReceivePrivateVar( string key, string value )
+	{
+		_privateData[key] = value;
+	}
+
+	[Rpc.Owner]
+	private void ReceiveFlagsSync( string flags )
+	{
+		_privateData["Flags"] = flags;
 	}
 
 	/// <summary>
