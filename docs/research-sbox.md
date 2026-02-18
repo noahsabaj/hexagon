@@ -182,3 +182,50 @@ Input.AnalogLook         // Mouse delta Vector3
 
 ## Strategic Insight
 **No NutScript/Helix equivalent exists for s&box.** This is a completely unoccupied niche.
+
+---
+
+## Changelog: Feb 18 2026 (cd61c90e → da8c96cd)
+
+6 commits landed. Highlights below.
+
+### 1. `SceneCameraDebugMode` / `mat_toolsvis` ConVar
+- New convar `mat_toolsvis` (int) controls `CameraComponent.DebugMode` on the active scene camera.
+- Setting it to non-Normal now shows an on-screen overlay indicator (icon + label via `DebugOverlay.ToolsVisualization`).
+- New `RenderModeSelect` Razor component added to the **Developer Mode panel** (F9 overlay) as a clickable popup.
+- The viewport "View Settings" gear menu still also lets you pick SceneCameraDebugMode.
+- Usage from code: `cam.DebugMode = SceneCameraDebugMode.SomeMode;`
+
+### 2. `BBox` new methods
+```csharp
+// Shortest distance from a local position to the nearest face of the box
+float dist = bbox.GetEdgeDistance(localPos);
+
+// Transform a BBox by a full Transform (position + rotation + non-uniform scale)
+BBox world = localBBox.Transform(myTransform);
+```
+`Transform()` correctly applies rotation + non-uniform scale using absolute axis dot products. Useful for getting world-space bounds of a locally-defined bounding box.
+
+### 3. `IHasBounds` support on GameObjects (mesh editor resize)
+- `GameObject.GetBounds()` now respects `IHasBounds` if a component implements it.
+- The mesh editor `ObjectSelection.Resize()` now detects a `MeshComponent` on the object and calls `mc.Mesh.SetTransform(...)` instead of scaling the GameObject transform — avoids double-applying scale.
+- `CalculateSelectionBounds()` uses `go.GetBounds()` for all selected objects.
+
+### 4. Vertex Paint Tool improvements
+- New **"Show Verts" toggle** (default on) in a new "Visualization" sidebar group.
+- When enabled, small sprite indicators are drawn at each vertex position within 2× brush radius, colored by the actual vertex color/blend value.
+- Ctrl+drag: middle mouse adjusts Radius (shift) or Strength (ctrl) interactively.
+
+### 5. `Paint.Draw` border radius for Pixmaps
+```csharp
+// New overload — borderRadius was previously only on the string overload
+Paint.Draw(rect, pixmap, alpha: 1.0f, borderRadius: 4f);
+```
+Calls `drawRoundedPixmap` underneath. Both `Draw(Rect, Pixmap, ...)` and `Draw(Rect, string, ...)` now have matching signatures.
+
+### 6. New citizen_human models
+- `citizen_human_female.vmdl` and `citizen_human_male.vmdl` added — distinct from the legacy `citizen` model.
+- Animation graphs (`.vanmgrph`) updated for citizen, citizen_human_f, citizen_human_m with substantial additions (~270 lines each). New bones/constraints include a "CopyPinky" finger copy constraint (classic citizen animations lack a fifth finger, so ring→pinky copy is applied during a transition period).
+
+### 7. Crash reporting: shutdown tag
+- `AppSystem.Shutdown()` now calls `NativeErrorReporter.SetTag("shutdown_crash", "true")` at the start of shutdown, so Sentry can distinguish crash-during-shutdown from normal crashes.

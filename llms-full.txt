@@ -2223,8 +2223,28 @@ string Description { get; set; }
 string Author { get; set; }
 string Version { get; set; }
 int Priority { get; set; }
+string PackageId { get; set; }
 TypeDescription Type { get; set; }
 IHexPlugin Instance { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `Name` |  |
+| `Description` |  |
+| `Author` |  |
+| `Version` |  |
+| `Priority` |  |
+| `PackageId` | The package/addon ID this plugin comes from, if determinable from assembly metadata. |
+| `Type` |  |
+| `Instance` |  |
+
+### PluginSystem (sealed) : GameObjectSystem<PluginSystem>
+
+GameObjectSystem wrapper that gives PluginManager proper scene lifecycle. Initialization (PluginManager.Initialize) is still called explicitly by HexagonSystem at the correct point in the init order (after DatabaseManager, HexConfig, and CharacterManager are ready). This system handles shutdown only — ensuring plugins are cleanly unloaded when the scene ends, even if HexagonSystem.Dispose is not called.
+
+```csharp
+override void Dispose()
 ```
 
 ### PressableHelper (static)
@@ -2326,15 +2346,29 @@ static void InitializeCharacter( HexCharacter character )
 | `RegisterDefinition` | Register an attribute definition (called by AttributeDefinition.PostLoad). |
 | `GetDefinition` | Get an attribute definition by ID. |
 | `GetAllDefinitions` | Get all registered attribute definitions. |
-| `GetAttribute` | Get the effective attribute value for a character (base + boosts, clamped). |
+| `GetAttribute` | Get the effective attribute value for a character (base + boosts, clamped). Logs a warning if the attribute ID is not registered (helps catch typos). |
 | `GetBaseAttribute` | Get the base attribute value (without boosts). |
-| `SetAttribute` | Set the base attribute value. Fires IAttributeChangedListener. |
+| `SetAttribute` | Set the base attribute value. Fires IAttributeChangedListener. Logs a warning if the attribute ID is not registered (helps catch typos). |
 | `AddAttribute` | Add to the base attribute value. |
 | `AddBoost` | Add a boost to a character's attribute. |
 | `RemoveBoost` | Remove a specific boost by ID. |
 | `ClearBoosts` | Remove all boosts for a specific attribute. |
 | `GetBoosts` | Get all active (non-expired) boosts for a character. |
 | `InitializeCharacter` | Initialize all registered attributes on a character with their start values. Call this when a character is first created. |
+
+### AttributeSet (sealed)
+
+Typed accessor for a character's attributes. Provides indexer syntax as a convenience wrapper over AttributeManager, with no behavior change. Usage: character.Attributes["hunger"]          // get character.Attributes["hunger"] = 50f    // set (fires OnAttributeChanged) character.Attributes.Get("hunger")      // explicit get character.Attributes.Set("hunger", 50f) // explicit set
+
+```csharp
+float Get( string id )
+void Set( string id, float value )
+```
+
+| Member | Description |
+|--------|-------------|
+| `Get` | Get the effective attribute value (base + boosts, clamped to definition range). |
+| `Set` | Set the base attribute value. Fires IHexAttributeEvent.OnAttributeChanged. |
 
 ### IHexAttributeEvent (interface) : ISceneEvent<IHexAttributeEvent>
 
@@ -2372,11 +2406,12 @@ event Action<bool, string
 | `RequestCreateCharacter` | Client requests to create a new character from JSON data. |
 | `RequestDeleteCharacter` | Client requests to delete a character. |
 
-### CharacterManager (static)
+### CharacterManager (sealed) : GameObjectSystem<CharacterManager>
 
-Manages character CRUD operations and CharVar metadata discovery. Initialized by HexagonSystem on startup. Auto-save is handled by <see cref="Persistence.AutoSaveSystem"/>.
+Manages character CRUD operations and CharVar metadata discovery. Converted from a static class to a GameObjectSystem so that per-scene mutable state (_characterLists, _activeCharacters) is scoped to the scene and cleared on scene reload. CharVar metadata (_charVars, _characterDataType) is discovered once and held for the scene's lifetime. All public methods remain static via facades — callers need no changes. Auto-save is handled by <see cref="Persistence.AutoSaveSystem"/>.
 
 ```csharp
+override void Dispose()
 static IReadOnlyDictionary<string, CharVarInfo> CharVars
 static CharVarInfo GetCharVarInfo( string name )
 static IEnumerable<CharVarInfo> GetPublicCharVars()
@@ -2395,6 +2430,7 @@ static HexCharacterData CreateDefaultData()
 
 | Member | Description |
 |--------|-------------|
+| `Dispose` |  |
 | `CharVars` | All discovered CharVar metadata. |
 | `GetCharVarInfo` | Get CharVar metadata by property name. |
 | `GetPublicCharVars` | Get all CharVars that are public (not Local, not NoNetworking). |
@@ -2648,14 +2684,16 @@ static string FormatForListener( HexPlayerComponent observer, HexPlayerComponent
 
 ### RecognitionPlayerComponent (sealed) : Component
 
-Client-side character recognition state. Satellite component on the player GameObject alongside HexPlayerComponent.
+Client-side character recognition state. Satellite component on the player GameObject alongside HexPlayerComponent. Uses a [Sync] NetList for delta-compressed networking — no JSON, no RPC needed.
 
 ```csharp
+[Sync] NetList<string> RecognizedIds { get; set; }
 bool DoesRecognizeLocal( HexPlayerComponent target )
 ```
 
 | Member | Description |
 |--------|-------------|
+| `RecognizedIds` | Synced list of recognized character IDs. Server writes directly; client reads directly. NetList sends only deltas, so no full resync on each change. |
 | `DoesRecognizeLocal` | Client-side: check if this player recognizes a target player. |
 
 ### IHexCharacterEvent (interface) : ISceneEvent<IHexCharacterEvent>
@@ -3018,12 +3056,17 @@ bool CanRunCommand( HexPlayerComponent player, HexCommand command )
 
 ## Hexagon.Config
 
+### ConVarBridge (static)
+
+Manages the HexConfig ↔ ConVar integration. With the new HexConVars design, ConVar properties delegate directly to HexConfig: - ConVar getter  →  HexConfig.Get(key) - ConVar setter  →  HexConfig.Set(key, value) This means console commands ("hex_walk_speed 300") automatically update HexConfig, and code that reads HexConfig.Get("gameplay.walkSpeed") sees the latest value. The bridge subscribes to HexConfig.OnChanged for diagnostics and any future integrations that need to react to all config changes in one place.
+
 ### HexConfig (static)
 
 Server-side configuration system. Admin-controlled settings that are persisted and synced to all connected clients. Usage: HexConfig.Add("walkSpeed", 200f, "Default walk speed"); HexConfig.Add("maxCharacters", 5, "Max characters per player"); var speed = HexConfig.Get&lt;float&gt;("walkSpeed"); HexConfig.Set("walkSpeed", 150f);
 
 ```csharp
 static IReadOnlyDictionary<string, ConfigEntry> Entries
+static event Action<string, object
 static void Add( string key, object defaultValue, string description, string category, Action<object, object> onChange )
 static T Get<T>( string key, T fallback )
 static void Set( string key, object value )
@@ -3035,9 +3078,10 @@ static void Load()
 | Member | Description |
 |--------|-------------|
 | `Entries` | All registered config entries. |
+| `object` | Fired after any config key is changed via Set(). Parameters: (key, newValue). Used by ConVarBridge to push HexConfig changes into ConVars. |
 | `Add` | Register a new config entry with a default value. Call this during plugin/schema initialization. |
 | `Get` | Get a config value. Returns the override if set, otherwise the default. |
-| `Set` | Set a config value (creates an override). Triggers OnChange callback if registered. |
+| `Set` | Set a config value (creates an override). Triggers OnChange callback if registered and fires the static OnChanged event for bridge integrations. |
 | `Reset` | Reset a config value back to its default. |
 | `Save` | Save all config overrides to disk. |
 | `Load` | Load config overrides from disk. |
@@ -3054,6 +3098,10 @@ string Category { get; set; }
 Type ValueType { get; set; }
 Action<object, object> OnChange { get; set; }
 ```
+
+### HexConVars (static)
+
+ConVar declarations for Hexagon framework configuration values. Each ConVar setter calls HexConfig.Set() so console changes (e.g. "hex_walk_speed 300") immediately update the framework configuration. HexConfig.OnChanged then pushes the value back to the ConVar property via ConVarBridge — a re-entry guard prevents loops. The primary API for reading config remains HexConfig.Get() — ConVars are a bridge, not a replacement. Plugin configs (hl2rp.*) still use HexConfig.Add() and .Get().
 
 ---
 
@@ -3552,9 +3600,9 @@ InventorySnapshot GetClientInventory( string id )
 List<VendorCatalogEntry> CurrentVendorCatalog { get; set; }
 string CurrentVendorId { get; set; }
 string CurrentVendorName { get; set; }
-void ReceiveInventorySnapshot( string json )
+void ReceiveInventorySnapshot( InventorySnapshot snapshot )
 void ReceiveInventoryRemoved( string inventoryId )
-void ReceiveVendorCatalog( string vendorId, string vendorName, string catalogJson )
+void ReceiveVendorCatalog( string vendorId, string vendorName, List<VendorCatalogEntry> catalog )
 void ReceiveVendorResult( bool success, string message )
 [Rpc.Host] void RequestMoveItem( string inventoryId, string itemId, int newX, int newY )
 [Rpc.Host] void RequestTransferItem( string sourceInvId, string itemId, string targetInvId, int x, int y )
@@ -3572,9 +3620,9 @@ void ReceiveVendorResult( bool success, string message )
 | `CurrentVendorCatalog` | The most recently received vendor catalog (client-side). |
 | `CurrentVendorId` | The vendor ID for the currently open vendor (client-side). |
 | `CurrentVendorName` | The vendor name for the currently open vendor (client-side). |
-| `ReceiveInventorySnapshot` | Server sends an inventory snapshot to filtered receivers. |
+| `ReceiveInventorySnapshot` | Server sends an inventory snapshot to filtered receivers. InventorySnapshot is passed as a typed parameter — no JSON serialization in the RPC path. |
 | `ReceiveInventoryRemoved` | Server notifies clients that an inventory is no longer available. |
-| `ReceiveVendorCatalog` | Server sends a vendor catalog to the client. |
+| `ReceiveVendorCatalog` | Server sends a vendor catalog to the client. Catalog is passed as a typed List — no JSON serialization in the RPC path. |
 | `ReceiveVendorResult` | Server sends a vendor operation result to the client. |
 | `RequestMoveItem` | Client requests to move an item within an inventory. |
 | `RequestTransferItem` | Client requests to transfer an item between inventories. |
@@ -3583,11 +3631,12 @@ void ReceiveVendorResult( bool success, string message )
 | `RequestBuyItem` | Client requests to buy an item from a vendor. |
 | `RequestSellItem` | Client requests to sell an item to a vendor. |
 
-### InventoryManager (static)
+### InventoryManager (sealed) : GameObjectSystem<InventoryManager>
 
-Manages inventory lifecycle: creation, restoration, persistence, and dirty tracking.
+Manages inventory lifecycle: creation, restoration, persistence, and dirty tracking. Converted from a static class to a GameObjectSystem so that per-scene mutable state (_inventories, _dirtyInventories) is scoped to the scene and cleared on scene reload. All public methods remain static via facades — callers need no changes.
 
 ```csharp
+override void Dispose()
 static IReadOnlyDictionary<string, HexInventory> Inventories
 static HexInventory Create( int width, int height, string ownerId, string type )
 static HexInventory CreateDefault( string ownerId, string type )
@@ -3600,13 +3649,14 @@ static void Unload( string inventoryId )
 
 | Member | Description |
 |--------|-------------|
+| `Dispose` |  |
 | `Inventories` | All active inventories. |
 | `Create` | Create a new inventory and persist it. |
 | `CreateDefault` | Create an inventory using the default config dimensions. |
 | `Get` | Get an inventory by ID. Loads from database if not in memory. |
 | `LoadForCharacter` | Load all inventories for a character. |
 | `Delete` | Delete an inventory and all its items. |
-| `SaveAll` | Save all dirty inventories and their items. |
+| `SaveAll` | Save all active inventories and their items. |
 | `Unload` | Unload an inventory from memory (e.g. when a character disconnects). Saves first. |
 
 ### IHexInventoryEvent (interface) : ISceneEvent<IHexInventoryEvent>
@@ -3686,7 +3736,7 @@ virtual void OnRemoved( ItemInstance item )
 | `OnCanUse` | Permission check: can this player use this item? |
 | `OnEquip` | Called when this item is equipped by a player. |
 | `OnUnequip` | Called when this item is unequipped. |
-| `OnDrop` | Called when this item is dropped into the world. |
+| `OnDrop` | Called when this item is dropped into the world. Default behavior: spawns a networked WorldItem at the player's feet if WorldModel is set. Override to suppress the world spawn or add custom drop effects. |
 | `OnPickup` | Called when this item is picked up from the world. |
 | `OnTransferred` | Called when this item is transferred between inventories. |
 | `OnInstanced` | Called when a new instance of this item is created. |
@@ -3761,6 +3811,40 @@ static List<string> GetCategories()
 | `LoadInstancesForCharacter` | Load all item instances for a specific character from the database. |
 | `GetDefinitionsByCategory` | Get all definitions in a specific category. |
 | `GetCategories` | Get all item categories. |
+
+### WorldItemComponent (sealed) : Component
+
+Networked component for a dropped item in the world. Spawned by WorldItemManager.SpawnWorldItem when a player drops an item from their inventory. All connected clients can see dropped items because this lives on a networked GameObject. Clients call RequestPickup() [Rpc.Host] to pick up the item; the server validates and transfers.
+
+```csharp
+[Sync] string ItemInstanceId { get; set; }
+[Sync] string DefinitionId { get; set; }
+[Sync] string DisplayName { get; set; }
+[Rpc.Host] void RequestPickup()
+```
+
+| Member | Description |
+|--------|-------------|
+| `ItemInstanceId` | The ItemInstance ID this world item represents. |
+| `DefinitionId` | The ItemDefinition unique ID. Used client-side to apply the correct world model. |
+| `DisplayName` | Display name shown in any client-side interaction prompts. |
+| `RequestPickup` | Client calls this to request picking up the item. Server validates ownership, inventory space, and then transfers the item. |
+
+### WorldItemManager (static)
+
+Manages networked world item GameObjects — items that have been dropped from inventories and exist as visible, interactable objects in the scene. Spawning creates a networked GameObject visible to all connected clients. Despawning destroys it for everyone.
+
+```csharp
+static GameObject SpawnWorldItem( ItemInstance item, Vector3 position, Vector3 velocity )
+static void DespawnWorldItem( string itemInstanceId )
+static void ClearAll()
+```
+
+| Member | Description |
+|--------|-------------|
+| `SpawnWorldItem` | Spawn a dropped item as a networked world GameObject. Must be called server-side. All clients will automatically see the result. |
+| `DespawnWorldItem` | Destroy a world item GameObject by ItemInstance ID. Must be called server-side. Destruction replicates to all clients. |
+| `ClearAll` | Destroy all tracked world items. Called on scene shutdown. |
 
 ### IHexItemEvent (interface) : ISceneEvent<IHexItemEvent>
 
@@ -4007,11 +4091,34 @@ bool OnPermissionCheck( HexPlayerComponent player, string permission )
 
 Periodically auto-saves all dirty characters and inventories. Replaces the manual tick that was previously in CharacterManager.Update(). The save interval is read from config: "framework.saveInterval" (default 300 seconds).
 
-### DatabaseManager (static)
+### CollectionIndex (sealed)
 
-JSON-based persistence layer using s&box's FileSystem.Data. Documents are organized into collections (directories) and identified by string keys. All data is cached in memory for fast reads, with writes going to disk. Structure on disk: hexagon/{collection}/{key}.json
+In-memory index for a DatabaseManager collection field. Speeds up DatabaseManager.Select() for frequently queried fields (e.g., SteamId on characters, OwnerId on inventories). Without an index, Select() does a full collection scan. With an index, it does a dictionary lookup. Register via DatabaseManager.RegisterIndex("characters", "SteamId"). The index is built lazily on first use and maintained on Save() / Delete() calls.
 
 ```csharp
+bool IsBuilt
+void Build( IEnumerable<(string key, T document )
+void Invalidate()
+List<string> Lookup( string fieldValue )
+void OnSave( string docKey, T document )
+void OnDelete( string docKey )
+```
+
+| Member | Description |
+|--------|-------------|
+| `IsBuilt` | Whether the index has been built yet. |
+| `Build` | Build the index by scanning all documents in the collection. Called lazily on first use or explicitly via RegisterIndex. |
+| `Invalidate` | Invalidate the index so it will be rebuilt on next use. Called when the collection changes (Save/Delete). |
+| `Lookup` | Look up document keys by field value. Returns null if the index has not been built. |
+| `OnSave` | Update the index after a document is saved. |
+| `OnDelete` | Update the index after a document is deleted. |
+
+### DatabaseManager (sealed) : GameObjectSystem<DatabaseManager>
+
+JSON-based persistence layer using FileSystem.Data. Documents are organized into collections (directories) and identified by string keys. All data is cached in memory for fast reads, with writes going to disk. Converted from a static class to a GameObjectSystem so the in-memory cache is scoped to the scene and cleared on scene reload. All public methods remain static via facades — callers need no changes. Structure on disk: hexagon/{collection}/{key}.json
+
+```csharp
+override void Dispose()
 static void Save<T>( string collection, string key, T document )
 static T Load<T>( string collection, string key )
 static void Delete( string collection, string key )
@@ -4024,6 +4131,7 @@ static string NewId()
 
 | Member | Description |
 |--------|-------------|
+| `Dispose` |  |
 | `Save` | Save a document to a collection. Serializes to JSON and writes to disk. |
 | `Load` | Load a document from a collection. Checks cache first, then disk. Returns default(T) if not found. |
 | `Delete` | Delete a document from a collection. |
