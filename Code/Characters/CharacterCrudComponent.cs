@@ -11,16 +11,6 @@ public sealed class CharacterCrudComponent : Component
 	/// </summary>
 	public List<CharacterListEntry> ClientCharacterList { get; private set; } = new();
 
-	/// <summary>
-	/// Fired on the client when the character list is received from the server.
-	/// </summary>
-	public event Action OnCharacterListReceived;
-
-	/// <summary>
-	/// Fired on the client when a character creation result is received.
-	/// </summary>
-	public event Action<bool, string> OnCharacterCreateResult;
-
 	private HexPlayerComponent Player => GetComponent<HexPlayerComponent>();
 
 	// --- Server-bound RPCs (client calls these) ---
@@ -158,18 +148,19 @@ public sealed class CharacterCrudComponent : Component
 		{
 			ClientCharacterList = Json.Deserialize<List<CharacterListEntry>>( json ) ?? new();
 		}
-		catch
+		catch ( Exception ex )
 		{
+			Log.Error( $"Hexagon: Failed to deserialize character list from server: {ex.Message}" );
 			ClientCharacterList = new();
 		}
 
-		OnCharacterListReceived?.Invoke();
+		IHexCrudEvent.Post( x => x.OnCharacterListReceived() );
 	}
 
 	[Rpc.Owner]
 	private void ReceiveCharacterCreateResult( bool success, string message )
 	{
-		OnCharacterCreateResult?.Invoke( success, message );
+		IHexCrudEvent.Post( x => x.OnCharacterCreateResult( success, message ) );
 	}
 
 	// --- Server-side helper ---

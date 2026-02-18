@@ -5,9 +5,23 @@ namespace Hexagon.Doors;
 /// DoorComponents register/unregister themselves on enable/disable.
 /// Persistence is handled directly by each DoorComponent via DatabaseManager.
 /// </summary>
-public static class DoorManager
+public sealed class DoorManager : GameObjectSystem<DoorManager>
 {
-	private static readonly Dictionary<string, DoorComponent> _doors = new();
+	private static DoorManager _instance;
+	private static DoorManager Instance => _instance;
+
+	private readonly Dictionary<string, DoorComponent> _doors = new();
+
+	public DoorManager( Scene scene ) : base( scene )
+	{
+		_instance = this;
+	}
+
+	public override void Dispose()
+	{
+		if ( _instance == this ) _instance = null;
+		base.Dispose();
+	}
 
 	/// <summary>
 	/// Register a door component. Called by DoorComponent.OnEnabled.
@@ -15,7 +29,8 @@ public static class DoorManager
 	internal static void Register( DoorComponent door )
 	{
 		if ( string.IsNullOrEmpty( door.DoorId ) ) return;
-		_doors[door.DoorId] = door;
+		if ( Instance == null ) return;
+		Instance._doors[door.DoorId] = door;
 	}
 
 	/// <summary>
@@ -24,7 +39,7 @@ public static class DoorManager
 	internal static void Unregister( DoorComponent door )
 	{
 		if ( string.IsNullOrEmpty( door.DoorId ) ) return;
-		_doors.Remove( door.DoorId );
+		Instance?._doors.Remove( door.DoorId );
 	}
 
 	/// <summary>
@@ -32,11 +47,11 @@ public static class DoorManager
 	/// </summary>
 	public static DoorComponent GetDoor( string doorId )
 	{
-		return _doors.GetValueOrDefault( doorId );
+		return Instance?._doors.GetValueOrDefault( doorId );
 	}
 
 	/// <summary>
 	/// Get all registered doors.
 	/// </summary>
-	public static IReadOnlyDictionary<string, DoorComponent> GetAllDoors() => _doors;
+	public static IReadOnlyDictionary<string, DoorComponent> GetAllDoors() => Instance?._doors;
 }

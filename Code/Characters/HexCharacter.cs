@@ -47,39 +47,38 @@ public class HexCharacter
 	// --- Flags ---
 
 	/// <summary>
-	/// Check if this character has a specific flag.
+	/// Check if this character has a specific permission flag.
 	/// </summary>
-	public bool HasFlag( char flag )
+	public bool HasFlag( string flag )
 	{
-		return Data.Flags?.Contains( flag ) ?? false;
+		return Data.Flags.Contains( flag );
 	}
 
 	/// <summary>
-	/// Check if this character has all specified flags.
+	/// Check if this character has all flags represented by each character in the string
+	/// (e.g. HasFlags("as") checks for both "a" and "s").
 	/// </summary>
 	public bool HasFlags( string flags )
 	{
 		if ( string.IsNullOrEmpty( flags ) ) return true;
-		return flags.All( f => HasFlag( f ) );
+		return flags.All( f => HasFlag( f.ToString() ) );
 	}
 
 	/// <summary>
-	/// Grant a flag to this character.
+	/// Grant a permission flag to this character.
 	/// </summary>
-	public void GiveFlag( char flag )
+	public void GiveFlag( string flag )
 	{
-		if ( HasFlag( flag ) ) return;
-		Data.Flags += flag;
+		if ( !Data.Flags.Add( flag ) ) return;
 		MarkDirty( nameof( Data.Flags ) );
 	}
 
 	/// <summary>
-	/// Remove a flag from this character.
+	/// Remove a permission flag from this character.
 	/// </summary>
-	public void TakeFlag( char flag )
+	public void TakeFlag( string flag )
 	{
-		if ( !HasFlag( flag ) ) return;
-		Data.Flags = Data.Flags.Replace( flag.ToString(), "" );
+		if ( !Data.Flags.Remove( flag ) ) return;
 		MarkDirty( nameof( Data.Flags ) );
 	}
 
@@ -119,8 +118,9 @@ public class HexCharacter
 		{
 			return (T)value;
 		}
-		catch
+		catch ( Exception ex )
 		{
+			Log.Warning( $"Hexagon: GetVar failed to cast '{name}' to {typeof( T ).Name}: {ex.Message}" );
 			return defaultValue;
 		}
 	}
@@ -213,13 +213,7 @@ public class HexCharacter
 	/// </summary>
 	public HashSet<string> GetRecognizedIds()
 	{
-		var raw = Data.Data?.GetValueOrDefault( "recognized" );
-		if ( raw == null ) return new HashSet<string>();
-
-		var str = raw.ToString();
-		if ( string.IsNullOrEmpty( str ) ) return new HashSet<string>();
-
-		return new HashSet<string>( str.Split( ',', StringSplitOptions.RemoveEmptyEntries ) );
+		return Data.RecognizedIds;
 	}
 
 	/// <summary>
@@ -227,12 +221,8 @@ public class HexCharacter
 	/// </summary>
 	public void AddRecognized( string characterId )
 	{
-		var ids = GetRecognizedIds();
-		if ( !ids.Add( characterId ) ) return;
-
-		Data.Data ??= new();
-		Data.Data["recognized"] = string.Join( ",", ids );
-		MarkDirty( "Data" );
+		if ( !Data.RecognizedIds.Add( characterId ) ) return;
+		MarkDirty( nameof( Data.RecognizedIds ) );
 	}
 
 	// --- Persistence ---

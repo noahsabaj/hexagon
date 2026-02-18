@@ -7,6 +7,7 @@
 @namespace Hexagon.UI
 @inherits PanelComponent
 @implements IHexPanel
+@implements IHexCrudEvent
 
 <root class="@(IsOpen ? "open" : "")">
 	<div class="create-container hex-panel">
@@ -109,18 +110,9 @@
 		SelectedFaction = "";
 		SelectedClass = "";
 
-		// Set defaults
 		var factions = GetFactions();
 		if ( factions.Count > 0 )
 			SelectedFaction = factions[0].UniqueId;
-
-		// Subscribe to result
-		var crud = CharacterCrud;
-		if ( crud != null )
-		{
-			crud.OnCharacterCreateResult -= OnCreateResult;
-			crud.OnCharacterCreateResult += OnCreateResult;
-		}
 
 		StateHasChanged();
 	}
@@ -128,11 +120,6 @@
 	public void Close()
 	{
 		IsOpen = false;
-		var crud = CharacterCrud;
-		if ( crud != null )
-		{
-			crud.OnCharacterCreateResult -= OnCreateResult;
-		}
 		StateHasChanged();
 	}
 
@@ -223,7 +210,7 @@
 		CharacterCrud?.RequestCreateCharacter( json );
 	}
 
-	private void OnCreateResult( bool success, string message )
+	public void OnCharacterCreateResult( bool success, string message )
 	{
 		IsSubmitting = false;
 

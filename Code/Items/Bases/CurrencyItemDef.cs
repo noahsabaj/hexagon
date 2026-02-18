@@ -13,17 +13,17 @@ public class CurrencyItemDef : ItemDefinition
 	/// </summary>
 	[Property] public int DefaultAmount { get; set; } = 100;
 
-	public override Dictionary<string, ItemAction> GetActions()
+	public override List<ItemAction> GetActions()
 	{
 		var actions = base.GetActions();
 
-		actions["pickup"] = new ItemAction
+		actions.Add( new ItemAction
 		{
 			Name = "Pick Up",
 			Icon = "payments",
 			OnRun = ( player, item ) => OnUse( player, item ),
 			OnCanRun = ( player, item ) => OnCanUse( player, item )
-		};
+		} );
 
 		return actions;
 	}

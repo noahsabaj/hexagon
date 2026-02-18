@@ -17,17 +17,17 @@ public class AmmoItemDef : ItemDefinition
 	/// </summary>
 	[Property] public int AmmoAmount { get; set; } = 30;
 
-	public override Dictionary<string, ItemAction> GetActions()
+	public override List<ItemAction> GetActions()
 	{
 		var actions = base.GetActions();
 
-		actions["use"] = new ItemAction
+		actions.Add( new ItemAction
 		{
 			Name = "Use",
 			Icon = "add_circle",
 			OnRun = ( player, item ) => OnUse( player, item ),
 			OnCanRun = ( player, item ) => OnCanUse( player, item )
-		};
+		} );
 
 		return actions;
 	}

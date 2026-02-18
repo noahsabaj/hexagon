@@ -27,8 +27,9 @@ public class CommandContext
 		{
 			return (T)Convert.ChangeType( value, typeof( T ) );
 		}
-		catch
+		catch ( Exception ex )
 		{
+			Log.Warning( $"Hexagon: CommandContext.Get failed to convert argument '{name}' to {typeof( T ).Name}: {ex.Message}" );
 			return defaultValue;
 		}
 	}

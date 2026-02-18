@@ -66,9 +66,9 @@ public class ItemDefinition : GameResource
 	/// Get the context menu actions for this item type.
 	/// Override in subclasses to add Use, Equip, etc.
 	/// </summary>
-	public virtual Dictionary<string, ItemAction> GetActions()
+	public virtual List<ItemAction> GetActions()
 	{
-		return new Dictionary<string, ItemAction>();
+		return new List<ItemAction>();
 	}
 
 	/// <summary>

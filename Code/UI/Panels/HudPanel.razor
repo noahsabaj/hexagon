@@ -9,7 +9,7 @@
 @inherits PanelComponent
 @implements IHexPanel
 
-<root class="hud-panel" style="display: @(IsOpen ? "flex" : "none")">
+<root class="hud-panel @(IsOpen ? "open" : "")">
 	<div class="hud-info">
 		<div class="hud-name">@GetCharacterName()</div>
 		<div class="hud-details">

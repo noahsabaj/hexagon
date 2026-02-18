@@ -23,11 +23,11 @@ public class OutfitItemDef : ItemDefinition
 	/// </summary>
 	[Property] public string Slot { get; set; } = "torso";
 
-	public override Dictionary<string, ItemAction> GetActions()
+	public override List<ItemAction> GetActions()
 	{
 		var actions = base.GetActions();
 
-		actions["wear"] = new ItemAction
+		actions.Add( new ItemAction
 		{
 			Name = "Wear",
 			Icon = "checkroom",
@@ -37,9 +37,9 @@ public class OutfitItemDef : ItemDefinition
 				return false;
 			},
 			OnCanRun = ( player, item ) => OnCanUse( player, item )
-		};
+		} );
 
-		actions["takeoff"] = new ItemAction
+		actions.Add( new ItemAction
 		{
 			Name = "Take Off",
 			Icon = "remove_circle_outline",
@@ -48,7 +48,7 @@ public class OutfitItemDef : ItemDefinition
 				OnUnequip( player, item );
 				return false;
 			}
-		};
+		} );
 
 		return actions;
 	}

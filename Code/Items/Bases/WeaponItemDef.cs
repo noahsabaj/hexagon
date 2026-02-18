@@ -37,11 +37,11 @@ public class WeaponItemDef : ItemDefinition
 	/// </summary>
 	[Property] public bool FireWhenLowered { get; set; } = false;
 
-	public override Dictionary<string, ItemAction> GetActions()
+	public override List<ItemAction> GetActions()
 	{
 		var actions = base.GetActions();
 
-		actions["equip"] = new ItemAction
+		actions.Add( new ItemAction
 		{
 			Name = "Equip",
 			Icon = "sports_martial_arts",
@@ -51,9 +51,9 @@ public class WeaponItemDef : ItemDefinition
 				return false; // Don't consume
 			},
 			OnCanRun = ( player, item ) => OnCanUse( player, item )
-		};
+		} );
 
-		actions["unequip"] = new ItemAction
+		actions.Add( new ItemAction
 		{
 			Name = "Unequip",
 			Icon = "back_hand",
@@ -62,7 +62,7 @@ public class WeaponItemDef : ItemDefinition
 				OnUnequip( player, item );
 				return false;
 			}
-		};
+		} );
 
 		return actions;
 	}

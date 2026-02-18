@@ -16,6 +16,7 @@ public sealed class DatabaseManager : GameObjectSystem<DatabaseManager>
 	private static DatabaseManager _instance;
 
 	private readonly Dictionary<string, Dictionary<string, string>> _cache = new();
+	private readonly Dictionary<string, Dictionary<string, ICollectionIndex>> _indexes = new();
 	private const string BasePath = "hexagon";
 
 	public DatabaseManager( Scene scene ) : base( scene )
@@ -28,6 +29,7 @@ public sealed class DatabaseManager : GameObjectSystem<DatabaseManager>
 	public override void Dispose()
 	{
 		_cache.Clear();
+		_indexes.Clear();
 
 		if ( _instance == this )
 			_instance = null;
@@ -74,6 +76,11 @@ public sealed class DatabaseManager : GameObjectSystem<DatabaseManager>
 
 		var path = GetPath( collection, key );
 		FileSystem.Data.WriteAllText( path, json );
+
+		if ( Instance._indexes.TryGetValue( collection, out var byField ) )
+			foreach ( var idx in byField.Values )
+				if ( idx is CollectionIndex<T> typed )
+					typed.OnSave( key, document );
 	}
 
 	/// <summary>
@@ -120,6 +127,10 @@ public sealed class DatabaseManager : GameObjectSystem<DatabaseManager>
 		var path = GetPath( collection, key );
 		if ( FileSystem.Data.FileExists( path ) )
 			FileSystem.Data.DeleteFile( path );
+
+		if ( Instance?._indexes.TryGetValue( collection, out var byField ) == true )
+			foreach ( var idx in byField.Values )
+				idx.OnDelete( key );
 	}
 
 	/// <summary>
@@ -189,6 +200,67 @@ public sealed class DatabaseManager : GameObjectSystem<DatabaseManager>
 	public static string NewId()
 	{
 		return Guid.NewGuid().ToString( "N" );
+	}
+
+	/// <summary>
+	/// Register an in-memory index for fast field lookups on a collection.
+	/// Must be called before any SelectByField() queries on this collection+field.
+	/// The index is built lazily on first use and maintained on Save() / Delete().
+	/// </summary>
+	public static void RegisterIndex<T>( string collection, string fieldName, Func<T, string> keySelector )
+	{
+		if ( Instance == null ) return;
+
+		var index = new CollectionIndex<T>( collection, fieldName, keySelector );
+
+		if ( !Instance._indexes.TryGetValue( collection, out var byField ) )
+		{
+			byField = new Dictionary<string, ICollectionIndex>( StringComparer.Ordinal );
+			Instance._indexes[collection] = byField;
+		}
+
+		byField[fieldName] = index;
+	}
+
+	/// <summary>
+	/// Select documents whose indexed field equals fieldValue.
+	/// Requires a prior RegisterIndex() call for this collection + fieldName.
+	/// The index is built lazily on first query and kept current via Save() / Delete().
+	/// </summary>
+	public static List<T> SelectByField<T>( string collection, string fieldName, string fieldValue )
+	{
+		if ( Instance == null ) return new();
+
+		if ( Instance._indexes.TryGetValue( collection, out var byField )
+			&& byField.TryGetValue( fieldName, out var idxBase )
+			&& idxBase is CollectionIndex<T> idx )
+		{
+			if ( !idx.IsBuilt )
+				idx.Build( GetAllWithKeys<T>( collection ) );
+
+			var docKeys = idx.Lookup( fieldValue );
+			if ( docKeys == null || docKeys.Count == 0 ) return new();
+
+			var results = new List<T>( docKeys.Count );
+			foreach ( var docKey in docKeys )
+			{
+				var doc = Load<T>( collection, docKey );
+				if ( doc != null ) results.Add( doc );
+			}
+			return results;
+		}
+
+		Log.Warning( $"Hexagon: SelectByField called on '{collection}.{fieldName}' with no registered index." );
+		return new();
+	}
+
+	private static IEnumerable<(string key, T document)> GetAllWithKeys<T>( string collection )
+	{
+		foreach ( var key in GetKeys( collection ) )
+		{
+			var doc = Load<T>( collection, key );
+			if ( doc != null ) yield return (key, doc);
+		}
 	}
 
 	private void EnsureCollection( string collection )

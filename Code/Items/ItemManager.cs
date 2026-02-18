@@ -5,10 +5,18 @@ namespace Hexagon.Items;
 /// Definitions auto-register when .item GameResource assets load.
 /// Instances are created/loaded from the database.
 /// </summary>
-public static class ItemManager
+public sealed class ItemManager : GameObjectSystem<ItemManager>
 {
+	private static ItemManager _instance;
+	private static ItemManager Instance => _instance;
+
 	private static readonly Dictionary<string, ItemDefinition> _definitions = new();
-	private static readonly Dictionary<string, ItemInstance> _instances = new();
+	private readonly Dictionary<string, ItemInstance> _instances = new();
+
+	public ItemManager( Scene scene ) : base( scene )
+	{
+		_instance = this;
+	}
 
 	/// <summary>
 	/// All registered item definitions.
@@ -18,7 +26,7 @@ public static class ItemManager
 	/// <summary>
 	/// All active item instances.
 	/// </summary>
-	public static IReadOnlyDictionary<string, ItemInstance> Instances => _instances;
+	public static IReadOnlyDictionary<string, ItemInstance> Instances => Instance?._instances;
 
 	/// <summary>
 	/// Register an item definition. Called automatically by ItemDefinition.PostLoad().
@@ -61,7 +69,8 @@ public static class ItemManager
 		Persistence.DatabaseManager.Save( "items", instance.Id, instance );
 
 		// Track
-		_instances[instance.Id] = instance;
+		if ( Instance != null )
+			Instance._instances[instance.Id] = instance;
 
 		// Notify definition
 		def.OnInstanced( instance );
@@ -75,15 +84,16 @@ public static class ItemManager
 	public static ItemInstance GetInstance( string instanceId )
 	{
 		if ( string.IsNullOrEmpty( instanceId ) ) return null;
+		if ( Instance == null ) return null;
 
 		// Check active cache
-		if ( _instances.TryGetValue( instanceId, out var inst ) )
+		if ( Instance._instances.TryGetValue( instanceId, out var inst ) )
 			return inst;
 
 		// Try loading from DB
 		var loaded = Persistence.DatabaseManager.Load<ItemInstance>( "items", instanceId );
 		if ( loaded != null )
-			_instances[loaded.Id] = loaded;
+			Instance._instances[loaded.Id] = loaded;
 
 		return loaded;
 	}
@@ -93,10 +103,10 @@ public static class ItemManager
 	/// </summary>
 	public static void DestroyInstance( string instanceId )
 	{
-		if ( _instances.TryGetValue( instanceId, out var instance ) )
+		if ( Instance != null && Instance._instances.TryGetValue( instanceId, out var instance ) )
 		{
 			instance.Definition?.OnRemoved( instance );
-			_instances.Remove( instanceId );
+			Instance._instances.Remove( instanceId );
 		}
 
 		Persistence.DatabaseManager.Delete( "items", instanceId );
@@ -107,9 +117,11 @@ public static class ItemManager
 	/// </summary>
 	public static void SaveAll()
 	{
+		if ( Instance == null ) return;
+
 		var saved = 0;
 
-		foreach ( var instance in _instances.Values )
+		foreach ( var instance in Instance._instances.Values )
 		{
 			if ( instance.IsDirty )
 			{
@@ -132,9 +144,12 @@ public static class ItemManager
 			i => i.CharacterId == characterId
 		);
 
-		foreach ( var item in items )
+		if ( Instance != null )
 		{
-			_instances[item.Id] = item;
+			foreach ( var item in items )
+			{
+				Instance._instances[item.Id] = item;
+			}
 		}
 
 		return items;
@@ -161,5 +176,12 @@ public static class ItemManager
 			.Distinct()
 			.OrderBy( c => c )
 			.ToList();
+	}
+
+	public override void Dispose()
+	{
+		SaveAll();
+		if ( _instance == this ) _instance = null;
+		base.Dispose();
 	}
 }

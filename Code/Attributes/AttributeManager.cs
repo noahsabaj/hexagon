@@ -3,13 +3,14 @@ namespace Hexagon.Attributes;
 /// <summary>
 /// Manages attribute definitions and per-character attribute values + boosts.
 ///
-/// Base values stored in character data as "hex_attr_{id}".
-/// Boosts stored as "hex_boosts" JSON list.
+/// Base values stored in HexCharacterData.AttributeValues keyed by attribute ID.
+/// Boosts stored in HexCharacterData.Boosts as a typed list (no JSON double-serialization).
 /// </summary>
-public static class AttributeManager
+public sealed class AttributeManager : GameObjectSystem<AttributeManager>
 {
 	private static readonly Dictionary<string, AttributeDefinition> _definitions = new();
-	private const string BoostDataKey = "hex_boosts";
+
+	public AttributeManager( Scene scene ) : base( scene ) { }
 
 	/// <summary>
 	/// Register an attribute definition (called by AttributeDefinition.PostLoad).
@@ -45,7 +46,7 @@ public static class AttributeManager
 			return 0f;
 		}
 
-		var baseValue = character.GetData<float>( $"hex_attr_{attributeId}", def.StartValue );
+		var baseValue = character.Data.AttributeValues.GetValueOrDefault( attributeId, def.StartValue );
 		var boostSum = GetBoostSum( character, attributeId );
 
 		return Math.Clamp( baseValue + boostSum, def.MinValue, def.MaxValue );
@@ -59,7 +60,7 @@ public static class AttributeManager
 		var def = GetDefinition( attributeId );
 		if ( def == null ) return 0f;
 
-		return character.GetData<float>( $"hex_attr_{attributeId}", def.StartValue );
+		return character.Data.AttributeValues.GetValueOrDefault( attributeId, def.StartValue );
 	}
 
 	/// <summary>
@@ -78,7 +79,8 @@ public static class AttributeManager
 		var clamped = Math.Clamp( value, def.MinValue, def.MaxValue );
 		var oldValue = GetAttribute( character, attributeId );
 
-		character.SetData( $"hex_attr_{attributeId}", clamped );
+		character.Data.AttributeValues[attributeId] = clamped;
+		character.MarkDirty( nameof( character.Data.AttributeValues ) );
 
 		FireIfChanged( character, attributeId, oldValue );
 	}
@@ -118,7 +120,7 @@ public static class AttributeManager
 		};
 
 		boosts.Add( boost );
-		SaveBoosts( character, boosts );
+		character.MarkDirty( nameof( character.Data.Boosts ) );
 
 		FireIfChanged( character, attributeId, oldValue );
 	}
@@ -136,7 +138,7 @@ public static class AttributeManager
 
 		var oldValue = GetAttribute( character, boost.AttributeId );
 		boosts.Remove( boost );
-		SaveBoosts( character, boosts );
+		character.MarkDirty( nameof( character.Data.Boosts ) );
 
 		FireIfChanged( character, boost.AttributeId, oldValue );
 		return true;
@@ -151,29 +153,18 @@ public static class AttributeManager
 		var oldValue = GetAttribute( character, attributeId );
 
 		boosts.RemoveAll( b => b.AttributeId == attributeId );
-		SaveBoosts( character, boosts );
+		character.MarkDirty( nameof( character.Data.Boosts ) );
 
 		FireIfChanged( character, attributeId, oldValue );
 	}
 
 	/// <summary>
-	/// Get all active (non-expired) boosts for a character.
+	/// Get the boosts list for a character. The returned list is the live reference —
+	/// mutating it does not automatically mark dirty; call MarkDirty("Boosts") after.
 	/// </summary>
 	public static List<AttributeBoost> GetBoosts( HexCharacter character )
 	{
-		var json = character.GetData<string>( BoostDataKey, "" );
-
-		if ( string.IsNullOrEmpty( json ) )
-			return new List<AttributeBoost>();
-
-		try
-		{
-			return Json.Deserialize<List<AttributeBoost>>( json ) ?? new List<AttributeBoost>();
-		}
-		catch
-		{
-			return new List<AttributeBoost>();
-		}
+		return character.Data.Boosts ??= new List<AttributeBoost>();
 	}
 
 	/// <summary>
@@ -184,15 +175,12 @@ public static class AttributeManager
 	{
 		foreach ( var def in _definitions.Values )
 		{
-			var key = $"hex_attr_{def.UniqueId}";
-			var existing = character.GetData<float>( key, float.MinValue );
-
-			// Only set if not already initialized
-			if ( Math.Abs( existing - float.MinValue ) < 0.001f )
+			if ( !character.Data.AttributeValues.ContainsKey( def.UniqueId ) )
 			{
-				character.SetData( key, def.StartValue );
+				character.Data.AttributeValues[def.UniqueId] = def.StartValue;
 			}
 		}
+		character.MarkDirty( nameof( character.Data.AttributeValues ) );
 	}
 
 	private static void FireIfChanged( HexCharacter character, string attributeId, float oldValue )
@@ -219,10 +207,4 @@ public static class AttributeManager
 		return sum;
 	}
 
-	private static void SaveBoosts( HexCharacter character, List<AttributeBoost> boosts )
-	{
-		// Clean expired before saving
-		boosts.RemoveAll( b => b.IsExpired );
-		character.SetData( BoostDataKey, Json.Serialize( boosts ) );
-	}
 }

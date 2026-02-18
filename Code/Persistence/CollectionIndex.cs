@@ -1,6 +1,15 @@
 namespace Hexagon.Persistence;
 
 /// <summary>
+/// Non-generic interface for type-erased index operations in DatabaseManager.
+/// </summary>
+internal interface ICollectionIndex
+{
+	void OnDelete( string docKey );
+	void Invalidate();
+}
+
+/// <summary>
 /// In-memory index for a DatabaseManager collection field.
 ///
 /// Speeds up DatabaseManager.Select() for frequently queried fields (e.g., SteamId on
@@ -10,7 +19,7 @@ namespace Hexagon.Persistence;
 /// Register via DatabaseManager.RegisterIndex("characters", "SteamId").
 /// The index is built lazily on first use and maintained on Save() / Delete() calls.
 /// </summary>
-public sealed class CollectionIndex<T>
+public sealed class CollectionIndex<T> : ICollectionIndex
 {
 	private readonly string _collection;
 	private readonly string _fieldName;

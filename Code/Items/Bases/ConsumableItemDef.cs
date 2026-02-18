@@ -24,17 +24,17 @@ public class ConsumableItemDef : ItemDefinition
 	/// </summary>
 	[Property] public string ConsumeVerb { get; set; } = "Using";
 
-	public override Dictionary<string, ItemAction> GetActions()
+	public override List<ItemAction> GetActions()
 	{
 		var actions = base.GetActions();
 
-		actions["use"] = new ItemAction
+		actions.Add( new ItemAction
 		{
 			Name = "Use",
 			Icon = "restaurant",
 			OnRun = ( player, item ) => OnUse( player, item ),
 			OnCanRun = ( player, item ) => OnCanUse( player, item )
-		};
+		} );
 
 		return actions;
 	}

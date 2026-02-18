@@ -14,14 +14,24 @@ public sealed class RecognitionPlayerComponent : Component
 	[Sync] public NetList<string> RecognizedIds { get; set; } = new();
 
 	/// <summary>
-	/// Server-side: replace the full recognition set with new IDs.
-	/// Called by RecognitionManager after a character's recognition list changes.
+	/// Server-side: update the recognition set incrementally.
+	/// Only adds/removes deltas so NetList delta compression is preserved.
 	/// </summary>
 	internal void SetRecognizedIds( IEnumerable<string> ids )
 	{
-		RecognizedIds.Clear();
-		foreach ( var id in ids )
-			RecognizedIds.Add( id );
+		var newIds = new HashSet<string>( ids );
+
+		for ( var i = RecognizedIds.Count - 1; i >= 0; i-- )
+		{
+			if ( !newIds.Contains( RecognizedIds[i] ) )
+				RecognizedIds.RemoveAt( i );
+		}
+
+		foreach ( var id in newIds )
+		{
+			if ( !RecognizedIds.Contains( id ) )
+				RecognizedIds.Add( id );
+		}
 	}
 
 	/// <summary>

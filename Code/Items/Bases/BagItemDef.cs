@@ -17,11 +17,11 @@ public class BagItemDef : ItemDefinition
 	/// </summary>
 	[Property] public int BagHeight { get; set; } = 3;
 
-	public override Dictionary<string, ItemAction> GetActions()
+	public override List<ItemAction> GetActions()
 	{
 		var actions = base.GetActions();
 
-		actions["open"] = new ItemAction
+		actions.Add( new ItemAction
 		{
 			Name = "Open",
 			Icon = "inventory_2",
@@ -31,7 +31,7 @@ public class BagItemDef : ItemDefinition
 				return false;
 			},
 			OnCanRun = ( player, item ) => OnCanUse( player, item )
-		};
+		} );
 
 		return actions;
 	}

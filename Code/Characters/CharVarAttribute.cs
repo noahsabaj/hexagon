@@ -1,6 +1,24 @@
 namespace Hexagon.Characters;
 
 /// <summary>
+/// Which HexPlayerComponent [Sync] property this CharVar should feed.
+/// Decouples the property name on HexCharacterData from the network sync target —
+/// the schema dev's property can be named anything; the SyncTarget declaration
+/// is the compile-time mapping.
+/// </summary>
+public enum CharSyncTarget
+{
+	/// <summary>Not mapped to a public sync slot (default).</summary>
+	None,
+	/// <summary>Maps to HexPlayerComponent.CharacterName.</summary>
+	CharacterName,
+	/// <summary>Maps to HexPlayerComponent.CharacterDescription.</summary>
+	CharacterDescription,
+	/// <summary>Maps to HexPlayerComponent.CharacterModel.</summary>
+	CharacterModel,
+}
+
+/// <summary>
 /// Marks a property on a HexCharacterData subclass as a character variable.
 /// The framework handles persistence, networking, and validation automatically.
 ///
@@ -52,4 +70,11 @@ public class CharVarAttribute : Attribute
 	/// If true, this variable is shown in character creation UI.
 	/// </summary>
 	public bool ShowInCreation { get; set; } = true;
+
+	/// <summary>
+	/// Which HexPlayerComponent [Sync] property this variable feeds.
+	/// Only applies to public (non-Local, non-NoNetworking) CharVars.
+	/// Defaults to None (not mapped to a sync slot).
+	/// </summary>
+	public CharSyncTarget SyncTarget { get; set; } = CharSyncTarget.None;
 }

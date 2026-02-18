@@ -5,9 +5,23 @@ namespace Hexagon.Vendors;
 /// VendorComponents register/unregister themselves on enable/disable.
 /// Persistence is handled directly by each VendorComponent via DatabaseManager.
 /// </summary>
-public static class VendorManager
+public sealed class VendorManager : GameObjectSystem<VendorManager>
 {
-	private static readonly Dictionary<string, VendorComponent> _vendors = new();
+	private static VendorManager _instance;
+	private static VendorManager Instance => _instance;
+
+	private readonly Dictionary<string, VendorComponent> _vendors = new();
+
+	public VendorManager( Scene scene ) : base( scene )
+	{
+		_instance = this;
+	}
+
+	public override void Dispose()
+	{
+		if ( _instance == this ) _instance = null;
+		base.Dispose();
+	}
 
 	/// <summary>
 	/// Register a vendor component. Called by VendorComponent.OnEnabled.
@@ -15,7 +29,8 @@ public static class VendorManager
 	internal static void Register( VendorComponent vendor )
 	{
 		if ( string.IsNullOrEmpty( vendor.VendorId ) ) return;
-		_vendors[vendor.VendorId] = vendor;
+		if ( Instance == null ) return;
+		Instance._vendors[vendor.VendorId] = vendor;
 	}
 
 	/// <summary>
@@ -24,7 +39,7 @@ public static class VendorManager
 	internal static void Unregister( VendorComponent vendor )
 	{
 		if ( string.IsNullOrEmpty( vendor.VendorId ) ) return;
-		_vendors.Remove( vendor.VendorId );
+		Instance?._vendors.Remove( vendor.VendorId );
 	}
 
 	/// <summary>
@@ -32,13 +47,13 @@ public static class VendorManager
 	/// </summary>
 	public static VendorComponent GetVendor( string vendorId )
 	{
-		return _vendors.GetValueOrDefault( vendorId );
+		return Instance?._vendors.GetValueOrDefault( vendorId );
 	}
 
 	/// <summary>
 	/// Get all registered vendors.
 	/// </summary>
-	public static IReadOnlyDictionary<string, VendorComponent> GetAllVendors() => _vendors;
+	public static IReadOnlyDictionary<string, VendorComponent> GetAllVendors() => Instance?._vendors;
 
 	// --- Buy/Sell Operations ---
 

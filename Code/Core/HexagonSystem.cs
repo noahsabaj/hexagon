@@ -9,18 +9,24 @@ namespace Hexagon.Core;
 /// </summary>
 public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.INetworkListener, ISceneStartup
 {
+	private static HexagonSystem _instance;
+
 	/// <summary>
 	/// Whether the framework has finished initialization.
 	/// </summary>
 	public static bool IsInitialized { get; private set; }
 
+	private readonly Dictionary<ulong, HexPlayerComponent> _players = new();
+
 	/// <summary>
 	/// All currently connected players keyed by Steam ID.
 	/// </summary>
-	public static readonly Dictionary<ulong, HexPlayerComponent> Players = new();
+	public static IReadOnlyDictionary<ulong, HexPlayerComponent> Players =>
+		(IReadOnlyDictionary<ulong, HexPlayerComponent>)_instance?._players ?? new Dictionary<ulong, HexPlayerComponent>();
 
 	public HexagonSystem( Scene scene ) : base( scene )
 	{
+		_instance = this;
 	}
 
 	/// <summary>
@@ -28,7 +34,7 @@ public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.I
 	/// </summary>
 	public static HexPlayerComponent GetPlayer( ulong steamId )
 	{
-		return Players.GetValueOrDefault( steamId );
+		return _instance?._players.GetValueOrDefault( steamId );
 	}
 
 	/// <summary>
@@ -36,7 +42,7 @@ public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.I
 	/// </summary>
 	public static HexPlayerComponent GetPlayer( Connection connection )
 	{
-		return Players.GetValueOrDefault( connection.SteamId );
+		return _instance?._players.GetValueOrDefault( connection.SteamId );
 	}
 
 	// --- Initialization ---
@@ -58,17 +64,8 @@ public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.I
 		// Plugins — before CharacterManager so plugins can register their HexCharacterData
 		PluginManager.Initialize();
 
-		// Systems that depend on plugin registrations being complete
+		// CharacterManager depends on plugin registrations being complete
 		Characters.CharacterManager.Initialize();
-		Permissions.PermissionManager.Initialize();
-		Chat.ChatManager.Initialize();
-		Commands.CommandManager.Initialize();
-
-		// Service components (singleton GameObjects on the server)
-		var servicesGo = new GameObject( true, "Hexagon Services" );
-		servicesGo.GetOrAddComponent<Chat.HexChatComponent>();
-		servicesGo.GetOrAddComponent<Inventory.HexInventoryComponent>();
-		servicesGo.GetOrAddComponent<Characters.HexModelHandler>();
 
 		// UI
 		UI.HexUISetup.EnsureUI( Scene );
@@ -110,7 +107,7 @@ public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.I
 
 		playerGo.NetworkSpawn( connection );
 
-		Players[connection.SteamId] = player;
+		_players[connection.SteamId] = player;
 
 		IHexPlayerEvent.Post( x => x.OnPlayerConnected( player, connection ) );
 
@@ -121,7 +118,7 @@ public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.I
 	{
 		Log.Info( $"Hexagon: Player disconnecting - {connection.DisplayName} ({connection.SteamId})" );
 
-		if ( Players.TryGetValue( connection.SteamId, out var player ) )
+		if ( _players.TryGetValue( connection.SteamId, out var player ) )
 		{
 			if ( player.Character != null )
 			{
@@ -129,7 +126,7 @@ public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.I
 			}
 
 			IHexPlayerEvent.Post( x => x.OnPlayerDisconnected( player, connection ) );
-			Players.Remove( connection.SteamId );
+			_players.Remove( connection.SteamId );
 		}
 	}
 
@@ -143,7 +140,7 @@ public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.I
 			IHexFrameworkEvent.Post( x => x.OnFrameworkShutdown() );
 
 			// Save all registered doors (each door manages its own persistence)
-			foreach ( var door in Doors.DoorManager.GetAllDoors().Values )
+			foreach ( var door in Doors.DoorManager.GetAllDoors()?.Values ?? Enumerable.Empty<Doors.DoorComponent>() )
 				door.SaveData();
 
 			// Explicit save order: inventories and characters must complete before DB cache clears
@@ -154,18 +151,15 @@ public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.I
 			// Clean up ConVar bridge event subscription
 			Config.ConVarBridge.Shutdown();
 
-			// Clean up any dropped world items
-			Items.WorldItemManager.ClearAll();
-
-			// Database and plugin shutdown — GameObjectSystem.Dispose() handles these too,
-			// but calling explicitly here ensures correct ordering (saves above run first).
+			// Database shutdown — explicit here so it runs after saves above.
+			// PluginManager and WorldItemManager clean up via their own Dispose().
 			Persistence.DatabaseManager.Shutdown();
-			PluginManager.Shutdown();
 
 			IsInitialized = false;
-			Players.Clear();
+			_players.Clear();
 		}
 
+		if ( _instance == this ) _instance = null;
 		base.Dispose();
 	}
 }

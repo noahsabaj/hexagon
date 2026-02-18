@@ -4,23 +4,34 @@ namespace Hexagon.Core;
 /// Discovers and manages Hexagon plugins. Scans all loaded assemblies for classes
 /// marked with [HexPlugin] that implement IHexPlugin.
 /// </summary>
-public static class PluginManager
+public sealed class PluginManager : GameObjectSystem<PluginManager>
 {
-	private static readonly List<PluginEntry> _plugins = new();
+	private static PluginManager _instance;
+	private static PluginManager Instance => _instance;
+
+	private readonly List<PluginEntry> _plugins = new();
+
+	public PluginManager( Scene scene ) : base( scene )
+	{
+		_instance = this;
+	}
 
 	/// <summary>
 	/// All currently loaded plugins.
 	/// </summary>
-	public static IReadOnlyList<PluginEntry> Plugins => _plugins;
+	public static IReadOnlyList<PluginEntry> Plugins => Instance?._plugins;
 
 	internal static void Initialize()
 	{
-		_plugins.Clear();
-		DiscoverPlugins();
-		LoadPlugins();
+		if ( Instance == null ) return;
+		Instance._plugins.Clear();
+		Instance.DiscoverPlugins();
+		Instance.LoadPlugins();
 	}
 
-	internal static void Shutdown()
+	internal static void Shutdown() => Instance?.ShutdownInternal();
+
+	private void ShutdownInternal()
 	{
 		foreach ( var entry in _plugins )
 		{
@@ -38,7 +49,7 @@ public static class PluginManager
 		_plugins.Clear();
 	}
 
-	private static void DiscoverPlugins()
+	private void DiscoverPlugins()
 	{
 		var pluginTypes = TypeLibrary.GetTypes<IHexPlugin>()
 			.Where( t => t.GetAttribute<HexPluginAttribute>() != null && !t.IsAbstract );
@@ -53,7 +64,10 @@ public static class PluginManager
 			{
 				packageId = type.TargetType?.Assembly?.GetName()?.Name ?? "";
 			}
-			catch { }
+			catch ( Exception ex )
+			{
+				Log.Warning( $"Hexagon: PluginManager could not read assembly name for plugin type '{type.Name}': {ex.Message}" );
+			}
 
 			_plugins.Add( new PluginEntry
 			{
@@ -74,7 +88,7 @@ public static class PluginManager
 		Log.Info( $"Hexagon: Discovered {_plugins.Count} plugin(s)." );
 	}
 
-	private static void LoadPlugins()
+	private void LoadPlugins()
 	{
 		foreach ( var entry in _plugins )
 		{
@@ -96,7 +110,14 @@ public static class PluginManager
 	/// </summary>
 	public static IHexPlugin Get( string name )
 	{
-		return _plugins.FirstOrDefault( p => p.Name == name )?.Instance;
+		return Instance?._plugins.FirstOrDefault( p => p.Name == name )?.Instance;
+	}
+
+	public override void Dispose()
+	{
+		ShutdownInternal();
+		if ( _instance == this ) _instance = null;
+		base.Dispose();
 	}
 }
 

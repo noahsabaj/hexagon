@@ -95,6 +95,21 @@ public sealed class InventoryManager : GameObjectSystem<InventoryManager>
 	}
 
 	/// <summary>
+	/// Get already-loaded inventories for a character from the in-memory cache.
+	/// Use this for active players whose inventories are guaranteed to be loaded.
+	/// Use LoadForCharacter() only on first load or for offline characters.
+	/// </summary>
+	public static List<HexInventory> GetForCharacter( string characterId )
+	{
+		if ( Instance == null || string.IsNullOrEmpty( characterId ) )
+			return new List<HexInventory>();
+
+		return Instance._inventories.Values
+			.Where( inv => inv.OwnerId == characterId )
+			.ToList();
+	}
+
+	/// <summary>
 	/// Load all inventories for a character.
 	/// </summary>
 	public static List<HexInventory> LoadForCharacter( string characterId )

@@ -7,6 +7,7 @@
 @namespace Hexagon.UI
 @inherits PanelComponent
 @implements IHexPanel
+@implements IHexCrudEvent
 
 <root class="@(IsOpen ? "open" : "")">
 	<div class="select-container hex-panel">
@@ -85,18 +86,7 @@
 	public void Open()
 	{
 		IsOpen = true;
-
-		// Request fresh character list
 		CharacterCrud?.RequestCharacterList();
-
-		// Subscribe to updates
-		var crud = CharacterCrud;
-		if ( crud != null )
-		{
-			crud.OnCharacterListReceived -= OnListReceived;
-			crud.OnCharacterListReceived += OnListReceived;
-		}
-
 		StateHasChanged();
 	}
 
@@ -104,17 +94,10 @@
 	{
 		IsOpen = false;
 		ShowDeleteConfirm = false;
-
-		var crud = CharacterCrud;
-		if ( crud != null )
-		{
-			crud.OnCharacterListReceived -= OnListReceived;
-		}
-
 		StateHasChanged();
 	}
 
-	private void OnListReceived()
+	public void OnCharacterListReceived()
 	{
 		StateHasChanged();
 	}

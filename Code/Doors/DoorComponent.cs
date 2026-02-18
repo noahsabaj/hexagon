@@ -269,7 +269,7 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 		if ( player?.Character == null ) return false;
 
 		// Admin bypass
-		if ( player.Character.HasFlag( 'a' ) )
+		if ( player.Character.HasFlag( "a" ) )
 			return true;
 
 		// Character owner

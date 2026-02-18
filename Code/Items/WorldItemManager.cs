@@ -7,10 +7,18 @@ namespace Hexagon.Items;
 /// Spawning creates a networked GameObject visible to all connected clients.
 /// Despawning destroys it for everyone.
 /// </summary>
-public static class WorldItemManager
+public sealed class WorldItemManager : GameObjectSystem<WorldItemManager>
 {
+	private static WorldItemManager _instance;
+	private static WorldItemManager Instance => _instance;
+
 	// Tracks spawned world items by ItemInstance ID for fast lookup/cleanup
-	private static readonly Dictionary<string, GameObject> _worldItems = new();
+	private readonly Dictionary<string, GameObject> _worldItems = new();
+
+	public WorldItemManager( Scene scene ) : base( scene )
+	{
+		_instance = this;
+	}
 
 	/// <summary>
 	/// Spawn a dropped item as a networked world GameObject.
@@ -23,6 +31,7 @@ public static class WorldItemManager
 	public static GameObject SpawnWorldItem( ItemInstance item, Vector3 position, Vector3 velocity = default )
 	{
 		if ( item?.Definition == null ) return null;
+		if ( Instance == null ) return null;
 
 		var go = new GameObject( true, $"WorldItem_{item.Definition.DisplayName}" );
 		go.WorldPosition = position;
@@ -48,7 +57,7 @@ public static class WorldItemManager
 		// Network spawn so all clients see it
 		go.NetworkSpawn();
 
-		_worldItems[item.Id] = go;
+		Instance._worldItems[item.Id] = go;
 
 		Log.Info( $"Hexagon: Spawned world item '{item.Definition.DisplayName}' at {position}" );
 
@@ -61,19 +70,18 @@ public static class WorldItemManager
 	/// </summary>
 	public static void DespawnWorldItem( string itemInstanceId )
 	{
-		if ( _worldItems.TryGetValue( itemInstanceId, out var go ) )
+		if ( Instance == null ) return;
+
+		if ( Instance._worldItems.TryGetValue( itemInstanceId, out var go ) )
 		{
-			_worldItems.Remove( itemInstanceId );
+			Instance._worldItems.Remove( itemInstanceId );
 
 			if ( go.IsValid() )
 				go.Destroy();
 		}
 	}
 
-	/// <summary>
-	/// Destroy all tracked world items. Called on scene shutdown.
-	/// </summary>
-	public static void ClearAll()
+	public override void Dispose()
 	{
 		foreach ( var go in _worldItems.Values )
 		{
@@ -82,5 +90,8 @@ public static class WorldItemManager
 		}
 
 		_worldItems.Clear();
+
+		if ( _instance == this ) _instance = null;
+		base.Dispose();
 	}
 }

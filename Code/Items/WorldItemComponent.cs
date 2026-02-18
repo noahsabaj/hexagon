@@ -16,23 +16,20 @@ public sealed class WorldItemComponent : Component
 
 	/// <summary>
 	/// The ItemDefinition unique ID. Used client-side to apply the correct world model.
+	/// Fires ApplyModel() whenever the value is received or changes — no per-frame polling needed.
 	/// </summary>
-	[Sync] public string DefinitionId { get; set; }
+	[Sync, Change( nameof( ApplyModel ) )] public string DefinitionId { get; set; }
 
 	/// <summary>
 	/// Display name shown in any client-side interaction prompts.
 	/// </summary>
 	[Sync] public string DisplayName { get; set; }
 
-	protected override void OnUpdate()
+	protected override void OnStart()
 	{
-		// Client-side: apply model once DefinitionId is synced
-		if ( !IsProxy ) return;
-
-		var renderer = GetComponent<ModelRenderer>();
-		if ( renderer != null && renderer.Model != null ) return;
-
-		ApplyModel();
+		// Apply model immediately for clients that join after this item already exists.
+		if ( IsProxy )
+			ApplyModel();
 	}
 
 	private void ApplyModel()
@@ -64,8 +61,9 @@ public sealed class WorldItemComponent : Component
 			return;
 		}
 
-		// Find a player inventory that can fit this item
-		var inventories = Inventory.InventoryManager.LoadForCharacter( player.Character.Id );
+		// Find a player inventory that can fit this item.
+		// Active players have inventories already in memory — no DB query needed.
+		var inventories = Inventory.InventoryManager.GetForCharacter( player.Character.Id );
 		Inventory.HexInventory target = null;
 
 		foreach ( var inv in inventories )

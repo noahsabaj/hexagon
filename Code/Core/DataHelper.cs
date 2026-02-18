@@ -1,8 +1,12 @@
+using System.Text.Json;
+
 namespace Hexagon.Core;
 
 /// <summary>
 /// Utility for typed access to Dictionary&lt;string, object&gt; stores
 /// with safe type conversion and fallback defaults.
+/// Handles JsonElement values that arise from JSON round-trips (deserializing
+/// Dictionary&lt;string, object&gt; produces JsonElement for each value).
 /// </summary>
 public static class DataHelper
 {
@@ -20,10 +24,15 @@ public static class DataHelper
 			if ( value is T typed )
 				return typed;
 
+			// After JSON round-trip, object values are JsonElement — deserialize them properly.
+			if ( value is JsonElement elem )
+				return elem.Deserialize<T>() ?? defaultValue;
+
 			return (T)Convert.ChangeType( value, typeof( T ) );
 		}
-		catch
+		catch ( Exception ex )
 		{
+			Log.Warning( $"Hexagon: DataHelper.GetValue failed to convert '{key}' to {typeof( T ).Name}: {ex.Message}" );
 			return defaultValue;
 		}
 	}

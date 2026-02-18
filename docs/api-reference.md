@@ -34,7 +34,7 @@ Complete API reference for the Hexagon roleplay framework for s&box (Source 2, C
 
 ### DataHelper (static)
 
-Utility for typed access to Dictionary&lt;string, object&gt; stores with safe type conversion and fallback defaults.
+Utility for typed access to Dictionary&lt;string, object&gt; stores with safe type conversion and fallback defaults. Handles JsonElement values that arise from JSON round-trips (deserializing Dictionary&lt;string, object&gt; produces JsonElement for each value).
 
 ```csharp
 static T GetValue<T>( Dictionary<string, object> dict, string key, T defaultValue )
@@ -64,7 +64,7 @@ Core Hexagon framework system. Initializes all subsystems on scene startup and m
 
 ```csharp
 static bool IsInitialized { get; set; }
-readonly Dictionary<ulong, HexPlayerComponent> Players
+static IReadOnlyDictionary<ulong, HexPlayerComponent> Players
 static HexPlayerComponent GetPlayer( ulong steamId )
 static HexPlayerComponent GetPlayer( Connection connection )
 override void Dispose()
@@ -104,19 +104,21 @@ string Version { get; set; }
 int Priority { get; set; }
 ```
 
-### PluginManager (static)
+### PluginManager (sealed) : GameObjectSystem<PluginManager>
 
 Discovers and manages Hexagon plugins. Scans all loaded assemblies for classes marked with [HexPlugin] that implement IHexPlugin.
 
 ```csharp
 static IReadOnlyList<PluginEntry> Plugins
 static IHexPlugin Get( string name )
+override void Dispose()
 ```
 
 | Member | Description |
 |--------|-------------|
 | `Plugins` | All currently loaded plugins. |
 | `Get` | Get a loaded plugin by name. |
+| `Dispose` |  |
 
 ### PluginEntry
 
@@ -146,11 +148,7 @@ IHexPlugin Instance { get; set; }
 
 ### PluginSystem (sealed) : GameObjectSystem<PluginSystem>
 
-GameObjectSystem wrapper that gives PluginManager proper scene lifecycle. Initialization (PluginManager.Initialize) is still called explicitly by HexagonSystem at the correct point in the init order (after DatabaseManager, HexConfig, and CharacterManager are ready). This system handles shutdown only — ensuring plugins are cleanly unloaded when the scene ends, even if HexagonSystem.Dispose is not called.
-
-```csharp
-override void Dispose()
-```
+GameObjectSystem shell that gives PluginManager proper scene lifecycle. Initialization (PluginManager.Initialize) is still called explicitly by HexagonSystem at the correct point in the init order (after DatabaseManager, HexConfig, and CharacterManager are ready). Shutdown is handled by PluginManager.Dispose() directly, so this system requires no additional logic.
 
 ### PressableHelper (static)
 
@@ -227,9 +225,9 @@ Defines an attribute type (e.g. Hunger, Stamina, Health). Create .attrib asset f
 | `MaxValue` | Maximum value this attribute can reach. |
 | `StartValue` | Starting value for new characters. |
 
-### AttributeManager (static)
+### AttributeManager (sealed) : GameObjectSystem<AttributeManager>
 
-Manages attribute definitions and per-character attribute values + boosts. Base values stored in character data as "hex_attr_{id}". Boosts stored as "hex_boosts" JSON list.
+Manages attribute definitions and per-character attribute values + boosts. Base values stored in HexCharacterData.AttributeValues keyed by attribute ID. Boosts stored in HexCharacterData.Boosts as a typed list (no JSON double-serialization).
 
 ```csharp
 static void RegisterDefinition( AttributeDefinition definition )
@@ -258,7 +256,7 @@ static void InitializeCharacter( HexCharacter character )
 | `AddBoost` | Add a boost to a character's attribute. |
 | `RemoveBoost` | Remove a specific boost by ID. |
 | `ClearBoosts` | Remove all boosts for a specific attribute. |
-| `GetBoosts` | Get all active (non-expired) boosts for a character. |
+| `GetBoosts` | Get the boosts list for a character. The returned list is the live reference — mutating it does not automatically mark dirty; call MarkDirty("Boosts") after. |
 | `InitializeCharacter` | Initialize all registered attributes on a character with their start values. Call this when a character is first created. |
 
 ### AttributeSet (sealed)
@@ -293,8 +291,6 @@ Handles character CRUD RPCs (list, create, load, delete). Satellite component on
 
 ```csharp
 List<CharacterListEntry> ClientCharacterList { get; set; }
-event Action OnCharacterListReceived
-event Action<bool, string
 [Rpc.Host] void RequestCharacterList()
 [Rpc.Host] void RequestLoadCharacter( string characterId )
 [Rpc.Host] void RequestCreateCharacter( string json )
@@ -304,8 +300,6 @@ event Action<bool, string
 | Member | Description |
 |--------|-------------|
 | `ClientCharacterList` | Client-side character list received from the server. |
-| `OnCharacterListReceived` | Fired on the client when the character list is received from the server. |
-| `string` | Fired on the client when a character creation result is received. |
 | `RequestCharacterList` | Client requests their character list from the server. |
 | `RequestLoadCharacter` | Client requests to load a specific character. |
 | `RequestCreateCharacter` | Client requests to create a new character from JSON data. |
@@ -351,6 +345,10 @@ static HexCharacterData CreateDefaultData()
 | `SaveAll` | Save all active characters that have dirty data. |
 | `CreateDefaultData` | Create an instance of the schema's character data type with defaults applied. |
 
+### CharSyncTarget (enum)
+
+Which HexPlayerComponent [Sync] property this CharVar should feed. Decouples the property name on HexCharacterData from the network sync target — the schema dev's property can be named anything; the SyncTarget declaration is the compile-time mapping.
+
 ### CharVarAttribute : Attribute
 
 Marks a property on a HexCharacterData subclass as a character variable. The framework handles persistence, networking, and validation automatically. Usage: [CharVar(Default = "John Doe")] public string Name { get; set; } [CharVar(Local = true)] public int Money { get; set; }  // Owner-only [CharVar(NoNetworking = true)] public Dictionary&lt;string, object&gt; ServerData { get; set; }
@@ -364,6 +362,7 @@ int MaxLength { get; set; }
 bool ReadOnly { get; set; }
 int Order { get; set; }
 bool ShowInCreation { get; set; }
+CharSyncTarget SyncTarget { get; set; }
 ```
 
 | Member | Description |
@@ -376,6 +375,7 @@ bool ShowInCreation { get; set; }
 | `ReadOnly` | If true, this variable cannot be modified after character creation. |
 | `Order` | Display order in character creation UI. Lower numbers appear first. |
 | `ShowInCreation` | If true, this variable is shown in character creation UI. |
+| `SyncTarget` | Which HexPlayerComponent [Sync] property this variable feeds. Only applies to public (non-Local, non-NoNetworking) CharVars. Defaults to None (not mapped to a sync slot). |
 
 ### HexCharacter
 
@@ -389,10 +389,10 @@ string Id
 ulong SteamId
 string Faction
 string Class
-bool HasFlag( char flag )
+bool HasFlag( string flag )
 bool HasFlags( string flags )
-void GiveFlag( char flag )
-void TakeFlag( char flag )
+void GiveFlag( string flag )
+void TakeFlag( string flag )
 T GetData<T>( string key, T defaultValue )
 void SetData( string key, object value )
 T GetVar<T>( string name, T defaultValue )
@@ -417,10 +417,10 @@ IReadOnlySet<string> GetDirtyFields()
 | `SteamId` |  |
 | `Faction` |  |
 | `Class` |  |
-| `HasFlag` | Check if this character has a specific flag. |
-| `HasFlags` | Check if this character has all specified flags. |
-| `GiveFlag` | Grant a flag to this character. |
-| `TakeFlag` | Remove a flag from this character. |
+| `HasFlag` | Check if this character has a specific permission flag. |
+| `HasFlags` | Check if this character has all flags represented by each character in the string (e.g. HasFlags("as") checks for both "a" and "s"). |
+| `GiveFlag` | Grant a permission flag to this character. |
+| `TakeFlag` | Remove a permission flag from this character. |
 | `GetData` | Get a value from the character's generic data store. |
 | `SetData` | Set a value in the character's generic data store. |
 | `GetVar` | Get a character variable value by name using reflection. Prefer using the typed property on your HexCharacterData subclass directly. |
@@ -437,7 +437,7 @@ IReadOnlySet<string> GetDirtyFields()
 
 ### HexCharacterData (abstract)
 
-Base class for character data. Schema devs extend this with [CharVar] properties to define their character fields. Usage: public class MyCharacter : HexCharacterData { [CharVar(Default = "John Doe", MinLength = 3, MaxLength = 64, Order = 1)] public string Name { get; set; } [CharVar(Default = "A mysterious stranger.", MinLength = 16, MaxLength = 512, Order = 2)] public string Description { get; set; } [CharVar(Order = 3)] public string Model { get; set; } [CharVar(Local = true)] public int Money { get; set; } } The framework auto-discovers the concrete subclass at startup and uses it for all character creation, persistence, and networking.
+Base class for character data. Schema devs extend this with [CharVar] properties to define their character fields. Usage: public class MyCharacter : HexCharacterData { [CharVar(Default = "John Doe", MinLength = 3, MaxLength = 64, Order = 1, SyncTarget = CharSyncTarget.CharacterName)] public string Name { get; set; } [CharVar(Default = "A mysterious stranger.", MinLength = 16, MaxLength = 512, Order = 2, SyncTarget = CharSyncTarget.CharacterDescription)] public string Description { get; set; } [CharVar(Order = 3, SyncTarget = CharSyncTarget.CharacterModel)] public string Model { get; set; } [CharVar(Local = true)] public int Money { get; set; } } The framework auto-discovers the concrete subclass at startup and uses it for all character creation, persistence, and networking.
 
 ```csharp
 string Id { get; set; }
@@ -445,7 +445,9 @@ ulong SteamId { get; set; }
 int Slot { get; set; }
 string Faction { get; set; }
 string Class { get; set; }
-string Flags { get; set; }
+HashSet<string> Flags { get; set; }
+HashSet<string> RecognizedIds { get; set; }
+Dictionary<string, float> AttributeValues { get; set; }
 Dictionary<string, object> Data { get; set; }
 DateTime CreatedAt { get; set; }
 DateTime LastPlayedAt { get; set; }
@@ -460,8 +462,10 @@ DateTime? BanExpiry { get; set; }
 | `Slot` | Character slot index (0-based) for this player. |
 | `Faction` | The faction this character belongs to (references FactionDefinition name). |
 | `Class` | The class within the faction (references ClassDefinition name). Empty if no class. |
-| `Flags` | Character flags (permission characters, e.g. "pet" for physgun/entities/tools). |
-| `Data` | Generic data store for plugin/schema-specific persistent data. |
+| `Flags` | Permission flags assigned to this character (e.g. "a" = admin, "s" = superadmin). |
+| `RecognizedIds` | Character IDs this character has been introduced to and can recognize by name. |
+| `AttributeValues` | Base attribute values keyed by attribute ID. |
+| `Data` | Generic data store for plugin/schema-specific persistent data that doesn't fit into typed CharVar properties. |
 | `CreatedAt` | When this character was created. |
 | `LastPlayedAt` | When this character was last played. |
 | `IsBanned` | Whether this character is currently banned. |
@@ -469,7 +473,7 @@ DateTime? BanExpiry { get; set; }
 
 ### CharVarInfo
 
-Metadata about a character variable, discovered via s&box TypeLibrary at startup.
+Metadata about a character variable, discovered via sbox TypeLibrary at startup.
 
 ```csharp
 string Name { get; set; }
@@ -563,7 +567,7 @@ Handles the introduce mechanic RPC. Satellite component on the player GameObject
 |--------|-------------|
 | `RequestIntroduce` | Client requests to introduce themselves. Level: 0=look-at, 1=whisper, 2=talk, 3=yell. |
 
-### RecognitionManager (static)
+### RecognitionManager (sealed) : GameObjectSystem<RecognitionManager>
 
 Manages the recognizable names system. Characters are "Unknown" to others until formally introduced. Recognition is one-way and persists across sessions. Factions with IsGloballyRecognized are always known (e.g., police uniforms).
 
@@ -612,6 +616,15 @@ void OnCharacterCreated( HexPlayerComponent player, HexCharacter character )
 bool CanCharacterCreate( HexPlayerComponent player, HexCharacterData data )
 bool CanRecognize( HexCharacter observer, HexCharacter target )
 void OnCharacterRecognized( HexPlayerComponent introducer, HexPlayerComponent recognizer )
+```
+
+### IHexCrudEvent (interface) : ISceneEvent<IHexCrudEvent>
+
+Character CRUD result events, dispatched on the client after server round-trips. Panels listen for these via ISceneEvent instead of subscribing to C# delegates on CharacterCrudComponent directly.
+
+```csharp
+void OnCharacterListReceived()
+void OnCharacterCreateResult( bool success, string message )
 ```
 
 ### IHexPlayerEvent (interface) : ISceneEvent<IHexPlayerEvent>
@@ -768,7 +781,7 @@ bool CanSay( HexPlayerComponent speaker, string message )
 string Format( HexPlayerComponent speaker, string message )
 ```
 
-### ChatManager (static)
+### ChatManager (sealed) : GameObjectSystem<ChatManager>
 
 Central chat routing system. Registers chat classes, parses prefixes, routes messages to the correct chat class, and delegates to CommandManager for non-chat / prefixed input.
 
@@ -907,7 +920,7 @@ bool Has( string name )
 | `Set` | Set a parsed argument value. |
 | `Has` | Check if an argument was provided. |
 
-### CommandManager (static)
+### CommandManager (sealed) : GameObjectSystem<CommandManager>
 
 Manages command registration, parsing, permission checking, and execution. Commands are invoked when a player types /{name} in chat and it doesn't match a chat class prefix.
 
@@ -963,9 +976,9 @@ bool CanRunCommand( HexPlayerComponent player, HexCommand command )
 
 ### ConVarBridge (static)
 
-Manages the HexConfig ↔ ConVar integration. With the new HexConVars design, ConVar properties delegate directly to HexConfig: - ConVar getter  →  HexConfig.Get(key) - ConVar setter  →  HexConfig.Set(key, value) This means console commands ("hex_walk_speed 300") automatically update HexConfig, and code that reads HexConfig.Get("gameplay.walkSpeed") sees the latest value. The bridge subscribes to HexConfig.OnChanged for diagnostics and any future integrations that need to react to all config changes in one place.
+Lifecycle stub for the HexConfig ↔ ConVar integration. HexConVars properties delegate directly to HexConfig (getter reads, setter writes), so console commands ("hex_walk_speed 300") automatically update HexConfig and all code reading HexConfig.Get sees the latest value. No event subscription needed.
 
-### HexConfig (static)
+### HexConfig (sealed) : GameObjectSystem<HexConfig>
 
 Server-side configuration system. Admin-controlled settings that are persisted and synced to all connected clients. Usage: HexConfig.Add("walkSpeed", 200f, "Default walk speed"); HexConfig.Add("maxCharacters", 5, "Max characters per player"); var speed = HexConfig.Get&lt;float&gt;("walkSpeed"); HexConfig.Set("walkSpeed", 150f);
 
@@ -978,6 +991,7 @@ static void Set( string key, object value )
 static void Reset( string key )
 static void Save()
 static void Load()
+override void Dispose()
 ```
 
 | Member | Description |
@@ -990,6 +1004,7 @@ static void Load()
 | `Reset` | Reset a config value back to its default. |
 | `Save` | Save all config overrides to disk. |
 | `Load` | Load config overrides from disk. |
+| `Dispose` |  |
 
 ### ConfigEntry
 
@@ -1006,7 +1021,7 @@ Action<object, object> OnChange { get; set; }
 
 ### HexConVars (static)
 
-ConVar declarations for Hexagon framework configuration values. Each ConVar setter calls HexConfig.Set() so console changes (e.g. "hex_walk_speed 300") immediately update the framework configuration. HexConfig.OnChanged then pushes the value back to the ConVar property via ConVarBridge — a re-entry guard prevents loops. The primary API for reading config remains HexConfig.Get() — ConVars are a bridge, not a replacement. Plugin configs (hl2rp.*) still use HexConfig.Add() and .Get().
+ConVar declarations for Hexagon framework configuration values. Each ConVar getter reads from HexConfig (which holds the registered default from DefaultConfigs plus any saved overrides). Each setter writes back to HexConfig so console changes (e.g. "hex_walk_speed 300") immediately update the framework config. DefaultConfigs.Register() is the single source of truth for default values. No fallback literals are duplicated here — the registered defaults always win.
 
 ---
 
@@ -1125,17 +1140,19 @@ bool HasOwner
 | `MaxLockHealth` | Maximum lock health. -1 = use config default. |
 | `HasOwner` | Whether this door has any owner. |
 
-### DoorManager (static)
+### DoorManager (sealed) : GameObjectSystem<DoorManager>
 
 Manages door registration and lookup. DoorComponents register/unregister themselves on enable/disable. Persistence is handled directly by each DoorComponent via DatabaseManager.
 
 ```csharp
+override void Dispose()
 static DoorComponent GetDoor( string doorId )
 static IReadOnlyDictionary<string, DoorComponent> GetAllDoors()
 ```
 
 | Member | Description |
 |--------|-------------|
+| `Dispose` |  |
 | `GetDoor` | Get a door component by its ID. |
 | `GetAllDoors` | Get all registered doors. |
 
@@ -1232,9 +1249,9 @@ string Description { get; set; }
 | `StartingMoney` | Starting money for characters created in this faction. If -1, uses the global currency.startingAmount config. |
 | `IsGloballyRecognized` | If true, members of this faction are always recognized by everyone. Useful for factions with distinctive uniforms (e.g., police, military). |
 
-### FactionManager (static)
+### FactionManager (sealed) : GameObjectSystem<FactionManager>
 
-Manages faction and class definitions. Factions auto-register when their GameResource assets are loaded by s&box.
+Manages faction and class definitions. Factions auto-register when their GameResource assets are loaded by sbox.
 
 ```csharp
 static IReadOnlyDictionary<string, FactionDefinition> Factions
@@ -1546,6 +1563,7 @@ static IReadOnlyDictionary<string, HexInventory> Inventories
 static HexInventory Create( int width, int height, string ownerId, string type )
 static HexInventory CreateDefault( string ownerId, string type )
 static HexInventory Get( string inventoryId )
+static List<HexInventory> GetForCharacter( string characterId )
 static List<HexInventory> LoadForCharacter( string characterId )
 static void Delete( string inventoryId )
 static void SaveAll()
@@ -1559,6 +1577,7 @@ static void Unload( string inventoryId )
 | `Create` | Create a new inventory and persist it. |
 | `CreateDefault` | Create an inventory using the default config dimensions. |
 | `Get` | Get an inventory by ID. Loads from database if not in memory. |
+| `GetForCharacter` | Get already-loaded inventories for a character from the in-memory cache. Use this for active players whose inventories are guaranteed to be loaded. Use LoadForCharacter() only on first load or for offline characters. |
 | `LoadForCharacter` | Load all inventories for a character. |
 | `Delete` | Delete an inventory and all its items. |
 | `SaveAll` | Save all active inventories and their items. |
@@ -1612,7 +1631,7 @@ string Description { get; set; }
 [Property] int MaxStack { get; set; }
 [Property] bool CanDrop { get; set; }
 [Property] int Order { get; set; }
-virtual Dictionary<string, ItemAction> GetActions()
+virtual List<ItemAction> GetActions()
 virtual bool OnUse( HexPlayerComponent player, ItemInstance item )
 virtual bool OnCanUse( HexPlayerComponent player, ItemInstance item )
 virtual void OnEquip( HexPlayerComponent player, ItemInstance item )
@@ -1685,7 +1704,7 @@ void Save()
 | `MarkDirty` | Mark this item as having unsaved changes. |
 | `Save` | Save this item instance to the database. |
 
-### ItemManager (static)
+### ItemManager (sealed) : GameObjectSystem<ItemManager>
 
 Manages item definitions and active item instances. Definitions auto-register when .item GameResource assets load. Instances are created/loaded from the database.
 
@@ -1701,6 +1720,7 @@ static void SaveAll()
 static List<ItemInstance> LoadInstancesForCharacter( string characterId )
 static List<ItemDefinition> GetDefinitionsByCategory( string category )
 static List<string> GetCategories()
+override void Dispose()
 ```
 
 | Member | Description |
@@ -1716,6 +1736,7 @@ static List<string> GetCategories()
 | `LoadInstancesForCharacter` | Load all item instances for a specific character from the database. |
 | `GetDefinitionsByCategory` | Get all definitions in a specific category. |
 | `GetCategories` | Get all item categories. |
+| `Dispose` |  |
 
 ### WorldItemComponent (sealed) : Component
 
@@ -1723,7 +1744,7 @@ Networked component for a dropped item in the world. Spawned by WorldItemManager
 
 ```csharp
 [Sync] string ItemInstanceId { get; set; }
-[Sync] string DefinitionId { get; set; }
+string DefinitionId { get; set; }
 [Sync] string DisplayName { get; set; }
 [Rpc.Host] void RequestPickup()
 ```
@@ -1731,25 +1752,25 @@ Networked component for a dropped item in the world. Spawned by WorldItemManager
 | Member | Description |
 |--------|-------------|
 | `ItemInstanceId` | The ItemInstance ID this world item represents. |
-| `DefinitionId` | The ItemDefinition unique ID. Used client-side to apply the correct world model. |
+| `DefinitionId` | The ItemDefinition unique ID. Used client-side to apply the correct world model. Fires ApplyModel() whenever the value is received or changes — no per-frame polling needed. |
 | `DisplayName` | Display name shown in any client-side interaction prompts. |
 | `RequestPickup` | Client calls this to request picking up the item. Server validates ownership, inventory space, and then transfers the item. |
 
-### WorldItemManager (static)
+### WorldItemManager (sealed) : GameObjectSystem<WorldItemManager>
 
 Manages networked world item GameObjects — items that have been dropped from inventories and exist as visible, interactable objects in the scene. Spawning creates a networked GameObject visible to all connected clients. Despawning destroys it for everyone.
 
 ```csharp
 static GameObject SpawnWorldItem( ItemInstance item, Vector3 position, Vector3 velocity )
 static void DespawnWorldItem( string itemInstanceId )
-static void ClearAll()
+override void Dispose()
 ```
 
 | Member | Description |
 |--------|-------------|
 | `SpawnWorldItem` | Spawn a dropped item as a networked world GameObject. Must be called server-side. All clients will automatically see the result. |
 | `DespawnWorldItem` | Destroy a world item GameObject by ItemInstance ID. Must be called server-side. Destruction replicates to all clients. |
-| `ClearAll` | Destroy all tracked world items. Called on scene shutdown. |
+| `Dispose` |  |
 
 ### IHexItemEvent (interface) : ISceneEvent<IHexItemEvent>
 
@@ -1770,7 +1791,7 @@ Base definition for ammo items. When used, loads ammo into a compatible weapon i
 ```csharp
 [Property] string AmmoType { get; set; }
 [Property] int AmmoAmount { get; set; }
-override Dictionary<string, ItemAction> GetActions()
+override List<ItemAction> GetActions()
 override bool OnUse( HexPlayerComponent player, ItemInstance item )
 ```
 
@@ -1788,7 +1809,7 @@ Base definition for bag/container items. When used, creates a nested inventory t
 ```csharp
 [Property] int BagWidth { get; set; }
 [Property] int BagHeight { get; set; }
-override Dictionary<string, ItemAction> GetActions()
+override List<ItemAction> GetActions()
 void OpenBag( HexPlayerComponent player, ItemInstance item )
 void CloseBag( HexPlayerComponent player, ItemInstance item )
 override void OnRemoved( ItemInstance item )
@@ -1811,7 +1832,7 @@ Base definition for consumable items (food, drinks, medical supplies, etc.). Whe
 [Property] float UseTime { get; set; }
 [Property] string UseSound { get; set; }
 [Property] string ConsumeVerb { get; set; }
-override Dictionary<string, ItemAction> GetActions()
+override List<ItemAction> GetActions()
 override bool OnUse( HexPlayerComponent player, ItemInstance item )
 virtual bool OnConsume( HexPlayerComponent player, ItemInstance item )
 ```
@@ -1831,7 +1852,7 @@ Base definition for physical currency items. When picked up or used, adds to the
 
 ```csharp
 [Property] int DefaultAmount { get; set; }
-override Dictionary<string, ItemAction> GetActions()
+override List<ItemAction> GetActions()
 int GetAmount( ItemInstance item )
 void SetAmount( ItemInstance item, int amount )
 override bool OnUse( HexPlayerComponent player, ItemInstance item )
@@ -1857,7 +1878,7 @@ Base definition for outfit/clothing items. When equipped, changes the player's m
 [Property] Model OutfitModel { get; set; }
 [Property] Dictionary<string, int> Bodygroups { get; set; }
 [Property] string Slot { get; set; }
-override Dictionary<string, ItemAction> GetActions()
+override List<ItemAction> GetActions()
 override void OnEquip( HexPlayerComponent player, ItemInstance item )
 override void OnUnequip( HexPlayerComponent player, ItemInstance item )
 ```
@@ -1882,7 +1903,7 @@ Base definition for weapon items. Handles equip/unequip lifecycle and ammo track
 [Property] bool TwoHanded { get; set; }
 [Property] bool AlwaysRaised { get; set; }
 [Property] bool FireWhenLowered { get; set; }
-override Dictionary<string, ItemAction> GetActions()
+override List<ItemAction> GetActions()
 int GetClipAmmo( ItemInstance item )
 void SetClipAmmo( ItemInstance item, int amount )
 override void OnInstanced( ItemInstance item )
@@ -1962,7 +1983,7 @@ char Flag { get; set; }
 string Description { get; set; }
 ```
 
-### PermissionManager (static)
+### PermissionManager (sealed) : GameObjectSystem<PermissionManager>
 
 Manages permission flags and provides permission checks. Flags are single characters assigned to characters (e.g. 'a' = Admin, 's' = Super Admin). The 's' flag bypasses all permission checks.
 
@@ -2032,6 +2053,8 @@ static List<T> LoadAll<T>( string collection )
 static List<T> Select<T>( string collection, Func<T, bool> predicate )
 static List<string> GetKeys( string collection )
 static string NewId()
+static void RegisterIndex<T>( string collection, string fieldName, Func<T, string> keySelector )
+static List<T> SelectByField<T>( string collection, string fieldName, string fieldValue )
 ```
 
 | Member | Description |
@@ -2045,6 +2068,8 @@ static string NewId()
 | `Select` | Load all documents from a collection that match a predicate. |
 | `GetKeys` | Get all document keys in a collection. |
 | `NewId` | Generate a unique ID for a new document. |
+| `RegisterIndex` | Register an in-memory index for fast field lookups on a collection. Must be called before any SelectByField() queries on this collection+field. The index is built lazily on first use and maintained on Save() / Delete(). |
+| `SelectByField` | Select documents whose indexed field equals fieldValue. Requires a prior RegisterIndex() call for this collection + fieldName. The index is built lazily on first query and kept current via Save() / Delete(). |
 
 ---
 
@@ -2096,13 +2121,14 @@ void OnStorageClosed( HexPlayerComponent player, StorageComponent storage )
 
 UI state machine states.
 
-### HexUIManager (sealed) : Component, IHexCharacterEvent
+### HexUIManager (sealed) : GameObjectSystem<HexUIManager>
 
-Central UI coordinator. Manages panel visibility, input dispatch, cursor state, and the UI state machine. Lives on the ScreenPanel GameObject. Schema devs can replace individual panels by disabling the defaults and adding their own IHexPanel implementations. HexUIManager discovers panels via Scene.GetAll&lt;IHexPanel&gt;().
+Central UI coordinator. Manages panel visibility, input dispatch, cursor state, and the UI state machine. Scene-level singleton (GameObjectSystem). Schema devs can replace individual panels by adding their own IHexPanel implementations anywhere in the scene. HexUIManager discovers all panels via Scene.GetAll and automatically disables framework defaults that share a PanelName.
 
 ```csharp
-static HexUIManager Instance { get; set; }
+static HexUIManager Instance
 UIState State { get; set; }
+override void Dispose()
 void SetState( UIState newState )
 IHexPanel FindPanel( string name )
 void OpenPanel( string name )
@@ -2114,19 +2140,20 @@ static HexPlayerComponent GetLocalPlayer()
 
 | Member | Description |
 |--------|-------------|
-| `Instance` |  |
+| `Instance` | Active HexUIManager instance. |
 | `State` | Current UI state. |
-| `SetState` | Transition to a new UI state. Hides/shows panels appropriate to that state. |
-| `FindPanel` | Find a panel by name. Schema panels take priority over framework defaults. |
+| `Dispose` |  |
+| `SetState` | Transition to a new UI state. Closes all open panels, then opens those appropriate for the new state. |
+| `FindPanel` | Find a panel by name. Schema panels (non-framework) take priority over defaults. |
 | `OpenPanel` | Open a panel by name. |
 | `ClosePanel` | Close a panel by name. |
 | `TogglePanel` | Toggle a panel open/closed by name. |
-| `CloseTopmostPanel` | Close the topmost open overlay panel. |
+| `CloseTopmostPanel` | Close the topmost open overlay panel (ESC behavior). |
 | `GetLocalPlayer` | Get the local player's HexPlayerComponent. |
 
 ### HexUISetup (static)
 
-Static helper that auto-creates the full Hexagon UI hierarchy if not already present. Creates a ScreenPanel root with HexUIManager and all 9 default panels.
+Static helper that auto-creates the Hexagon UI panel hierarchy if not already present. Creates a ScreenPanel root with a character event bridge and all 13 default panels, each on their own child GameObject. HexUIManager is a GameObjectSystem and is auto-created by the scene — this method only constructs the visual hierarchy (ScreenPanel + panel components).
 
 ```csharp
 static GameObject UIObject { get; set; }
@@ -2135,8 +2162,8 @@ static void EnsureUI( Scene scene )
 
 | Member | Description |
 |--------|-------------|
-| `UIObject` | The runtime-created UI GameObject containing all default panels. Used by HexUIManager to identify framework defaults vs schema overrides. |
-| `EnsureUI` | Ensure HexUIManager and all default panels exist in the scene. If a HexUIManager is already present, this is a no-op. |
+| `UIObject` | The runtime-created UI root GameObject. Any panel that is a descendant of this object is considered a framework default. Schema overrides live elsewhere. |
+| `EnsureUI` | Ensure the Hexagon UI panel hierarchy exists in the scene. If the hierarchy already exists (UIObject is set), this is a no-op. |
 
 ### IHexPanel (interface)
 
@@ -2251,17 +2278,19 @@ List<VendorItem> Items { get; set; }
 | `VendorName` | Display name of the vendor. |
 | `Items` | The items this vendor buys and sells. |
 
-### VendorManager (static)
+### VendorManager (sealed) : GameObjectSystem<VendorManager>
 
 Manages vendor registration, buy/sell operations, and lookup. VendorComponents register/unregister themselves on enable/disable. Persistence is handled directly by each VendorComponent via DatabaseManager.
 
 ```csharp
+override void Dispose()
 static VendorComponent GetVendor( string vendorId )
 static IReadOnlyDictionary<string, VendorComponent> GetAllVendors()
 ```
 
 | Member | Description |
 |--------|-------------|
+| `Dispose` |  |
 | `GetVendor` | Get a vendor component by its ID. |
 | `GetAllVendors` | Get all registered vendors. |
 

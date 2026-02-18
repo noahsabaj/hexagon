@@ -1,51 +1,60 @@
 namespace Hexagon.UI;
 
 /// <summary>
-/// Static helper that auto-creates the full Hexagon UI hierarchy if not already present.
-/// Creates a ScreenPanel root with HexUIManager and all 9 default panels.
+/// Static helper that auto-creates the Hexagon UI panel hierarchy if not already present.
+/// Creates a ScreenPanel root with a character event bridge and all 13 default panels,
+/// each on their own child GameObject.
+///
+/// HexUIManager is a GameObjectSystem and is auto-created by the scene — this method
+/// only constructs the visual hierarchy (ScreenPanel + panel components).
 /// </summary>
 public static class HexUISetup
 {
 	/// <summary>
-	/// The runtime-created UI GameObject containing all default panels.
-	/// Used by HexUIManager to identify framework defaults vs schema overrides.
+	/// The runtime-created UI root GameObject. Any panel that is a descendant of this
+	/// object is considered a framework default. Schema overrides live elsewhere.
 	/// </summary>
 	public static GameObject UIObject { get; private set; }
 
 	/// <summary>
-	/// Ensure HexUIManager and all default panels exist in the scene.
-	/// If a HexUIManager is already present, this is a no-op.
+	/// Ensure the Hexagon UI panel hierarchy exists in the scene.
+	/// If the hierarchy already exists (UIObject is set), this is a no-op.
 	/// </summary>
 	public static void EnsureUI( Scene scene )
 	{
-		// Don't create UI on headless/dedicated server
 		if ( Application.IsHeadless ) return;
+		if ( UIObject != null ) return;
 
-		// Guard: if HexUIManager already exists, skip
-		if ( scene.GetAll<HexUIManager>().Any() ) return;
+		var root = new GameObject( true, "Hexagon UI" );
+		UIObject = root;
 
-		var go = new GameObject( true, "Hexagon UI" );
-		UIObject = go;
+		// ScreenPanel — root for all Razor PanelComponents
+		root.AddComponent<ScreenPanel>();
 
-		// ScreenPanel is the root for all Razor panel components
-		go.AddComponent<ScreenPanel>();
+		// Character event bridge — HexUIManager is a GameObjectSystem and cannot receive
+		// ISceneEvent dispatch directly; this Component forwards those events to it.
+		root.AddComponent<HexUIManagerBridge>();
 
-		// State machine
-		go.AddComponent<HexUIManager>();
+		// Default panels — each on its own child GameObject for independent lifecycle
+		AddPanel<CharacterSelect>( root, "CharacterSelect" );
+		AddPanel<CharacterCreate>( root, "CharacterCreate" );
+		AddPanel<HudPanel>( root, "HUD" );
+		AddPanel<ChatPanel>( root, "Chat" );
+		AddPanel<InventoryPanel>( root, "Inventory" );
+		AddPanel<StoragePanel>( root, "Storage" );
+		AddPanel<VendorPanel>( root, "Vendor" );
+		AddPanel<Scoreboard>( root, "Scoreboard" );
+		AddPanel<DeathScreen>( root, "DeathScreen" );
+		AddPanel<ActionBar>( root, "ActionBar" );
+		AddPanel<IntroduceMenu>( root, "IntroduceMenu" );
+		AddPanel<NotificationPanel>( root, "Notifications" );
+		AddPanel<CrosshairPanel>( root, "Crosshair" );
+	}
 
-		// All default panels (must be on same GO as ScreenPanel)
-		go.AddComponent<CharacterSelect>();
-		go.AddComponent<CharacterCreate>();
-		go.AddComponent<HudPanel>();
-		go.AddComponent<ChatPanel>();
-		go.AddComponent<InventoryPanel>();
-		go.AddComponent<StoragePanel>();
-		go.AddComponent<VendorPanel>();
-		go.AddComponent<Scoreboard>();
-		go.AddComponent<DeathScreen>();
-		go.AddComponent<ActionBar>();
-		go.AddComponent<IntroduceMenu>();
-		go.AddComponent<NotificationPanel>();
-		go.AddComponent<CrosshairPanel>();
+	private static void AddPanel<T>( GameObject parent, string name ) where T : Component, new()
+	{
+		var child = new GameObject( true, $"Panel - {name}" );
+		child.Parent = parent;
+		child.AddComponent<T>();
 	}
 }

@@ -4,14 +4,18 @@ namespace Hexagon.Chat;
 /// Central chat routing system. Registers chat classes, parses prefixes,
 /// routes messages to the correct chat class, and delegates to CommandManager for non-chat / prefixed input.
 /// </summary>
-public static class ChatManager
+public sealed class ChatManager : GameObjectSystem<ChatManager>
 {
-	private static readonly Dictionary<string, IChatClass> _chatClasses = new();
-	private static readonly Dictionary<string, string> _aliases = new();
-	private static IChatClass _defaultChat;
+	private static ChatManager _instance;
+	private static ChatManager Instance => _instance;
 
-	internal static void Initialize()
+	private readonly Dictionary<string, IChatClass> _chatClasses = new();
+	private readonly Dictionary<string, string> _aliases = new();
+	private IChatClass _defaultChat;
+
+	public ChatManager( Scene scene ) : base( scene )
 	{
+		_instance = this;
 		_chatClasses.Clear();
 		_aliases.Clear();
 		_defaultChat = null;
@@ -26,14 +30,16 @@ public static class ChatManager
 	/// </summary>
 	public static void Register( IChatClass chatClass )
 	{
+		if ( Instance == null ) return;
+
 		if ( string.IsNullOrEmpty( chatClass.Prefix ) )
 		{
-			_defaultChat = chatClass;
+			Instance._defaultChat = chatClass;
 		}
 		else
 		{
 			var key = chatClass.Prefix.ToLower().TrimStart( '/' );
-			_chatClasses[key] = chatClass;
+			Instance._chatClasses[key] = chatClass;
 		}
 	}
 
@@ -42,7 +48,8 @@ public static class ChatManager
 	/// </summary>
 	public static void RegisterAlias( string alias, string targetPrefix )
 	{
-		_aliases[alias.ToLower()] = targetPrefix.ToLower().TrimStart( '/' );
+		if ( Instance == null ) return;
+		Instance._aliases[alias.ToLower()] = targetPrefix.ToLower().TrimStart( '/' );
 	}
 
 	/// <summary>
@@ -50,13 +57,15 @@ public static class ChatManager
 	/// </summary>
 	public static IChatClass GetChatClass( string prefix )
 	{
+		if ( Instance == null ) return null;
+
 		var key = prefix.ToLower().TrimStart( '/' );
 
-		if ( _chatClasses.TryGetValue( key, out var chat ) )
+		if ( Instance._chatClasses.TryGetValue( key, out var chat ) )
 			return chat;
 
 		// Check aliases
-		if ( _aliases.TryGetValue( key, out var target ) && _chatClasses.TryGetValue( target, out var aliasedChat ) )
+		if ( Instance._aliases.TryGetValue( key, out var target ) && Instance._chatClasses.TryGetValue( target, out var aliasedChat ) )
 			return aliasedChat;
 
 		return null;
@@ -65,12 +74,12 @@ public static class ChatManager
 	/// <summary>
 	/// Get the default (no-prefix) chat class.
 	/// </summary>
-	public static IChatClass GetDefaultChat() => _defaultChat;
+	public static IChatClass GetDefaultChat() => Instance?._defaultChat;
 
 	/// <summary>
 	/// Get all registered chat classes.
 	/// </summary>
-	public static IReadOnlyDictionary<string, IChatClass> GetAllChatClasses() => _chatClasses;
+	public static IReadOnlyDictionary<string, IChatClass> GetAllChatClasses() => Instance?._chatClasses;
 
 	/// <summary>
 	/// Process a raw message from a player. Handles prefix parsing, chat class routing,
@@ -119,7 +128,7 @@ public static class ChatManager
 		else
 		{
 			// No prefix — default IC chat
-			chatClass = _defaultChat;
+			chatClass = Instance?._defaultChat;
 			chatMessage = message;
 		}
 
@@ -340,11 +349,13 @@ public static class ChatManager
 		chat = null;
 		remainder = null;
 
+		if ( Instance == null ) return false;
+
 		// Check ".// " prefix for LOOC
 		if ( message.StartsWith( ".//" ) )
 		{
-			if ( _aliases.TryGetValue( ".//", out var loocTarget ) &&
-				_chatClasses.TryGetValue( loocTarget, out var loocChat ) )
+			if ( Instance._aliases.TryGetValue( ".//", out var loocTarget ) &&
+				Instance._chatClasses.TryGetValue( loocTarget, out var loocChat ) )
 			{
 				chat = loocChat;
 				remainder = message.Length > 3 ? message[3..].Trim() : "";
@@ -355,8 +366,8 @@ public static class ChatManager
 		// Check "//" prefix for OOC
 		if ( message.StartsWith( "//" ) )
 		{
-			if ( _aliases.TryGetValue( "//", out var oocTarget ) &&
-				_chatClasses.TryGetValue( oocTarget, out var oocChat ) )
+			if ( Instance._aliases.TryGetValue( "//", out var oocTarget ) &&
+				Instance._chatClasses.TryGetValue( oocTarget, out var oocChat ) )
 			{
 				chat = oocChat;
 				remainder = message.Length > 2 ? message[2..].Trim() : "";

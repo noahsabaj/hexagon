@@ -80,17 +80,19 @@ public sealed class HexPlayerComponent : Component
 
 		foreach ( var varInfo in CharacterManager.GetPublicCharVars() )
 		{
+			if ( varInfo.Attribute.SyncTarget == CharSyncTarget.None ) continue;
+
 			var value = varInfo.GetValue( Character.Data )?.ToString() ?? "";
 
-			switch ( varInfo.Name.ToLower() )
+			switch ( varInfo.Attribute.SyncTarget )
 			{
-				case "name":
+				case CharSyncTarget.CharacterName:
 					CharacterName = value;
 					break;
-				case "description":
+				case CharSyncTarget.CharacterDescription:
 					CharacterDescription = value;
 					break;
-				case "model":
+				case CharSyncTarget.CharacterModel:
 					CharacterModel = value;
 					break;
 			}
@@ -112,7 +114,7 @@ public sealed class HexPlayerComponent : Component
 			ReceivePrivateVar( varInfo.Name, value != null ? Json.Serialize( value ) : "" );
 		}
 
-		ReceiveFlagsSync( Character.Data.Flags ?? "" );
+		ReceiveFlagsSync( Json.Serialize( Character.Data.Flags ) );
 
 		RecognitionManager.SyncRecognitionToClient( this );
 	}
@@ -158,8 +160,9 @@ public sealed class HexPlayerComponent : Component
 		{
 			return Json.Deserialize<T>( json );
 		}
-		catch
+		catch ( Exception ex )
 		{
+			Log.Warning( $"Hexagon: GetPrivateVar failed to deserialize '{name}' as {typeof( T ).Name}: {ex.Message}" );
 			return defaultValue;
 		}
 	}

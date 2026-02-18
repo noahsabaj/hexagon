@@ -14,12 +14,16 @@ public class FlagInfo
 /// Flags are single characters assigned to characters (e.g. 'a' = Admin, 's' = Super Admin).
 /// The 's' flag bypasses all permission checks.
 /// </summary>
-public static class PermissionManager
+public sealed class PermissionManager : GameObjectSystem<PermissionManager>
 {
-	private static readonly Dictionary<char, FlagInfo> _flags = new();
+	private static PermissionManager _instance;
+	private static PermissionManager Instance => _instance;
 
-	internal static void Initialize()
+	private readonly Dictionary<char, FlagInfo> _flags = new();
+
+	public PermissionManager( Scene scene ) : base( scene )
 	{
+		_instance = this;
 		_flags.Clear();
 
 		// Default flags
@@ -39,7 +43,8 @@ public static class PermissionManager
 	/// </summary>
 	public static void RegisterFlag( char flag, string description )
 	{
-		_flags[flag] = new FlagInfo { Flag = flag, Description = description };
+		if ( Instance == null ) return;
+		Instance._flags[flag] = new FlagInfo { Flag = flag, Description = description };
 	}
 
 	/// <summary>
@@ -47,7 +52,7 @@ public static class PermissionManager
 	/// </summary>
 	public static FlagInfo GetFlagInfo( char flag )
 	{
-		return _flags.GetValueOrDefault( flag );
+		return Instance?._flags.GetValueOrDefault( flag );
 	}
 
 	/// <summary>
@@ -55,7 +60,7 @@ public static class PermissionManager
 	/// </summary>
 	public static IReadOnlyDictionary<char, FlagInfo> GetAllFlags()
 	{
-		return _flags;
+		return Instance?._flags;
 	}
 
 	/// <summary>
@@ -74,14 +79,16 @@ public static class PermissionManager
 		var character = player.Character;
 
 		// Super admin bypasses all
-		if ( character.HasFlag( 's' ) )
+		if ( character.HasFlag( "s" ) )
 			return true;
 
 		if ( string.IsNullOrEmpty( requirement ) )
 			return true;
 
+		var flags = Instance?._flags;
+
 		// Short requirement (1-2 chars) where all chars are registered flags → direct flag check
-		if ( requirement.Length <= 2 && requirement.All( c => _flags.ContainsKey( c ) ) )
+		if ( flags != null && requirement.Length <= 2 && requirement.All( c => flags.ContainsKey( c ) ) )
 		{
 			return character.HasFlags( requirement );
 		}

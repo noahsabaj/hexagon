@@ -7,7 +7,7 @@
 @inherits PanelComponent
 @implements IHexPanel
 
-<root class="introduce-menu @(IsOpen ? "open" : "")" style="display: @(IsOpen ? "flex" : "none")">
+<root class="introduce-menu @(IsOpen ? "open" : "")">
 	<div class="introduce-container hex-panel">
 		<div class="introduce-title">Introduce Yourself</div>
 		<div class="introduce-options">
@@ -43,7 +43,6 @@
 
 		player.GetComponent<IntroducePlayerComponent>()?.RequestIntroduce( level );
 
-		Close();
 		HexUIManager.Instance?.ClosePanel( "IntroduceMenu" );
 	}
 

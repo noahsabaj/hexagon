@@ -6,8 +6,9 @@
 
 @namespace Hexagon.UI
 @inherits PanelComponent
+@implements IHexPanel
 
-<root class="action-bar" style="display: @(HasAction ? "flex" : "none")">
+<root class="action-bar @(IsOpen && HasAction ? "visible" : "")">
 	<div class="action-text">@ActionText</div>
 	<div class="action-bar-track">
 		<div class="action-bar-fill" style="width: @((int)(Progress * 100))%"></div>
@@ -16,6 +17,12 @@
 
 @code
 {
+	public string PanelName => "ActionBar";
+	public bool IsOpen { get; private set; } = true;
+
+	public void Open() { IsOpen = true; StateHasChanged(); }
+	public void Close() { IsOpen = false; StateHasChanged(); }
+
 	private bool HasAction => !string.IsNullOrEmpty( ActionText ) && ActionEndTime > ActionStartTime;
 	private string ActionText { get; set; } = "";
 	private float ActionStartTime { get; set; }
@@ -48,6 +55,6 @@
 
 	protected override int BuildHash()
 	{
-		return HashCode.Combine( HasAction, ActionText, (int)(Progress * 100) );
+		return HashCode.Combine( IsOpen, HasAction, ActionText, (int)(Progress * 100) );
 	}
 }

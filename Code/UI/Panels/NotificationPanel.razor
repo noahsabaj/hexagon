@@ -6,9 +6,10 @@
 
 @namespace Hexagon.UI
 @inherits PanelComponent
+@implements IHexPanel
 @implements IHexUIEvent
 
-<root class="notification-panel">
+<root class="notification-panel @(IsOpen ? "open" : "")">
 	@foreach ( var entry in _visibleEntries )
 	{
 		<div class="notification-entry"
@@ -24,12 +25,18 @@
 
 @code
 {
+	public string PanelName => "Notifications";
+	public bool IsOpen { get; private set; } = true;
+
+	public void Open() { IsOpen = true; StateHasChanged(); }
+	public void Close() { IsOpen = false; StateHasChanged(); }
+
 	private List<NotificationEntry> _entries = new();
 	private List<NotificationEntry> _visibleEntries = new();
 
 	public void OnNotificationReceived( string message, float duration )
 	{
-		var maxVisible = Config.HexConfig.Get<int>( "notification.maxVisible", 5 );
+		var maxVisible = Config.HexConfig.Get<int>( "notification.maxVisible" );
 
 		_entries.Add( new NotificationEntry
 		{
@@ -60,9 +67,9 @@
 
 	protected override int BuildHash()
 	{
-		// Rebuild every frame while entries exist for smooth progress bars
+		// Rebuild at 10Hz while entries exist for smooth progress bars
 		if ( _entries.Count > 0 )
-			return HashCode.Combine( Time.Now );
+			return HashCode.Combine( (int)(Time.Now * 10) );
 
 		return HashCode.Combine( _entries.Count );
 	}

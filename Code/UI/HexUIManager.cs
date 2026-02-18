@@ -14,15 +14,20 @@ public enum UIState
 
 /// <summary>
 /// Central UI coordinator. Manages panel visibility, input dispatch, cursor state,
-/// and the UI state machine. Lives on the ScreenPanel GameObject.
+/// and the UI state machine. Scene-level singleton (GameObjectSystem).
 ///
-/// Schema devs can replace individual panels by disabling the defaults and adding
-/// their own IHexPanel implementations. HexUIManager discovers panels via
-/// Scene.GetAll&lt;IHexPanel&gt;().
+/// Schema devs can replace individual panels by adding their own IHexPanel
+/// implementations anywhere in the scene. HexUIManager discovers all panels via
+/// Scene.GetAll and automatically disables framework defaults that share a PanelName.
 /// </summary>
-public sealed class HexUIManager : Component, IHexCharacterEvent
+public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 {
-	public static HexUIManager Instance { get; private set; }
+	private static HexUIManager _instance;
+
+	/// <summary>
+	/// Active HexUIManager instance.
+	/// </summary>
+	public static HexUIManager Instance => _instance;
 
 	/// <summary>
 	/// Current UI state.
@@ -30,23 +35,76 @@ public sealed class HexUIManager : Component, IHexCharacterEvent
 	public UIState State { get; private set; } = UIState.Loading;
 
 	private readonly List<IHexPanel> _openPanels = new();
+	private List<IHexPanel> _panels = new();
 	private bool _tabHeld;
+	private bool _initialized;
 
-	protected override void OnStart()
+	public HexUIManager( Scene scene ) : base( scene )
 	{
-		if ( Instance != null && Instance != this )
+		_instance = this;
+		Listen( Stage.StartUpdate, 0, OnTick, "HexUIManager.Tick" );
+	}
+
+	public override void Dispose()
+	{
+		if ( _instance == this )
+			_instance = null;
+		base.Dispose();
+	}
+
+	private void OnTick()
+	{
+		if ( Application.IsHeadless ) return;
+
+		// Deferred init: wait for HexagonSystem to finish before building the panel cache.
+		// EnsureUI() is called from HexagonSystem.OnHostInitialize(), so all panel GOs
+		// exist by the time IsInitialized is true.
+		if ( !_initialized && Core.HexagonSystem.IsInitialized )
 		{
-			Destroy();
-			return;
+			_initialized = true;
+			DisableOverriddenDefaults();
+			_panels = Scene.GetAll<IHexPanel>().ToList();
+			SetState( UIState.CharacterSelect );
 		}
 
-		Instance = this;
+		if ( !_initialized ) return;
 
-		// Disable framework defaults that schema panels override
-		DisableOverriddenDefaults();
+		HandleInput();
+		UpdateCursor();
+		CheckDeathState();
+	}
 
-		// Start in character select state
+	// --- Character Event Handlers (called from HexUIManagerBridge) ---
+
+	internal void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
+	{
+		if ( player.IsProxy ) return;
+		SetState( UIState.Gameplay );
+	}
+
+	internal void OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character )
+	{
+		if ( player.IsProxy ) return;
+		HexPlayerSetup.StripPlayerBody( player.GameObject );
 		SetState( UIState.CharacterSelect );
+	}
+
+	// --- Schema Override Detection ---
+
+	/// <summary>
+	/// Returns true if the panel belongs to the framework UI hierarchy (is UIObject or
+	/// a descendant of UIObject). Used to distinguish defaults from schema overrides.
+	/// </summary>
+	internal static bool IsFrameworkPanel( IHexPanel panel )
+	{
+		if ( panel is not Component comp ) return false;
+		var go = comp.GameObject;
+		while ( go != null )
+		{
+			if ( go == HexUISetup.UIObject ) return true;
+			go = go.Parent;
+		}
+		return false;
 	}
 
 	/// <summary>
@@ -71,14 +129,12 @@ public sealed class HexUIManager : Component, IHexCharacterEvent
 		{
 			if ( group.Count <= 1 ) continue;
 
-			bool hasSchemaOverride = group.Any( p =>
-				p is Component c && c.GameObject != HexUISetup.UIObject );
-
+			bool hasSchemaOverride = group.Any( p => !IsFrameworkPanel( p ) );
 			if ( !hasSchemaOverride ) continue;
 
 			foreach ( var panel in group )
 			{
-				if ( panel is Component comp && comp.GameObject == HexUISetup.UIObject )
+				if ( IsFrameworkPanel( panel ) && panel is Component comp )
 				{
 					comp.Enabled = false;
 					Log.Info( $"Hexagon: Default '{name}' panel overridden by schema" );
@@ -87,67 +143,40 @@ public sealed class HexUIManager : Component, IHexCharacterEvent
 		}
 	}
 
-	protected override void OnDestroy()
-	{
-		if ( Instance == this )
-			Instance = null;
-	}
-
-	protected override void OnUpdate()
-	{
-		HandleInput();
-		UpdateCursor();
-		CheckDeathState();
-	}
-
 	// --- State Machine ---
 
 	/// <summary>
-	/// Transition to a new UI state. Hides/shows panels appropriate to that state.
+	/// Transition to a new UI state. Closes all open panels, then opens those
+	/// appropriate for the new state.
 	/// </summary>
 	public void SetState( UIState newState )
 	{
 		if ( State == newState ) return;
 
-		var oldState = State;
 		State = newState;
 
-		// Close all managed panels
 		foreach ( var panel in _openPanels.ToList() )
-		{
 			panel.Close();
-		}
 		_openPanels.Clear();
 
-		// Open panels for new state
 		switch ( newState )
 		{
 			case UIState.CharacterSelect:
 				OpenPanel( "CharacterSelect" );
-				ClosePanel( "CharacterCreate" );
-				ClosePanel( "HUD" );
-				ClosePanel( "Chat" );
 				break;
 
 			case UIState.CharacterCreate:
 				OpenPanel( "CharacterCreate" );
-				ClosePanel( "CharacterSelect" );
-				ClosePanel( "HUD" );
-				ClosePanel( "Chat" );
 				break;
 
 			case UIState.Gameplay:
 				OpenPanel( "HUD" );
 				OpenPanel( "Chat" );
-				ClosePanel( "CharacterSelect" );
-				ClosePanel( "CharacterCreate" );
-				ClosePanel( "DeathScreen" );
 				break;
 
 			case UIState.Dead:
 				OpenPanel( "DeathScreen" );
 				OpenPanel( "Chat" );
-				ClosePanel( "HUD" );
 				break;
 		}
 	}
@@ -184,7 +213,6 @@ public sealed class HexUIManager : Component, IHexCharacterEvent
 			if ( chat != null && !chat.IsOpen )
 				chat.Open();
 
-			// The ChatPanel itself handles focusing the input
 			IHexChatEvent.Post( x => x.OnChatFocusRequested() );
 		}
 
@@ -205,26 +233,23 @@ public sealed class HexUIManager : Component, IHexCharacterEvent
 
 	private void UpdateCursor()
 	{
-		var anyOpen = HasOpenOverlayPanel();
-
-		// In character select/create, always show cursor
 		if ( State == UIState.CharacterSelect || State == UIState.CharacterCreate || State == UIState.Dead )
 		{
 			Mouse.Visibility = MouseVisibility.Visible;
 			return;
 		}
 
-		Mouse.Visibility = anyOpen ? MouseVisibility.Visible : MouseVisibility.Auto;
+		Mouse.Visibility = HasOpenOverlayPanel() ? MouseVisibility.Visible : MouseVisibility.Auto;
 	}
 
 	private bool HasOpenOverlayPanel()
 	{
-		foreach ( var panel in Scene.GetAll<IHexPanel>() )
+		foreach ( var panel in _panels )
 		{
 			if ( !panel.IsOpen ) continue;
 
 			var name = panel.PanelName;
-			// HUD and Chat are always-visible, don't count as overlay
+			// HUD and Chat are always-visible, don't count as overlays
 			if ( name == "HUD" || name == "Chat" )
 				continue;
 
@@ -237,18 +262,17 @@ public sealed class HexUIManager : Component, IHexCharacterEvent
 	// --- Panel Management ---
 
 	/// <summary>
-	/// Find a panel by name. Schema panels take priority over framework defaults.
+	/// Find a panel by name. Schema panels (non-framework) take priority over defaults.
 	/// </summary>
 	public IHexPanel FindPanel( string name )
 	{
 		IHexPanel fallback = null;
 
-		foreach ( var panel in Scene.GetAll<IHexPanel>() )
+		foreach ( var panel in _panels )
 		{
 			if ( panel.PanelName != name ) continue;
 
-			// Schema panel (not on the framework UI object) wins immediately
-			if ( panel is Component comp && comp.GameObject != HexUISetup.UIObject )
+			if ( !IsFrameworkPanel( panel ) )
 				return panel;
 
 			fallback ??= panel;
@@ -283,9 +307,7 @@ public sealed class HexUIManager : Component, IHexCharacterEvent
 		if ( panel == null ) return;
 
 		if ( panel.IsOpen )
-		{
 			panel.Close();
-		}
 
 		_openPanels.Remove( panel );
 	}
@@ -312,7 +334,7 @@ public sealed class HexUIManager : Component, IHexCharacterEvent
 	}
 
 	/// <summary>
-	/// Close the topmost open overlay panel.
+	/// Close the topmost open overlay panel (ESC behavior).
 	/// </summary>
 	public void CloseTopmostPanel()
 	{
@@ -321,7 +343,6 @@ public sealed class HexUIManager : Component, IHexCharacterEvent
 			var panel = _openPanels[i];
 			var name = panel.PanelName;
 
-			// Don't close HUD or Chat via ESC
 			if ( name == "HUD" || name == "Chat" )
 				continue;
 
@@ -331,26 +352,6 @@ public sealed class HexUIManager : Component, IHexCharacterEvent
 		}
 	}
 
-	// --- Event Listeners ---
-
-	void IHexCharacterEvent.OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
-	{
-		// Only react to our local player
-		if ( player.IsProxy ) return;
-
-		SetState( UIState.Gameplay );
-	}
-
-	void IHexCharacterEvent.OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character )
-	{
-		if ( player.IsProxy ) return;
-
-		// Strip player body back to bare networking object
-		HexPlayerSetup.StripPlayerBody( player.GameObject );
-
-		SetState( UIState.CharacterSelect );
-	}
-
 	// --- Death Check ---
 
 	private void CheckDeathState()
@@ -358,18 +359,13 @@ public sealed class HexUIManager : Component, IHexCharacterEvent
 		if ( State != UIState.Gameplay && State != UIState.Dead )
 			return;
 
-		// Find local player
 		var localPlayer = GetLocalPlayer();
 		if ( localPlayer == null ) return;
 
 		if ( localPlayer.IsDead && State != UIState.Dead )
-		{
 			SetState( UIState.Dead );
-		}
 		else if ( !localPlayer.IsDead && State == UIState.Dead )
-		{
 			SetState( UIState.Gameplay );
-		}
 	}
 
 	/// <summary>
@@ -387,4 +383,18 @@ public sealed class HexUIManager : Component, IHexCharacterEvent
 
 		return null;
 	}
+}
+
+/// <summary>
+/// Thin bridge component that receives IHexCharacterEvent scene events and forwards
+/// them to HexUIManager. Required because GameObjectSystem instances are not
+/// discoverable by ISceneEvent dispatch, which only iterates Components.
+/// </summary>
+internal sealed class HexUIManagerBridge : Component, IHexCharacterEvent
+{
+	void IHexCharacterEvent.OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
+		=> HexUIManager.Instance?.OnCharacterLoaded( player, character );
+
+	void IHexCharacterEvent.OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character )
+		=> HexUIManager.Instance?.OnCharacterUnloaded( player, character );
 }

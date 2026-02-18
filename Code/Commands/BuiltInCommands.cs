@@ -233,7 +233,7 @@ internal static class BuiltInCommands
 
 				foreach ( var flag in flags )
 				{
-					target.Character.GiveFlag( flag );
+					target.Character.GiveFlag( flag.ToString() );
 				}
 
 				return $"Gave flags '{flags}' to {target.DisplayName}.";
@@ -260,7 +260,7 @@ internal static class BuiltInCommands
 
 				foreach ( var flag in flags )
 				{
-					target.Character.TakeFlag( flag );
+					target.Character.TakeFlag( flag.ToString() );
 				}
 
 				return $"Removed flags '{flags}' from {target.DisplayName}.";

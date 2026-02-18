@@ -7,13 +7,15 @@ namespace Hexagon.Characters;
 /// Usage:
 ///   public class MyCharacter : HexCharacterData
 ///   {
-///       [CharVar(Default = "John Doe", MinLength = 3, MaxLength = 64, Order = 1)]
+///       [CharVar(Default = "John Doe", MinLength = 3, MaxLength = 64, Order = 1,
+///                SyncTarget = CharSyncTarget.CharacterName)]
 ///       public string Name { get; set; }
 ///
-///       [CharVar(Default = "A mysterious stranger.", MinLength = 16, MaxLength = 512, Order = 2)]
+///       [CharVar(Default = "A mysterious stranger.", MinLength = 16, MaxLength = 512, Order = 2,
+///                SyncTarget = CharSyncTarget.CharacterDescription)]
 ///       public string Description { get; set; }
 ///
-///       [CharVar(Order = 3)]
+///       [CharVar(Order = 3, SyncTarget = CharSyncTarget.CharacterModel)]
 ///       public string Model { get; set; }
 ///
 ///       [CharVar(Local = true)]
@@ -51,12 +53,28 @@ public abstract class HexCharacterData
 	public string Class { get; set; }
 
 	/// <summary>
-	/// Character flags (permission characters, e.g. "pet" for physgun/entities/tools).
+	/// Permission flags assigned to this character (e.g. "a" = admin, "s" = superadmin).
 	/// </summary>
-	public string Flags { get; set; } = "";
+	public HashSet<string> Flags { get; set; } = new();
 
 	/// <summary>
-	/// Generic data store for plugin/schema-specific persistent data.
+	/// Character IDs this character has been introduced to and can recognize by name.
+	/// </summary>
+	public HashSet<string> RecognizedIds { get; set; } = new();
+
+	/// <summary>
+	/// Base attribute values keyed by attribute ID.
+	/// </summary>
+	public Dictionary<string, float> AttributeValues { get; set; } = new();
+
+	/// <summary>
+	/// Active attribute boosts (temporary and permanent modifiers).
+	/// </summary>
+	public List<Attributes.AttributeBoost> Boosts { get; set; } = new();
+
+	/// <summary>
+	/// Generic data store for plugin/schema-specific persistent data that doesn't
+	/// fit into typed CharVar properties.
 	/// </summary>
 	public Dictionary<string, object> Data { get; set; } = new();
 
@@ -82,7 +100,7 @@ public abstract class HexCharacterData
 }
 
 /// <summary>
-/// Metadata about a character variable, discovered via s&box TypeLibrary at startup.
+/// Metadata about a character variable, discovered via sbox TypeLibrary at startup.
 /// </summary>
 public class CharVarInfo
 {

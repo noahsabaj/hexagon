@@ -2,13 +2,15 @@ namespace Hexagon.Factions;
 
 /// <summary>
 /// Manages faction and class definitions. Factions auto-register when their
-/// GameResource assets are loaded by s&box.
+/// GameResource assets are loaded by sbox.
 /// </summary>
-public static class FactionManager
+public sealed class FactionManager : GameObjectSystem<FactionManager>
 {
 	private static readonly Dictionary<string, FactionDefinition> _factions = new();
 	private static readonly Dictionary<string, ClassDefinition> _classes = new();
 	private static readonly Dictionary<string, List<ClassDefinition>> _factionClasses = new();
+
+	public FactionManager( Scene scene ) : base( scene ) { }
 
 	/// <summary>
 	/// All registered factions.

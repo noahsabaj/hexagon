@@ -3,12 +3,12 @@ namespace Hexagon.Config;
 /// <summary>
 /// ConVar declarations for Hexagon framework configuration values.
 ///
-/// Each ConVar setter calls HexConfig.Set() so console changes (e.g. "hex_walk_speed 300")
-/// immediately update the framework configuration. HexConfig.OnChanged then pushes the value
-/// back to the ConVar property via ConVarBridge — a re-entry guard prevents loops.
+/// Each ConVar getter reads from HexConfig (which holds the registered default from
+/// DefaultConfigs plus any saved overrides). Each setter writes back to HexConfig so
+/// console changes (e.g. "hex_walk_speed 300") immediately update the framework config.
 ///
-/// The primary API for reading config remains HexConfig.Get() — ConVars are a bridge,
-/// not a replacement. Plugin configs (hl2rp.*) still use HexConfig.Add() and .Get().
+/// DefaultConfigs.Register() is the single source of truth for default values.
+/// No fallback literals are duplicated here — the registered defaults always win.
 /// </summary>
 public static class HexConVars
 {
@@ -17,14 +17,14 @@ public static class HexConVars
 	[ConVar( "hex_walk_speed" )]
 	public static float WalkSpeed
 	{
-		get => HexConfig.Get<float>( "gameplay.walkSpeed", 200f );
+		get => HexConfig.Get<float>( "gameplay.walkSpeed" );
 		set => HexConfig.Set( "gameplay.walkSpeed", value );
 	}
 
 	[ConVar( "hex_run_speed" )]
 	public static float RunSpeed
 	{
-		get => HexConfig.Get<float>( "gameplay.runSpeed", 300f );
+		get => HexConfig.Get<float>( "gameplay.runSpeed" );
 		set => HexConfig.Set( "gameplay.runSpeed", value );
 	}
 
@@ -33,14 +33,14 @@ public static class HexConVars
 	[ConVar( "hex_char_max_per_player" )]
 	public static int CharMaxPerPlayer
 	{
-		get => HexConfig.Get<int>( "character.maxPerPlayer", 5 );
+		get => HexConfig.Get<int>( "character.maxPerPlayer" );
 		set => HexConfig.Set( "character.maxPerPlayer", value );
 	}
 
 	[ConVar( "hex_char_auto_load" )]
 	public static bool CharAutoLoad
 	{
-		get => HexConfig.Get<bool>( "character.autoLoad", false );
+		get => HexConfig.Get<bool>( "character.autoLoad" );
 		set => HexConfig.Set( "character.autoLoad", value );
 	}
 
@@ -49,21 +49,21 @@ public static class HexConVars
 	[ConVar( "hex_chat_ic_range" )]
 	public static float ChatIcRange
 	{
-		get => HexConfig.Get<float>( "chat.icRange", 300f );
+		get => HexConfig.Get<float>( "chat.icRange" );
 		set => HexConfig.Set( "chat.icRange", value );
 	}
 
 	[ConVar( "hex_chat_whisper_range" )]
 	public static float ChatWhisperRange
 	{
-		get => HexConfig.Get<float>( "chat.whisperRange", 75f );
+		get => HexConfig.Get<float>( "chat.whisperRange" );
 		set => HexConfig.Set( "chat.whisperRange", value );
 	}
 
 	[ConVar( "hex_chat_yell_range" )]
 	public static float ChatYellRange
 	{
-		get => HexConfig.Get<float>( "chat.yellRange", 600f );
+		get => HexConfig.Get<float>( "chat.yellRange" );
 		set => HexConfig.Set( "chat.yellRange", value );
 	}
 
@@ -72,14 +72,14 @@ public static class HexConVars
 	[ConVar( "hex_door_kick_time" )]
 	public static float DoorKickTime
 	{
-		get => HexConfig.Get<float>( "door.kickTime", 5f );
+		get => HexConfig.Get<float>( "door.kickTime" );
 		set => HexConfig.Set( "door.kickTime", value );
 	}
 
 	[ConVar( "hex_door_kick_damage" )]
-	public static float DoorKickDamage
+	public static int DoorKickDamage
 	{
-		get => HexConfig.Get<float>( "door.kickDamage", 10f );
+		get => HexConfig.Get<int>( "door.kickDamage" );
 		set => HexConfig.Set( "door.kickDamage", value );
 	}
 
@@ -88,14 +88,14 @@ public static class HexConVars
 	[ConVar( "hex_save_interval" )]
 	public static float SaveInterval
 	{
-		get => HexConfig.Get<float>( "framework.saveInterval", 300f );
+		get => HexConfig.Get<float>( "framework.saveInterval" );
 		set => HexConfig.Set( "framework.saveInterval", value );
 	}
 
 	[ConVar( "hex_recognition_enabled" )]
 	public static bool RecognitionEnabled
 	{
-		get => HexConfig.Get<bool>( "recognition.enabled", true );
+		get => HexConfig.Get<bool>( "recognition.enabled" );
 		set => HexConfig.Set( "recognition.enabled", value );
 	}
 
@@ -104,14 +104,14 @@ public static class HexConVars
 	[ConVar( "hex_inv_default_width" )]
 	public static int InvDefaultWidth
 	{
-		get => HexConfig.Get<int>( "inventory.defaultWidth", 4 );
+		get => HexConfig.Get<int>( "inventory.defaultWidth" );
 		set => HexConfig.Set( "inventory.defaultWidth", value );
 	}
 
 	[ConVar( "hex_inv_default_height" )]
 	public static int InvDefaultHeight
 	{
-		get => HexConfig.Get<int>( "inventory.defaultHeight", 4 );
+		get => HexConfig.Get<int>( "inventory.defaultHeight" );
 		set => HexConfig.Set( "inventory.defaultHeight", value );
 	}
 
@@ -120,7 +120,7 @@ public static class HexConVars
 	[ConVar( "hex_attr_boost_max" )]
 	public static int AttrBoostMax
 	{
-		get => HexConfig.Get<int>( "attributes.boostMax", 50 );
+		get => HexConfig.Get<int>( "attributes.boostMax" );
 		set => HexConfig.Set( "attributes.boostMax", value );
 	}
 }

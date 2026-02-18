@@ -9,40 +9,18 @@
 @implements IHexPanel
 @implements IHexInventoryEvent
 
-<root class="inventory-panel hex-panel" style="display: @(IsOpen ? "flex" : "none")">
+<root class="inventory-panel hex-panel @(IsOpen ? "open" : "")">
 	<div class="inv-header">
 		<span class="inv-title">Inventory</span>
 		<button class="hex-button small" onclick="@Close">X</button>
 	</div>
 
-	<div class="inv-grid" style="width: @(GridWidth)px; height: @(GridHeight)px;">
-		@for ( int y = 0; y < InvHeight; y++ )
-		{
-			@for ( int x = 0; x < InvWidth; x++ )
-			{
-				<div class="hex-grid-cell"
-					 style="width: @(CellSize)px; height: @(CellSize)px; left: @(x * CellSize)px; top: @(y * CellSize)px; position: absolute;" />
-			}
-		}
-
-		@if ( Snapshot != null )
-		{
-			@foreach ( var item in Snapshot.Items )
-			{
-				var def = ItemManager.GetDefinition( item.DefinitionId );
-				var w = def?.Width ?? 1;
-				var h = def?.Height ?? 1;
-
-				<div class="hex-grid-item"
-					 style="left: @(item.X * CellSize)px; top: @(item.Y * CellSize)px; width: @(w * CellSize - 2)px; height: @(h * CellSize - 2)px;"
-					 onmouseover="@(() => ShowTooltip( item ))"
-					 onmouseout="@HideTooltip"
-					 oncontextmenu="@(() => ShowContextMenu( item ))">
-					<span class="item-name">@(def?.DisplayName ?? "?")</span>
-				</div>
-			}
-		}
-	</div>
+	<InventoryGrid
+		Snapshot="@Snapshot"
+		CellSize="@CellSize"
+		OnItemHover="@ShowTooltip"
+		OnItemHoverOut="@HideTooltip"
+		OnItemContextMenu="@ShowContextMenu" />
 
 	@if ( TooltipItem != null )
 	{
@@ -74,14 +52,9 @@
 	public string PanelName => "Inventory";
 	public bool IsOpen { get; private set; }
 
-	private int CellSize => Config.HexConfig.Get<int>( "ui.inventoryCellSize", 64 );
+	private int CellSize => Config.HexConfig.Get<int>( "ui.inventoryCellSize" );
 	private string MainInventoryId { get; set; }
 	private InventorySnapshot Snapshot => HexInventoryComponent.Instance?.GetClientInventory( MainInventoryId );
-
-	private int InvWidth => Snapshot?.Width ?? 4;
-	private int InvHeight => Snapshot?.Height ?? 4;
-	private int GridWidth => InvWidth * CellSize;
-	private int GridHeight => InvHeight * CellSize;
 
 	// Tooltip state
 	private ItemSnapshot TooltipItem { get; set; }
@@ -99,10 +72,7 @@
 		IsOpen = true;
 		ContextItem = null;
 		TooltipItem = null;
-
-		// Determine main inventory ID from client cache
 		FindMainInventory();
-
 		StateHasChanged();
 	}
 

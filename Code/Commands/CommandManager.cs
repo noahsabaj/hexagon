@@ -4,13 +4,17 @@ namespace Hexagon.Commands;
 /// Manages command registration, parsing, permission checking, and execution.
 /// Commands are invoked when a player types /{name} in chat and it doesn't match a chat class prefix.
 /// </summary>
-public static class CommandManager
+public sealed class CommandManager : GameObjectSystem<CommandManager>
 {
-	private static readonly Dictionary<string, HexCommand> _commands = new();
-	private static readonly Dictionary<string, string> _aliases = new();
+	private static CommandManager _instance;
+	private static CommandManager Instance => _instance;
 
-	internal static void Initialize()
+	private readonly Dictionary<string, HexCommand> _commands = new();
+	private readonly Dictionary<string, string> _aliases = new();
+
+	public CommandManager( Scene scene ) : base( scene )
 	{
+		_instance = this;
 		_commands.Clear();
 		_aliases.Clear();
 
@@ -24,12 +28,14 @@ public static class CommandManager
 	/// </summary>
 	public static void Register( HexCommand command )
 	{
+		if ( Instance == null ) return;
+
 		var key = command.Name.ToLower();
-		_commands[key] = command;
+		Instance._commands[key] = command;
 
 		foreach ( var alias in command.Aliases )
 		{
-			_aliases[alias.ToLower()] = key;
+			Instance._aliases[alias.ToLower()] = key;
 		}
 	}
 
@@ -38,12 +44,14 @@ public static class CommandManager
 	/// </summary>
 	public static HexCommand GetCommand( string name )
 	{
+		if ( Instance == null ) return null;
+
 		var key = name.ToLower();
 
-		if ( _commands.TryGetValue( key, out var cmd ) )
+		if ( Instance._commands.TryGetValue( key, out var cmd ) )
 			return cmd;
 
-		if ( _aliases.TryGetValue( key, out var target ) && _commands.TryGetValue( target, out var aliasedCmd ) )
+		if ( Instance._aliases.TryGetValue( key, out var target ) && Instance._commands.TryGetValue( target, out var aliasedCmd ) )
 			return aliasedCmd;
 
 		return null;
@@ -52,7 +60,7 @@ public static class CommandManager
 	/// <summary>
 	/// Get all registered commands.
 	/// </summary>
-	public static IReadOnlyDictionary<string, HexCommand> GetAllCommands() => _commands;
+	public static IReadOnlyDictionary<string, HexCommand> GetAllCommands() => Instance?._commands;
 
 	/// <summary>
 	/// Execute a command by name with raw argument input. Returns a message to send to the caller.

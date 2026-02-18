@@ -8,7 +8,7 @@
 @implements IHexPanel
 @implements IHexChatEvent
 
-<root class="chat-panel" style="display: @(IsOpen ? "flex" : "none")">
+<root class="chat-panel @(IsOpen ? "open" : "")">
 	<div class="chat-messages hex-scrollable" @ref="MessageContainer">
 		@foreach ( var msg in Messages )
 		{
@@ -26,7 +26,7 @@
 		}
 	</div>
 
-	<div class="chat-input-area" style="display: @(IsInputFocused ? "flex" : "none")">
+	<div class="chat-input-area @(IsInputFocused ? "focused" : "")">
 		<TextEntry class="hex-input chat-input" @ref="ChatInput"
 				   Value:bind="@InputText"
 				   Placeholder="Type a message..."

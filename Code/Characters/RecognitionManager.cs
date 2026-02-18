@@ -6,8 +6,10 @@ namespace Hexagon.Characters;
 ///
 /// Factions with IsGloballyRecognized are always known (e.g., police uniforms).
 /// </summary>
-public static class RecognitionManager
+public sealed class RecognitionManager : GameObjectSystem<RecognitionManager>
 {
+	public RecognitionManager( Scene scene ) : base( scene ) { }
+
 	/// <summary>
 	/// Server-side: check if observer recognizes target.
 	/// </summary>
