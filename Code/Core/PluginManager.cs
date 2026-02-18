@@ -58,17 +58,6 @@ public sealed class PluginManager : GameObjectSystem<PluginManager>
 		{
 			var attr = type.GetAttribute<HexPluginAttribute>();
 
-			// Attempt to read package ID from assembly metadata if available
-			var packageId = "";
-			try
-			{
-				packageId = type.TargetType?.Assembly?.GetName()?.Name ?? "";
-			}
-			catch ( Exception ex )
-			{
-				Log.Warning( $"Hexagon: PluginManager could not read assembly name for plugin type '{type.Name}': {ex.Message}" );
-			}
-
 			_plugins.Add( new PluginEntry
 			{
 				Name = attr.Name,
@@ -76,7 +65,7 @@ public sealed class PluginManager : GameObjectSystem<PluginManager>
 				Author = attr.Author ?? "",
 				Version = attr.Version ?? "1.0",
 				Priority = attr.Priority,
-				PackageId = packageId,
+				PackageId = "",
 				Type = type,
 				Instance = null // Created during LoadPlugins
 			} );

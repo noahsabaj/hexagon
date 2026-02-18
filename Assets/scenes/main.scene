@@ -89,7 +89,7 @@
       "__guid": "54d14b86-39a9-4e5e-a237-27e687377b37",
       "__version": 2,
       "Flags": 0,
-      "Name": "HexagonFramework",
+      "Name": "HexagonConfig",
       "Position": "0,0,100",
       "Rotation": "0,0,0,1",
       "Scale": "1,1,1",
@@ -102,8 +102,8 @@
       "OwnerTransfer": 1,
       "Components": [
         {
-          "__type": "Hexagon.Core.HexagonFramework",
-          "__guid": "973c8c64-a019-4227-9e4d-8b5e1f55f9b0",
+          "__type": "Hexagon.Core.HexagonConfigComponent",
+          "__guid": "2c830775-a972-4b1d-9090-3941b24df03d",
           "__enabled": true,
           "Flags": 0,
           "OnComponentDestroy": null,
@@ -111,7 +111,9 @@
           "OnComponentEnabled": null,
           "OnComponentFixedUpdate": null,
           "OnComponentStart": null,
-          "OnComponentUpdate": null
+          "OnComponentUpdate": null,
+          "PlayerPrefab": null,
+          "SpawnPosition": "0,0,100"
         }
       ],
       "Children": []

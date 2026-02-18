@@ -13,9 +13,10 @@ public sealed class AutoSaveSystem : GameObjectSystem<AutoSaveSystem>
 	public AutoSaveSystem( Scene scene ) : base( scene )
 	{
 		_nextAutoSave = Config.HexConfig.Get<float>( "framework.saveInterval", 300f );
+		Listen( Stage.StartUpdate, 0, OnTick, "AutoSave tick" );
 	}
 
-	protected override void OnUpdate()
+	private void OnTick()
 	{
 		if ( !Core.HexagonSystem.IsInitialized )
 			return;

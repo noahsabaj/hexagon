@@ -90,12 +90,10 @@ public sealed class VendorComponent : Component, Component.IPressable
 				};
 			} ).ToList();
 
-			var catalogJson = Json.Serialize( catalogEntries );
-
 			using ( Rpc.FilterInclude( player.Connection ) )
 			{
 				Inventory.HexInventoryComponent.Instance.ReceiveVendorCatalog(
-					VendorId, VendorName, catalogJson );
+					VendorId, VendorName, catalogEntries );
 			}
 		}
 
