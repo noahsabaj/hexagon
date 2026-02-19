@@ -52,16 +52,13 @@
 			}
 			else
 			{
-				@{
-					var sellableItems = GetSellableItems();
-				}
-				@if ( sellableItems.Count == 0 )
+				@if ( GetSellableItems().Count == 0 )
 				{
 					<div class="empty-state text-muted">You have nothing this vendor will buy.</div>
 				}
 				else
 				{
-					@foreach ( var (item, vendorEntry) in sellableItems )
+					@foreach ( var (item, vendorEntry) in GetSellableItems() )
 					{
 						var def = ItemManager.GetDefinition( item.DefinitionId );
 						<div class="vendor-item">

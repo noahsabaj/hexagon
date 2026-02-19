@@ -220,7 +220,7 @@
 			ErrorMessage = "";
 
 			// Go back to character select after a brief moment
-			HexUIManager.Instance?.SetState( UIState.CharacterSelect );
+			HexUIManager.Instance?.SetState( HexUIStates.CharacterSelect );
 		}
 		else
 		{
@@ -233,7 +233,7 @@
 
 	private void GoBack()
 	{
-		HexUIManager.Instance?.SetState( UIState.CharacterSelect );
+		HexUIManager.Instance?.SetState( HexUIStates.CharacterSelect );
 	}
 
 	private string TruncateText( string text, int max )

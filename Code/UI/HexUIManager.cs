@@ -1,19 +1,6 @@
 namespace Hexagon.UI;
 
 /// <summary>
-/// UI state machine states.
-/// </summary>
-public enum UIState
-{
-	Loading,
-	Intro,
-	CharacterSelect,
-	CharacterCreate,
-	Gameplay,
-	Dead
-}
-
-/// <summary>
 /// Central UI coordinator. Manages panel visibility, input dispatch, cursor state,
 /// and the UI state machine. Scene-level singleton (GameObjectSystem).
 ///
@@ -33,7 +20,9 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 	/// <summary>
 	/// Current UI state.
 	/// </summary>
-	public UIState State { get; private set; } = UIState.Loading;
+	public string State { get; private set; } = HexUIStates.Loading;
+
+	private readonly Dictionary<string, UIStateConfig> _states = new();
 
 	private readonly List<IHexPanel> _openPanels = new();
 	private List<IHexPanel> _panels = new();
@@ -44,6 +33,7 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 	{
 		_instance = this;
 		Listen( Stage.StartUpdate, 0, OnTick, "HexUIManager.Tick" );
+		RegisterDefaultStates();
 	}
 
 	public override void Dispose()
@@ -51,6 +41,44 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 		if ( _instance == this )
 			_instance = null;
 		base.Dispose();
+	}
+
+	public void RegisterState( string name, UIStateConfig config )
+	{
+		_states[name] = config;
+	}
+
+	private void RegisterDefaultStates()
+	{
+		RegisterState( HexUIStates.Intro, new UIStateConfig
+		{
+			OnEnter = () => OpenPanel( "Intro" )
+		} );
+
+		RegisterState( HexUIStates.CharacterSelect, new UIStateConfig
+		{
+			OnEnter = () => OpenPanel( "CharacterSelect" ),
+			ForceCursorVisible = true
+		} );
+
+		RegisterState( HexUIStates.CharacterCreate, new UIStateConfig
+		{
+			OnEnter = () => OpenPanel( "CharacterCreate" ),
+			ForceCursorVisible = true
+		} );
+
+		RegisterState( HexUIStates.Gameplay, new UIStateConfig
+		{
+			OnEnter = () => { OpenPanel( "HUD" ); OpenPanel( "Chat" ); },
+			AllowGameplayInput = true
+		} );
+
+		RegisterState( HexUIStates.Dead, new UIStateConfig
+		{
+			OnEnter = () => { OpenPanel( "DeathScreen" ); OpenPanel( "Chat" ); },
+			ForceCursorVisible = true,
+			AllowGameplayInput = true
+		} );
 	}
 
 	private void OnTick()
@@ -65,7 +93,7 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 			_initialized = true;
 			DisableOverriddenDefaults();
 			_panels = Scene.GetAll<IHexPanel>().ToList();
-			SetState( UIState.Intro );
+			SetState( HexUIStates.Intro );
 		}
 
 		if ( !_initialized ) return;
@@ -80,14 +108,14 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 	internal void OnCharacterLoaded( HexPlayerComponent player, HexCharacter character )
 	{
 		if ( player.IsProxy ) return;
-		SetState( UIState.Gameplay );
+		SetState( HexUIStates.Gameplay );
 	}
 
 	internal void OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character )
 	{
 		if ( player.IsProxy ) return;
 		HexPlayerSetup.StripPlayerBody( player.GameObject );
-		SetState( UIState.CharacterSelect );
+		SetState( HexUIStates.CharacterSelect );
 	}
 
 	// --- Schema Override Detection ---
@@ -150,7 +178,7 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 	/// Transition to a new UI state. Closes all open panels, then opens those
 	/// appropriate for the new state.
 	/// </summary>
-	public void SetState( UIState newState )
+	public void SetState( string newState )
 	{
 		if ( State == newState ) return;
 
@@ -160,29 +188,13 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 			panel.Close();
 		_openPanels.Clear();
 
-		switch ( newState )
+		if ( _states.TryGetValue( newState, out var config ) )
 		{
-			case UIState.Intro:
-				OpenPanel( "Intro" );
-				break;
-
-			case UIState.CharacterSelect:
-				OpenPanel( "CharacterSelect" );
-				break;
-
-			case UIState.CharacterCreate:
-				OpenPanel( "CharacterCreate" );
-				break;
-
-			case UIState.Gameplay:
-				OpenPanel( "HUD" );
-				OpenPanel( "Chat" );
-				break;
-
-			case UIState.Dead:
-				OpenPanel( "DeathScreen" );
-				OpenPanel( "Chat" );
-				break;
+			config.OnEnter?.Invoke();
+		}
+		else
+		{
+			Log.Warning( $"Hexagon: Attempted to transition to unregistered UI state '{newState}'" );
 		}
 	}
 
@@ -190,7 +202,7 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 
 	private void HandleInput()
 	{
-		if ( State != UIState.Gameplay && State != UIState.Dead )
+		if ( !_states.TryGetValue( State, out var config ) || !config.AllowGameplayInput )
 			return;
 
 		// TAB — Scoreboard toggle
@@ -206,7 +218,7 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 		}
 
 		// I — Toggle inventory
-		if ( Input.Pressed( "Inventory" ) && State == UIState.Gameplay )
+		if ( Input.Pressed( "Inventory" ) && State == HexUIStates.Gameplay )
 		{
 			TogglePanel( "Inventory" );
 		}
@@ -222,7 +234,7 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 		}
 
 		// F3 — Toggle introduce menu
-		if ( Input.Pressed( "Slot3" ) && State == UIState.Gameplay )
+		if ( Input.Pressed( "Slot3" ) && State == HexUIStates.Gameplay )
 		{
 			TogglePanel( "IntroduceMenu" );
 		}
@@ -238,7 +250,7 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 
 	private void UpdateCursor()
 	{
-		if ( State == UIState.CharacterSelect || State == UIState.CharacterCreate || State == UIState.Dead )
+		if ( _states.TryGetValue( State, out var config ) && config.ForceCursorVisible )
 		{
 			Mouse.Visibility = MouseVisibility.Visible;
 			return;
@@ -361,16 +373,16 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 
 	private void CheckDeathState()
 	{
-		if ( State != UIState.Gameplay && State != UIState.Dead )
+		if ( !_states.TryGetValue( State, out var config ) || !config.AllowGameplayInput )
 			return;
 
 		var localPlayer = GetLocalPlayer();
 		if ( localPlayer == null ) return;
 
-		if ( localPlayer.IsDead && State != UIState.Dead )
-			SetState( UIState.Dead );
-		else if ( !localPlayer.IsDead && State == UIState.Dead )
-			SetState( UIState.Gameplay );
+		if ( localPlayer.IsDead && State != HexUIStates.Dead )
+			SetState( HexUIStates.Dead );
+		else if ( !localPlayer.IsDead && State == HexUIStates.Dead )
+			SetState( HexUIStates.Gameplay );
 	}
 
 	/// <summary>
@@ -403,3 +415,4 @@ internal sealed class HexUIManagerBridge : Component, IHexCharacterEvent
 	void IHexCharacterEvent.OnCharacterUnloaded( HexPlayerComponent player, HexCharacter character )
 		=> HexUIManager.Instance?.OnCharacterUnloaded( player, character );
 }
+

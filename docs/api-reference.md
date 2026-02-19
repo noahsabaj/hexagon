@@ -2117,19 +2117,16 @@ void OnStorageClosed( HexPlayerComponent player, StorageComponent storage )
 
 ## Hexagon.UI
 
-### UIState (enum)
-
-UI state machine states.
-
 ### HexUIManager (sealed) : GameObjectSystem<HexUIManager>
 
 Central UI coordinator. Manages panel visibility, input dispatch, cursor state, and the UI state machine. Scene-level singleton (GameObjectSystem). Schema devs can replace individual panels by adding their own IHexPanel implementations anywhere in the scene. HexUIManager discovers all panels via Scene.GetAll and automatically disables framework defaults that share a PanelName.
 
 ```csharp
 static HexUIManager Instance
-UIState State { get; set; }
+string State { get; set; }
 override void Dispose()
-void SetState( UIState newState )
+void RegisterState( string name, UIStateConfig config )
+void SetState( string newState )
 IHexPanel FindPanel( string name )
 void OpenPanel( string name )
 void ClosePanel( string name )
@@ -2143,6 +2140,7 @@ static HexPlayerComponent GetLocalPlayer()
 | `Instance` | Active HexUIManager instance. |
 | `State` | Current UI state. |
 | `Dispose` |  |
+| `RegisterState` |  |
 | `SetState` | Transition to a new UI state. Closes all open panels, then opens those appropriate for the new state. |
 | `FindPanel` | Find a panel by name. Schema panels (non-framework) take priority over defaults. |
 | `OpenPanel` | Open a panel by name. |
@@ -2164,6 +2162,19 @@ static void EnsureUI( Scene scene )
 |--------|-------------|
 | `UIObject` | The runtime-created UI root GameObject. Any panel that is a descendant of this object is considered a framework default. Schema overrides live elsewhere. |
 | `EnsureUI` | Ensure the Hexagon UI panel hierarchy exists in the scene. If the hierarchy already exists (UIObject is valid), this is a no-op. Uses IsValid() instead of null check because UIObject is static and can hold stale references to destroyed GameObjects across editor play/stop cycles. |
+
+### HexUIStates (static)
+
+Default UI states used by the framework.
+
+```csharp
+const string Loading
+const string Intro
+const string CharacterSelect
+const string CharacterCreate
+const string Gameplay
+const string Dead
+```
 
 ### IHexPanel (interface)
 
@@ -2204,6 +2215,22 @@ static void SendAll( string message, float duration )
 ### NotificationPlayerComponent (sealed) : Component
 
 Receives toast notifications from the server. Satellite component on the player GameObject alongside HexPlayerComponent.
+
+### UIStateConfig
+
+Configuration for a UI state.
+
+```csharp
+Action OnEnter { get; set; }
+bool ForceCursorVisible { get; set; }
+bool AllowGameplayInput { get; set; }
+```
+
+| Member | Description |
+|--------|-------------|
+| `OnEnter` | The callback executed when the state is activated (typically used to Open target panels) |
+| `ForceCursorVisible` | If true, the mouse cursor is permanently visible (e.g. Character Select, Death Screen) |
+| `AllowGameplayInput` | If true, core HUD mechanics (Tab for Scoreboard, I for Inventory) are permitted |
 
 ### IHexUIEvent (interface) : ISceneEvent<IHexUIEvent>
 
