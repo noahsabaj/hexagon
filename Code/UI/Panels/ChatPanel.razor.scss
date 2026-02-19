@@ -1,4 +1,7 @@
 ChatPanel {
+	display: none;
+	&.open { display: flex; }
+
 	.chat-panel {
 		position: absolute;
 		bottom: 80px;

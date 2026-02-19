@@ -1,4 +1,7 @@
 HudPanel {
+	display: none;
+	&.open { display: flex; }
+
 	.hud-panel {
 		position: absolute;
 		bottom: 12px;

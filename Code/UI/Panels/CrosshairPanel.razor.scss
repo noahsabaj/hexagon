@@ -1,4 +1,6 @@
 CrosshairPanel {
+	display: none;
+	&.open { display: flex; }
 	position: absolute;
 	top: 0;
 	left: 0;

@@ -59,8 +59,9 @@ IntroPanel {
 		position: absolute;
 		bottom: 60px;
 		left: 0;
-		right: 0;
-		text-align: center;
+		width: 100%;
+		display: flex;
+		justify-content: center;
 		font-size: 14px;
 		color: #666666;
 		letter-spacing: 2px;

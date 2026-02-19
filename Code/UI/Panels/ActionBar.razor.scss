@@ -3,7 +3,8 @@ ActionBar {
 	bottom: 120px;
 	left: 0;
 	right: 0;
-	display: flex;
+	display: none;
+	&.open { display: flex; }
 	flex-direction: column;
 	align-items: center;
 	gap: 4px;

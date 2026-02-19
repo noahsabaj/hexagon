@@ -1,4 +1,7 @@
 InventoryPanel {
+	display: none;
+	&.open { display: flex; }
+
 	.inventory-panel {
 		position: absolute;
 		top: 50%;

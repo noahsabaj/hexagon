@@ -1,4 +1,7 @@
 Scoreboard {
+	display: none;
+	&.open { display: flex; }
+
 	.scoreboard {
 		position: absolute;
 		top: 0;
