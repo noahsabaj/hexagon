@@ -18,12 +18,14 @@ public static class HexUISetup
 
 	/// <summary>
 	/// Ensure the Hexagon UI panel hierarchy exists in the scene.
-	/// If the hierarchy already exists (UIObject is set), this is a no-op.
+	/// If the hierarchy already exists (UIObject is valid), this is a no-op.
+	/// Uses IsValid() instead of null check because UIObject is static and can hold
+	/// stale references to destroyed GameObjects across editor play/stop cycles.
 	/// </summary>
 	public static void EnsureUI( Scene scene )
 	{
 		if ( Application.IsHeadless ) return;
-		if ( UIObject != null ) return;
+		if ( UIObject.IsValid() ) return;
 
 		var root = new GameObject( true, "Hexagon UI" );
 		UIObject = root;
@@ -36,6 +38,7 @@ public static class HexUISetup
 		root.AddComponent<HexUIManagerBridge>();
 
 		// Default panels — each on its own child GameObject for independent lifecycle
+		AddPanel<IntroPanel>( root, "Intro" );
 		AddPanel<CharacterSelect>( root, "CharacterSelect" );
 		AddPanel<CharacterCreate>( root, "CharacterCreate" );
 		AddPanel<HudPanel>( root, "HUD" );

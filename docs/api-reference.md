@@ -2163,7 +2163,7 @@ static void EnsureUI( Scene scene )
 | Member | Description |
 |--------|-------------|
 | `UIObject` | The runtime-created UI root GameObject. Any panel that is a descendant of this object is considered a framework default. Schema overrides live elsewhere. |
-| `EnsureUI` | Ensure the Hexagon UI panel hierarchy exists in the scene. If the hierarchy already exists (UIObject is set), this is a no-op. |
+| `EnsureUI` | Ensure the Hexagon UI panel hierarchy exists in the scene. If the hierarchy already exists (UIObject is valid), this is a no-op. Uses IsValid() instead of null check because UIObject is static and can hold stale references to destroyed GameObjects across editor play/stop cycles. |
 
 ### IHexPanel (interface)
 

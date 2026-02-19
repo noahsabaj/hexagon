@@ -1,0 +1,95 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using Hexagon.Core;
+@using Hexagon.UI;
+
+@namespace Hexagon.UI
+@inherits PanelComponent
+@implements IHexPanel
+
+<root class="@RootClass">
+	<div class="intro-content">
+		<div class="intro-title @(ShowTitle ? "visible" : "")">@SchemaName</div>
+		@if ( !string.IsNullOrEmpty( SchemaAuthor ) )
+		{
+			<div class="intro-author @(ShowAuthor ? "visible" : "")">by @SchemaAuthor</div>
+		}
+	</div>
+	<div class="intro-prompt @(ShowPrompt ? "visible" : "")">Press Space to continue</div>
+</root>
+
+@code
+{
+	public string PanelName => "Intro";
+	public bool IsOpen { get; private set; }
+
+	private string RootClass => IsOpen ? (IsHiding ? "hiding" : "open") : "";
+	private bool IsHiding { get; set; }
+	private bool ShowTitle { get; set; }
+	private bool ShowAuthor { get; set; }
+	private bool ShowPrompt { get; set; }
+
+	private RealTimeSince _openedAt;
+	private RealTimeSince _hidingAt;
+
+	private string SchemaName { get; set; } = "Hexagon";
+	private string SchemaAuthor { get; set; } = "";
+
+	public void Open()
+	{
+		IsOpen = true;
+		IsHiding = false;
+		ShowTitle = false;
+		ShowAuthor = false;
+		ShowPrompt = false;
+		_openedAt = 0;
+
+		var plugin = PluginManager.Plugins?.FirstOrDefault();
+		SchemaName = plugin?.Name ?? "Hexagon";
+		SchemaAuthor = plugin?.Author ?? "";
+
+		StateHasChanged();
+	}
+
+	public void Close()
+	{
+		IsOpen = false;
+		IsHiding = false;
+		ShowTitle = false;
+		ShowAuthor = false;
+		ShowPrompt = false;
+		StateHasChanged();
+	}
+
+	protected override void OnUpdate()
+	{
+		if ( !IsOpen ) return;
+
+		if ( IsHiding )
+		{
+			if ( _hidingAt > 0.6f )
+				HexUIManager.Instance?.SetState( UIState.CharacterSelect );
+			return;
+		}
+
+		bool changed = false;
+
+		if ( !ShowTitle && _openedAt > 0.3f ) { ShowTitle = true; changed = true; }
+		if ( !ShowAuthor && _openedAt > 1.0f ) { ShowAuthor = true; changed = true; }
+		if ( !ShowPrompt && _openedAt > 1.8f ) { ShowPrompt = true; changed = true; }
+
+		if ( ShowPrompt && Input.Pressed( "Jump" ) )
+		{
+			IsHiding = true;
+			_hidingAt = 0;
+			changed = true;
+		}
+
+		if ( changed ) StateHasChanged();
+	}
+
+	protected override int BuildHash()
+	{
+		return HashCode.Combine( IsOpen, IsHiding, ShowTitle, ShowAuthor, ShowPrompt );
+	}
+}

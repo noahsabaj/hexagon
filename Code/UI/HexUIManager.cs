@@ -6,6 +6,7 @@ namespace Hexagon.UI;
 public enum UIState
 {
 	Loading,
+	Intro,
 	CharacterSelect,
 	CharacterCreate,
 	Gameplay,
@@ -64,7 +65,7 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 			_initialized = true;
 			DisableOverriddenDefaults();
 			_panels = Scene.GetAll<IHexPanel>().ToList();
-			SetState( UIState.CharacterSelect );
+			SetState( UIState.Intro );
 		}
 
 		if ( !_initialized ) return;
@@ -161,6 +162,10 @@ public sealed class HexUIManager : GameObjectSystem<HexUIManager>
 
 		switch ( newState )
 		{
+			case UIState.Intro:
+				OpenPanel( "Intro" );
+				break;
+
 			case UIState.CharacterSelect:
 				OpenPanel( "CharacterSelect" );
 				break;
