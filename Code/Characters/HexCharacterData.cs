@@ -73,12 +73,6 @@ public abstract class HexCharacterData
 	public List<Attributes.AttributeBoost> Boosts { get; set; } = new();
 
 	/// <summary>
-	/// Generic data store for plugin/schema-specific persistent data that doesn't
-	/// fit into typed CharVar properties.
-	/// </summary>
-	public Dictionary<string, object> Data { get; set; } = new();
-
-	/// <summary>
 	/// When this character was created.
 	/// </summary>
 	public DateTime CreatedAt { get; set; }

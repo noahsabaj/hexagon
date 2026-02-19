@@ -72,7 +72,7 @@ public class WeaponItemDef : ItemDefinition
 	/// </summary>
 	public int GetClipAmmo( ItemInstance item )
 	{
-		return item.GetData<int>( "clipAmmo", ClipSize );
+		return item.TryGetTrait<WeaponTrait>( out var t ) ? t.ClipAmmo : ClipSize;
 	}
 
 	/// <summary>
@@ -80,15 +80,19 @@ public class WeaponItemDef : ItemDefinition
 	/// </summary>
 	public void SetClipAmmo( ItemInstance item, int amount )
 	{
-		item.SetData( "clipAmmo", Math.Clamp( amount, 0, ClipSize ) );
+		item.GetTrait<WeaponTrait>().ClipAmmo = Math.Clamp( amount, 0, ClipSize );
+		item.MarkDirty();
 	}
 
 	public override void OnInstanced( ItemInstance item )
 	{
 		base.OnInstanced( item );
 
-		// Initialize with full clip
-		if ( !item.Data.ContainsKey( "clipAmmo" ) )
-			item.SetData( "clipAmmo", ClipSize );
+		// Initialize with full clip if not set
+		if ( !item.TryGetTrait<WeaponTrait>( out _ ) )
+		{
+			item.GetTrait<WeaponTrait>().ClipAmmo = ClipSize;
+			item.MarkDirty();
+		}
 	}
 }

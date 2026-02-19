@@ -22,7 +22,7 @@ public class ItemSnapshot
 	public string DefinitionId { get; set; }
 	public int X { get; set; }
 	public int Y { get; set; }
-	public Dictionary<string, object> Data { get; set; } = new();
+	public Dictionary<string, Items.ItemDataTrait> Traits { get; set; } = new();
 }
 
 /// <summary>
@@ -151,7 +151,7 @@ public sealed class HexInventoryComponent : Component
 				DefinitionId = item.DefinitionId,
 				X = item.X,
 				Y = item.Y,
-				Data = item.Data ?? new()
+				Traits = item.Traits ?? new()
 			} );
 		}
 

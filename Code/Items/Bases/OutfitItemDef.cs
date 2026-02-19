@@ -57,11 +57,13 @@ public class OutfitItemDef : ItemDefinition
 	{
 		base.OnEquip( player, item );
 
+		var outfit = item.GetTrait<OutfitTrait>();
+
 		// Store the player's current model so we can restore it
 		var renderer = player.Components.Get<SkinnedModelRenderer>();
 		if ( renderer != null && OutfitModel != null )
 		{
-			item.SetData( "previousModel", renderer.Model?.ResourcePath ?? "" );
+			outfit.PreviousModel = renderer.Model?.ResourcePath ?? "";
 			renderer.Model = OutfitModel;
 		}
 
@@ -74,27 +76,28 @@ public class OutfitItemDef : ItemDefinition
 			}
 		}
 
-		item.SetData( "equipped", true );
-		item.SetData( "equippedSlot", Slot );
+		outfit.Equipped = true;
+		outfit.EquippedSlot = Slot;
+		item.MarkDirty();
 	}
 
 	public override void OnUnequip( HexPlayerComponent player, ItemInstance item )
 	{
 		base.OnUnequip( player, item );
 
+		var outfit = item.GetTrait<OutfitTrait>();
+
 		// Restore previous model
 		var renderer = player.Components.Get<SkinnedModelRenderer>();
 		if ( renderer != null && OutfitModel != null )
 		{
-			var previousPath = item.GetData<string>( "previousModel", "" );
+			var previousPath = outfit.PreviousModel ?? "";
 			if ( !string.IsNullOrEmpty( previousPath ) )
 			{
 				renderer.Model = Model.Load( previousPath );
 			}
 		}
 
-		item.RemoveData( "equipped" );
-		item.RemoveData( "equippedSlot" );
-		item.RemoveData( "previousModel" );
+		item.RemoveTrait<OutfitTrait>();
 	}
 }

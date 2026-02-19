@@ -48,7 +48,7 @@ public sealed class ItemManager : GameObjectSystem<ItemManager>
 	/// <summary>
 	/// Create a new item instance from a definition and persist it.
 	/// </summary>
-	public static ItemInstance CreateInstance( string definitionId, string characterId = null, Dictionary<string, object> data = null )
+	public static ItemInstance CreateInstance( string definitionId, string characterId = null, Dictionary<string, ItemDataTrait> traits = null )
 	{
 		var def = GetDefinition( definitionId );
 		if ( def == null )
@@ -62,7 +62,7 @@ public sealed class ItemManager : GameObjectSystem<ItemManager>
 			Id = Persistence.DatabaseManager.NewId(),
 			DefinitionId = definitionId,
 			CharacterId = characterId,
-			Data = data ?? new()
+			Traits = traits ?? new()
 		};
 
 		// Persist

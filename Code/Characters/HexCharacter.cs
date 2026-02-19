@@ -82,24 +82,6 @@ public class HexCharacter
 		MarkDirty( nameof( Data.Flags ) );
 	}
 
-	// --- Generic Data ---
-
-	/// <summary>
-	/// Get a value from the character's generic data store.
-	/// </summary>
-	public T GetData<T>( string key, T defaultValue = default )
-		=> Core.DataHelper.GetValue( Data.Data, key, defaultValue );
-
-	/// <summary>
-	/// Set a value in the character's generic data store.
-	/// </summary>
-	public void SetData( string key, object value )
-	{
-		Data.Data ??= new();
-		Data.Data[key] = value;
-		MarkDirty( "Data" );
-	}
-
 	// --- Character Variable Access ---
 
 	/// <summary>

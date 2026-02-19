@@ -36,9 +36,9 @@ public class ItemInstance
 	public int Y { get; set; }
 
 	/// <summary>
-	/// Per-instance custom data (condition, ammo count, custom properties, etc.).
+	/// Strongly-typed data traits attached to this item instance.
 	/// </summary>
-	public Dictionary<string, object> Data { get; set; } = new();
+	public Dictionary<string, ItemDataTrait> Traits { get; set; } = new();
 
 	/// <summary>
 	/// The character ID that owns this item (for ownership tracking).
@@ -57,28 +57,44 @@ public class ItemInstance
 	public ItemDefinition Definition => ItemManager.GetDefinition( DefinitionId );
 
 	/// <summary>
-	/// Get a per-instance data value.
+	/// Retrieves a specific data trait, automatically creating and attaching it if missing.
 	/// </summary>
-	public T GetData<T>( string key, T defaultValue = default )
-		=> Core.DataHelper.GetValue( Data, key, defaultValue );
-
-	/// <summary>
-	/// Set a per-instance data value. Marks the item as dirty.
-	/// </summary>
-	public void SetData( string key, object value )
+	public T GetTrait<T>() where T : ItemDataTrait, new()
 	{
-		Data ??= new();
-		Data[key] = value;
+		var typeName = typeof( T ).Name;
+		if ( Traits.TryGetValue( typeName, out var existing ) )
+			return (T)existing;
+
+		var newTrait = new T();
+		Traits[typeName] = newTrait;
 		MarkDirty();
+		return newTrait;
 	}
 
 	/// <summary>
-	/// Remove a per-instance data value.
+	/// Checks if a trait exists without creating it.
 	/// </summary>
-	public void RemoveData( string key )
+	public bool TryGetTrait<T>( out T trait ) where T : ItemDataTrait
 	{
-		Data?.Remove( key );
-		MarkDirty();
+		if ( Traits.TryGetValue( typeof( T ).Name, out var existing ) )
+		{
+			trait = (T)existing;
+			return true;
+		}
+
+		trait = null;
+		return false;
+	}
+
+	/// <summary>
+	/// Remove a data trait.
+	/// </summary>
+	public void RemoveTrait<T>() where T : ItemDataTrait
+	{
+		if ( Traits.Remove( typeof( T ).Name ) )
+		{
+			MarkDirty();
+		}
 	}
 
 	/// <summary>

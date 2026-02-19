@@ -33,7 +33,7 @@ public class CurrencyItemDef : ItemDefinition
 	/// </summary>
 	public int GetAmount( ItemInstance item )
 	{
-		return item.GetData<int>( "amount", DefaultAmount );
+		return item.TryGetTrait<CurrencyTrait>( out var t ) ? t.Amount : DefaultAmount;
 	}
 
 	/// <summary>
@@ -41,7 +41,8 @@ public class CurrencyItemDef : ItemDefinition
 	/// </summary>
 	public void SetAmount( ItemInstance item, int amount )
 	{
-		item.SetData( "amount", Math.Max( 0, amount ) );
+		item.GetTrait<CurrencyTrait>().Amount = Math.Max( 0, amount );
+		item.MarkDirty();
 	}
 
 	public override bool OnUse( HexPlayerComponent player, ItemInstance item )
@@ -64,8 +65,11 @@ public class CurrencyItemDef : ItemDefinition
 		base.OnInstanced( item );
 
 		// Initialize with default amount
-		if ( !item.Data.ContainsKey( "amount" ) )
-			item.SetData( "amount", DefaultAmount );
+		if ( !item.TryGetTrait<CurrencyTrait>( out _ ) )
+		{
+			item.GetTrait<CurrencyTrait>().Amount = DefaultAmount;
+			item.MarkDirty();
+		}
 	}
 
 	/// <summary>
@@ -76,7 +80,8 @@ public class CurrencyItemDef : ItemDefinition
 		var instance = ItemManager.CreateInstance( definitionId, characterId );
 		if ( instance == null ) return null;
 
-		instance.SetData( "amount", amount );
+		instance.GetTrait<CurrencyTrait>().Amount = amount;
+		instance.MarkDirty();
 		return instance;
 	}
 }

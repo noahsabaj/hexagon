@@ -41,7 +41,8 @@ public class BagItemDef : ItemDefinition
 	/// </summary>
 	public Inventory.HexInventory GetBagInventory( ItemInstance item )
 	{
-		var invId = item.GetData<string>( "bagInventoryId" );
+		var bagTrait = item.GetTrait<BagTrait>();
+		var invId = bagTrait.BagInventoryId;
 
 		if ( !string.IsNullOrEmpty( invId ) )
 		{
@@ -52,7 +53,8 @@ public class BagItemDef : ItemDefinition
 
 		// Create the bag's inventory
 		var inv = Inventory.InventoryManager.Create( BagWidth, BagHeight, type: "bag" );
-		item.SetData( "bagInventoryId", inv.Id );
+		bagTrait.BagInventoryId = inv.Id;
+		item.MarkDirty();
 		return inv;
 	}
 
@@ -71,7 +73,8 @@ public class BagItemDef : ItemDefinition
 	/// </summary>
 	public void CloseBag( HexPlayerComponent player, ItemInstance item )
 	{
-		var invId = item.GetData<string>( "bagInventoryId" );
+		if ( !item.TryGetTrait<BagTrait>( out var bagTrait ) ) return;
+		var invId = bagTrait.BagInventoryId;
 		if ( string.IsNullOrEmpty( invId ) ) return;
 
 		var inv = Inventory.InventoryManager.Get( invId );
@@ -85,8 +88,11 @@ public class BagItemDef : ItemDefinition
 		base.OnRemoved( item );
 
 		// Clean up the bag's inventory when the bag is destroyed
-		var invId = item.GetData<string>( "bagInventoryId" );
-		if ( !string.IsNullOrEmpty( invId ) )
-			Inventory.InventoryManager.Delete( invId );
+		if ( item.TryGetTrait<BagTrait>( out var bagTrait ) )
+		{
+			var invId = bagTrait.BagInventoryId;
+			if ( !string.IsNullOrEmpty( invId ) )
+				Inventory.InventoryManager.Delete( invId );
+		}
 	}
 }

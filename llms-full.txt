@@ -2127,18 +2127,6 @@ Complete API reference for the Hexagon roleplay framework for s&box (Source 2, C
 
 ## Hexagon.Core
 
-### DataHelper (static)
-
-Utility for typed access to Dictionary&lt;string, object&gt; stores with safe type conversion and fallback defaults. Handles JsonElement values that arise from JSON round-trips (deserializing Dictionary&lt;string, object&gt; produces JsonElement for each value).
-
-```csharp
-static T GetValue<T>( Dictionary<string, object> dict, string key, T defaultValue )
-```
-
-| Member | Description |
-|--------|-------------|
-| `GetValue` | Get a typed value from a dictionary with safe type conversion. Returns defaultValue if the key is missing, the dict is null, or conversion fails. |
-
 ### HexagonConfigComponent (sealed) : Component
 
 Scene-placed configuration for the Hexagon framework. Place this on a GameObject in your scene to configure spawn and player settings. Read by <see cref="HexagonSystem"/> during initialization and player connection.
@@ -2488,8 +2476,6 @@ bool HasFlag( string flag )
 bool HasFlags( string flags )
 void GiveFlag( string flag )
 void TakeFlag( string flag )
-T GetData<T>( string key, T defaultValue )
-void SetData( string key, object value )
 T GetVar<T>( string name, T defaultValue )
 void SetVar( string name, object value )
 void SetFaction( string factionId )
@@ -2516,8 +2502,6 @@ IReadOnlySet<string> GetDirtyFields()
 | `HasFlags` | Check if this character has all flags represented by each character in the string (e.g. HasFlags("as") checks for both "a" and "s"). |
 | `GiveFlag` | Grant a permission flag to this character. |
 | `TakeFlag` | Remove a permission flag from this character. |
-| `GetData` | Get a value from the character's generic data store. |
-| `SetData` | Set a value in the character's generic data store. |
 | `GetVar` | Get a character variable value by name using reflection. Prefer using the typed property on your HexCharacterData subclass directly. |
 | `SetVar` | Set a character variable value by name using reflection. Prefer using the typed property on your HexCharacterData subclass directly, then calling MarkDirty(). |
 | `SetFaction` | Set this character's faction. |
@@ -2543,7 +2527,6 @@ string Class { get; set; }
 HashSet<string> Flags { get; set; }
 HashSet<string> RecognizedIds { get; set; }
 Dictionary<string, float> AttributeValues { get; set; }
-Dictionary<string, object> Data { get; set; }
 DateTime CreatedAt { get; set; }
 DateTime LastPlayedAt { get; set; }
 bool IsBanned { get; set; }
@@ -2560,7 +2543,6 @@ DateTime? BanExpiry { get; set; }
 | `Flags` | Permission flags assigned to this character (e.g. "a" = admin, "s" = superadmin). |
 | `RecognizedIds` | Character IDs this character has been introduced to and can recognize by name. |
 | `AttributeValues` | Base attribute values keyed by attribute ID. |
-| `Data` | Generic data store for plugin/schema-specific persistent data that doesn't fit into typed CharVar properties. |
 | `CreatedAt` | When this character was created. |
 | `LastPlayedAt` | When this character was last played. |
 | `IsBanned` | Whether this character is currently banned. |
@@ -3590,7 +3572,6 @@ string Id { get; set; }
 string DefinitionId { get; set; }
 int X { get; set; }
 int Y { get; set; }
-Dictionary<string, object> Data { get; set; }
 ```
 
 ### VendorCatalogEntry
@@ -3711,6 +3692,10 @@ Func<HexPlayerComponent, ItemInstance, bool> OnCanRun { get; set; }
 | `OnRun` | Server-side callback when the action is executed. Return false to keep item, true to consume it. |
 | `OnCanRun` | Permission check - should this action be visible/available? |
 
+### ItemDataTrait (abstract)
+
+A strongly-typed data component that can be attached to an ItemInstance. Schema developers should subclass this to define stateful data for their items. Example: public class AmmoTrait : ItemDataTrait { public int Clip { get; set; } }
+
 ### ItemDefinition : GameResource
 
 Base class for item type definitions. Create .item asset files in the s&box editor for simple items, or subclass in C# for items with custom behavior. Schema devs can create items visually (set name, model, size in editor) or extend this class for weapons, bags, outfits, etc.
@@ -3771,13 +3756,13 @@ string DefinitionId { get; set; }
 string InventoryId { get; set; }
 int X { get; set; }
 int Y { get; set; }
-Dictionary<string, object> Data { get; set; }
+Dictionary<string, ItemDataTrait> Traits { get; set; }
 string CharacterId { get; set; }
 bool IsDirty { get; set; }
 ItemDefinition Definition
-T GetData<T>( string key, T defaultValue )
-void SetData( string key, object value )
-void RemoveData( string key )
+T GetTrait<T>()
+bool TryGetTrait<T>( out T trait )
+void RemoveTrait<T>()
 void MarkDirty()
 void Save()
 ```
@@ -3789,13 +3774,13 @@ void Save()
 | `InventoryId` | The inventory this item is currently in. 0 or empty = world/not in inventory. |
 | `X` | Grid X position within the inventory. |
 | `Y` | Grid Y position within the inventory. |
-| `Data` | Per-instance custom data (condition, ammo count, custom properties, etc.). |
+| `Traits` | Strongly-typed data traits attached to this item instance. |
 | `CharacterId` | The character ID that owns this item (for ownership tracking). |
 | `IsDirty` | Whether this item instance has unsaved changes. |
 | `Definition` | Get the ItemDefinition for this instance. |
-| `GetData` | Get a per-instance data value. |
-| `SetData` | Set a per-instance data value. Marks the item as dirty. |
-| `RemoveData` | Remove a per-instance data value. |
+| `GetTrait` | Retrieves a specific data trait, automatically creating and attaching it if missing. |
+| `TryGetTrait` | Checks if a trait exists without creating it. |
+| `RemoveTrait` | Remove a data trait. |
 | `MarkDirty` | Mark this item as having unsaved changes. |
 | `Save` | Save this item instance to the database. |
 
@@ -3808,7 +3793,7 @@ static IReadOnlyDictionary<string, ItemDefinition> Definitions
 static IReadOnlyDictionary<string, ItemInstance> Instances
 static void Register( ItemDefinition definition )
 static ItemDefinition GetDefinition( string uniqueId )
-static ItemInstance CreateInstance( string definitionId, string characterId, Dictionary<string, object> data )
+static ItemInstance CreateInstance( string definitionId, string characterId, Dictionary<string, ItemDataTrait> traits )
 static ItemInstance GetInstance( string instanceId )
 static void DestroyInstance( string instanceId )
 static void SaveAll()
@@ -3832,6 +3817,32 @@ override void Dispose()
 | `GetDefinitionsByCategory` | Get all definitions in a specific category. |
 | `GetCategories` | Get all item categories. |
 | `Dispose` |  |
+
+### WeaponTrait : ItemDataTrait
+
+```csharp
+int ClipAmmo { get; set; }
+```
+
+### OutfitTrait : ItemDataTrait
+
+```csharp
+bool Equipped { get; set; }
+string EquippedSlot { get; set; }
+string PreviousModel { get; set; }
+```
+
+### CurrencyTrait : ItemDataTrait
+
+```csharp
+int Amount { get; set; }
+```
+
+### BagTrait : ItemDataTrait
+
+```csharp
+string BagInventoryId { get; set; }
+```
 
 ### WorldItemComponent (sealed) : Component
 
