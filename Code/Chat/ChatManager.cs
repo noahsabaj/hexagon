@@ -13,6 +13,8 @@ public sealed class ChatManager : GameObjectSystem<ChatManager>
 	private readonly Dictionary<string, string> _aliases = new();
 	private IChatClass _defaultChat;
 
+	public static event Func<HexPlayerComponent, IChatClass, string, bool> OnCanSendChatMessage;
+
 	public ChatManager( Scene scene ) : base( scene )
 	{
 		_instance = this;
@@ -143,9 +145,13 @@ public sealed class ChatManager : GameObjectSystem<ChatManager>
 			return;
 
 		// Hook: IHexChatEvent.CanSendChatMessage
-		if ( !SceneEventExtensions.CanAll<IHexChatEvent>(
-			x => x.CanSendChatMessage( sender, chatClass, chatMessage ) ) )
-			return;
+		if ( OnCanSendChatMessage != null )
+		{
+			foreach ( Func<HexPlayerComponent, IChatClass, string, bool> handler in OnCanSendChatMessage.GetInvocationList() )
+			{
+				if ( !handler( sender, chatClass, chatMessage ) ) return;
+			}
+		}
 
 		// Special handling for PM — first word is target player name
 		if ( chatClass is PMChat )

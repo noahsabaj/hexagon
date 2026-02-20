@@ -10,6 +10,8 @@ public sealed class RecognitionManager : GameObjectSystem<RecognitionManager>
 {
 	public RecognitionManager( Scene scene ) : base( scene ) { }
 
+	public static event Func<HexCharacter, HexCharacter, bool> OnCanRecognize;
+
 	/// <summary>
 	/// Server-side: check if observer recognizes target.
 	/// </summary>
@@ -29,8 +31,13 @@ public sealed class RecognitionManager : GameObjectSystem<RecognitionManager>
 		}
 
 		// Hook: ICanRecognizeListener can block recognition
-		if ( !SceneEventExtensions.CanAll<IHexCharacterEvent>( x => x.CanRecognize( observer, target ) ) )
-			return false;
+		if ( OnCanRecognize != null )
+		{
+			foreach ( Func<HexCharacter, HexCharacter, bool> handler in OnCanRecognize.GetInvocationList() )
+			{
+				if ( !handler( observer, target ) ) return false;
+			}
+		}
 
 		// Check stored recognition data
 		var ids = observer.GetRecognizedIds();

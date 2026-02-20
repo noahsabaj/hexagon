@@ -58,7 +58,11 @@ public sealed class HexPlayerComponent : Component
 
 	// --- Private Sync ---
 
-	private Dictionary<string, string> _privateData = new();
+	/// <summary>
+	/// The private data for this player's active character, sent directly
+	/// from the server via RPC. Only populated on the owner client.
+	/// </summary>
+	public HexCharacterData ClientPrivateData { get; private set; }
 
 	/// <summary>
 	/// Push the current character's public data to the [Sync] properties.
@@ -100,52 +104,21 @@ public sealed class HexPlayerComponent : Component
 	}
 
 	/// <summary>
-	/// Send all private character data to the owning player.
-	/// Each CharVar is sent as an individual typed RPC, enabling delta-style updates.
+	/// Send all private character data to the owning player natively over RPC.
 	/// </summary>
 	internal void SyncPrivateData()
 	{
 		if ( IsProxy ) return;
 		if ( Character?.Data == null ) return;
 
-		foreach ( var varInfo in CharacterManager.GetLocalCharVars() )
-		{
-			var value = varInfo.GetValue( Character.Data );
-			ReceivePrivateVar( varInfo.Name, value != null ? Json.Serialize( value ) : "" );
-		}
-
-		ReceiveFlagsSync( Json.Serialize( Character.Data.Flags ) );
-
+		ReceivePrivateData( Character.Data );
 		RecognitionManager.SyncRecognitionToClient( this );
 	}
 
-	/// <summary>
-	/// Send a single private CharVar to the owning player.
-	/// Use for incremental updates (e.g., just money after a purchase) to avoid
-	/// resending the entire private data set.
-	/// </summary>
-	internal void SyncPrivateVar( string name )
-	{
-		if ( IsProxy ) return;
-		if ( Character?.Data == null ) return;
-
-		var varInfo = CharacterManager.GetCharVarInfo( name );
-		if ( varInfo == null ) return;
-
-		var value = varInfo.GetValue( Character.Data );
-		ReceivePrivateVar( name, value != null ? Json.Serialize( value ) : "" );
-	}
-
 	[Rpc.Owner]
-	private void ReceivePrivateVar( string key, string value )
+	private void ReceivePrivateData( HexCharacterData data )
 	{
-		_privateData[key] = value;
-	}
-
-	[Rpc.Owner]
-	private void ReceiveFlagsSync( string flags )
-	{
-		_privateData["Flags"] = flags;
+		ClientPrivateData = data;
 	}
 
 	/// <summary>
@@ -153,16 +126,21 @@ public sealed class HexPlayerComponent : Component
 	/// </summary>
 	public T GetPrivateVar<T>( string name, T defaultValue = default )
 	{
-		if ( !_privateData.TryGetValue( name, out var json ) || string.IsNullOrEmpty( json ) )
-			return defaultValue;
+		if ( ClientPrivateData == null ) return defaultValue;
 
+		var varInfo = CharacterManager.GetCharVarInfo( name );
+		if ( varInfo == null ) return defaultValue;
+
+		var val = varInfo.GetValue( ClientPrivateData );
+		
 		try
 		{
-			return Json.Deserialize<T>( json );
+			if ( val is T typed ) return typed;
+			if ( val == null ) return defaultValue;
+			return (T)Convert.ChangeType( val, typeof( T ) );
 		}
-		catch ( Exception ex )
+		catch
 		{
-			Log.Warning( $"Hexagon: GetPrivateVar failed to deserialize '{name}' as {typeof( T ).Name}: {ex.Message}" );
 			return defaultValue;
 		}
 	}

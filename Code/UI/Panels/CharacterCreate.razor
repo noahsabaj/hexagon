@@ -176,8 +176,8 @@
 		ErrorMessage = "";
 		SuccessMessage = "";
 
-		// Build JSON payload
-		var values = new Dictionary<string, object>();
+		// Build payload natively
+		var values = new Dictionary<string, string>();
 
 		foreach ( var varInfo in GetCreationVars() )
 		{
@@ -206,8 +206,7 @@
 
 		IsSubmitting = true;
 
-		var json = Json.Serialize( values );
-		CharacterCrud?.RequestCreateCharacter( json );
+		CharacterCrud?.RequestCreateCharacter( values );
 	}
 
 	public void OnCharacterCreateResult( bool success, string message )

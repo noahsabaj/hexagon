@@ -52,6 +52,7 @@ Core Hexagon framework system. Initializes all subsystems on scene startup and m
 
 ```csharp
 static bool IsInitialized { get; set; }
+static event Func<Connection, Vector3
 static IReadOnlyDictionary<ulong, HexPlayerComponent> Players
 static HexPlayerComponent GetPlayer( ulong steamId )
 static HexPlayerComponent GetPlayer( Connection connection )
@@ -61,6 +62,7 @@ override void Dispose()
 | Member | Description |
 |--------|-------------|
 | `IsInitialized` | Whether the framework has finished initialization. |
+| `Vector3` |  |
 | `Players` | All currently connected players keyed by Steam ID. |
 | `GetPlayer` | Get a player component by Steam ID. |
 | `GetPlayer` | Get a player component by Connection. |
@@ -145,20 +147,6 @@ Utility for IPressable implementations.
 ### RpcHelper (static)
 
 Utility for resolving the calling player in RPC handlers. Eliminates repeated caller validation boilerplate.
-
-### SceneEventExtensions (static)
-
-Extension methods providing CanAll and Reduce semantics on top of ISceneEvent. These patterns are not built into s&box but are essential for permission hooks and value-folding scenarios in the Hexagon framework.
-
-```csharp
-static bool CanAll<T>( Func<T, bool> check )
-static T Reduce<TListener, T>( T initial, Func<TListener, T, T> reducer )
-```
-
-| Member | Description |
-|--------|-------------|
-| `CanAll` | Permission-gate: fires a check on all listeners in the scene. All must return true for the action to proceed. If any listener returns false, the action is blocked. |
-| `Reduce` | Value-fold: passes a value through each listener in sequence, allowing each to modify it before passing to the next. |
 
 ### IHexFrameworkEvent (interface) : ISceneEvent<IHexFrameworkEvent>
 
@@ -281,7 +269,7 @@ Handles character CRUD RPCs (list, create, load, delete). Satellite component on
 List<CharacterListEntry> ClientCharacterList { get; set; }
 [Rpc.Host] void RequestCharacterList()
 [Rpc.Host] void RequestLoadCharacter( string characterId )
-[Rpc.Host] void RequestCreateCharacter( string json )
+[Rpc.Host] void RequestCreateCharacter( Dictionary<string, string> values )
 [Rpc.Host] void RequestDeleteCharacter( string characterId )
 ```
 
@@ -290,7 +278,7 @@ List<CharacterListEntry> ClientCharacterList { get; set; }
 | `ClientCharacterList` | Client-side character list received from the server. |
 | `RequestCharacterList` | Client requests their character list from the server. |
 | `RequestLoadCharacter` | Client requests to load a specific character. |
-| `RequestCreateCharacter` | Client requests to create a new character from JSON data. |
+| `RequestCreateCharacter` | Client requests to create a new character from provided data. |
 | `RequestDeleteCharacter` | Client requests to delete a character. |
 
 ### CharacterManager (sealed) : GameObjectSystem<CharacterManager>
@@ -298,6 +286,7 @@ List<CharacterListEntry> ClientCharacterList { get; set; }
 Manages character CRUD operations and CharVar metadata discovery. Converted from a static class to a GameObjectSystem so that per-scene mutable state (_characterLists, _activeCharacters) is scoped to the scene and cleared on scene reload. CharVar metadata (_charVars, _characterDataType) is discovered once and held for the scene's lifetime. All public methods remain static via facades — callers need no changes. Auto-save is handled by <see cref="Persistence.AutoSaveSystem"/>.
 
 ```csharp
+static event Func<HexPlayerComponent, HexCharacterData
 override void Dispose()
 static IReadOnlyDictionary<string, CharVarInfo> CharVars
 static CharVarInfo GetCharVarInfo( string name )
@@ -317,6 +306,7 @@ static HexCharacterData CreateDefaultData()
 
 | Member | Description |
 |--------|-------------|
+| `HexCharacterData` |  |
 | `Dispose` |  |
 | `CharVars` | All discovered CharVar metadata. |
 | `GetCharVarInfo` | Get CharVar metadata by property name. |
@@ -500,6 +490,7 @@ Core player component. Holds networked character identity data visible to all pl
 [Sync] bool IsDead { get; set; }
 HexCharacter Character { get; set; }
 Connection Connection { get; set; }
+HexCharacterData ClientPrivateData { get; set; }
 T GetPrivateVar<T>( string name, T defaultValue )
 ```
 
@@ -517,6 +508,7 @@ T GetPrivateVar<T>( string name, T defaultValue )
 | `IsDead` |  |
 | `Character` | The active character for this player. Only valid on the server. |
 | `Connection` | The network connection for this player. |
+| `ClientPrivateData` | The private data for this player's active character, sent directly from the server via RPC. Only populated on the owner client. |
 | `GetPrivateVar` | Client-side: get a private CharVar value that was synced from the server. |
 
 ### HexPlayerSetup (static)
@@ -554,6 +546,7 @@ Handles the introduce mechanic RPC. Satellite component on the player GameObject
 Manages the recognizable names system. Characters are "Unknown" to others until formally introduced. Recognition is one-way and persists across sessions. Factions with IsGloballyRecognized are always known (e.g., police uniforms).
 
 ```csharp
+static event Func<HexCharacter, HexCharacter
 static bool DoesRecognize( HexCharacter observer, HexCharacter target )
 static bool Recognize( HexCharacter observer, string targetCharacterId )
 static int IntroduceToRange( HexPlayerComponent player, float range )
@@ -565,6 +558,7 @@ static string FormatForListener( HexPlayerComponent observer, HexPlayerComponent
 
 | Member | Description |
 |--------|-------------|
+| `HexCharacter` |  |
 | `DoesRecognize` | Server-side: check if observer recognizes target. |
 | `Recognize` | Server-side: add target to observer's recognition list. Returns true if newly recognized, false if already known. |
 | `IntroduceToRange` | Server-side: introduce a character to all players within range. Returns the number of players who newly recognized the introducer. |
@@ -768,6 +762,7 @@ string Format( HexPlayerComponent speaker, string message )
 Central chat routing system. Registers chat classes, parses prefixes, routes messages to the correct chat class, and delegates to CommandManager for non-chat / prefixed input.
 
 ```csharp
+static event Func<HexPlayerComponent, IChatClass
 static void Register( IChatClass chatClass )
 static void RegisterAlias( string alias, string targetPrefix )
 static IChatClass GetChatClass( string prefix )
@@ -780,6 +775,7 @@ static void SendDirectMessage( HexPlayerComponent sender, Connection target, ICh
 
 | Member | Description |
 |--------|-------------|
+| `IChatClass` |  |
 | `Register` | Register a chat class. If prefix is empty, it becomes the default IC chat. |
 | `RegisterAlias` | Register an alias for a chat class prefix (e.g. "//" → "ooc"). |
 | `GetChatClass` | Get a registered chat class by prefix. |
@@ -907,6 +903,7 @@ bool Has( string name )
 Manages command registration, parsing, permission checking, and execution. Commands are invoked when a player types /{name} in chat and it doesn't match a chat class prefix.
 
 ```csharp
+static event Func<HexPlayerComponent, HexCommand
 static void Register( HexCommand command )
 static HexCommand GetCommand( string name )
 static IReadOnlyDictionary<string, HexCommand> GetAllCommands()
@@ -915,6 +912,7 @@ static string Execute( HexPlayerComponent caller, string name, string rawArgs )
 
 | Member | Description |
 |--------|-------------|
+| `HexCommand` |  |
 | `Register` | Register a command. |
 | `GetCommand` | Get a command by name or alias. |
 | `GetAllCommands` | Get all registered commands. |
@@ -1014,6 +1012,7 @@ ConVar declarations for Hexagon framework configuration values. Each ConVar gett
 Manages character currency. Uses the "Money" CharVar on HexCharacterData for storage, which triggers existing dirty tracking and networking automatically.
 
 ```csharp
+static event Func<Characters.HexCharacter, int
 static string Format( int amount )
 static int GetMoney( HexCharacter character )
 static void GiveMoney( HexCharacter character, int amount, string reason )
@@ -1024,6 +1023,7 @@ static bool CanAfford( HexCharacter character, int amount )
 
 | Member | Description |
 |--------|-------------|
+| `int` |  |
 | `Format` | Format a money amount with the configured currency symbol (e.g. "$500"). |
 | `GetMoney` | Get a character's current money. |
 | `GiveMoney` | Give money to a character. Amount must be positive. |
@@ -1049,6 +1049,8 @@ void OnMoneyChanged( HexCharacter character, int oldAmount, int newAmount, strin
 A world-placed door that supports ownership, locking, access control, and breach mechanics. Interacted with via the USE key (IPressable). Locks can be damaged via IDamageable (shootlock) or the TryKick() API. Place on any GameObject in the scene. Set DoorId in the editor or let it auto-generate. Schema devs bind IsOpen to their door animation system. Authorization hierarchy: admin flag ("a") > character owner > faction member > access list
 
 ```csharp
+static event Func<HexPlayerComponent, DoorComponent
+static event Func<HexPlayerComponent, DoorComponent
 [Property] string DoorId { get; set; }
 [Property] string DoorName { get; set; }
 [Sync] bool IsLocked { get; set; }
@@ -1074,6 +1076,8 @@ void RemoveAccess( string characterId )
 
 | Member | Description |
 |--------|-------------|
+| `DoorComponent` |  |
+| `DoorComponent` |  |
 | `DoorId` | Unique identifier for this door. Auto-generated if empty on enable. |
 | `DoorName` | Display name shown in the tooltip. |
 | `IsLocked` | Whether the door is currently locked. Synced to all players. |
@@ -1272,11 +1276,13 @@ static bool CanJoinClass( string classId )
 Manages class-based loadout distribution. When a character is created or loaded, the loadout system checks their class for configured items and grants them.
 
 ```csharp
+static event Func<HexPlayerComponent, Characters
 static void ApplyLoadout( HexPlayerComponent player, Characters.HexCharacter character )
 ```
 
 | Member | Description |
 |--------|-------------|
+| `Characters` |  |
 | `ApplyLoadout` | Apply the loadout for a character's class. Creates items and adds them to the character's main inventory. |
 
 ### IHexLoadoutEvent (interface) : ISceneEvent<IHexLoadoutEvent>
@@ -1308,6 +1314,7 @@ bool HasAction
 void SetAction( string text, float time, Action<HexPlayerComponent> callback )
 void DoStaredAction( GameObject target, string text, float time, Action<HexPlayerComponent> callback, Action onCancel, float maxDistance )
 void CancelAction()
+static event Func<HexPlayerComponent, string
 ```
 
 | Member | Description |
@@ -1323,6 +1330,7 @@ void CancelAction()
 | `SetAction` | Start a timed action with a progress bar. Any existing action is replaced. |
 | `DoStaredAction` | Start a stared action that cancels if the player looks away or moves too far. |
 | `CancelAction` | Cancel the current action. Fires the cancel callback if set. |
+| `string` |  |
 
 ### ActionBarManager (static)
 
@@ -1365,6 +1373,7 @@ event Action OnActionBarChanged
 Per-player component handling weapon raise/lower state. Weapons default to lowered (cannot fire). Hold R for configurable duration to toggle. When raised, there's a short delay before firing is allowed. Schema weapon code should check CanFire before allowing shots. Special weapons can set AlwaysRaised or FireWhenLowered on WeaponItemDef.
 
 ```csharp
+static event Func<HexPlayerComponent, bool
 [Sync] bool IsWeaponRaised { get; set; }
 bool CanFire { get; set; }
 [Rpc.Host] void RequestToggleRaise()
@@ -1374,6 +1383,7 @@ void ToggleRaised()
 
 | Member | Description |
 |--------|-------------|
+| `bool` |  |
 | `IsWeaponRaised` | Whether the weapon is currently raised. Synced to all players for animations. |
 | `CanFire` | Server-side: whether the player can fire right now. Only true when raised and the fire delay has elapsed. |
 | `RequestToggleRaise` | Server RPC: client requests to toggle weapon raise state. |
@@ -2003,6 +2013,7 @@ static void RegisterFlag( char flag, string description )
 static FlagInfo GetFlagInfo( char flag )
 static IReadOnlyDictionary<char, FlagInfo> GetAllFlags()
 static bool HasPermission( HexPlayerComponent player, string requirement )
+static event Func<HexPlayerComponent, string
 ```
 
 | Member | Description |
@@ -2011,6 +2022,7 @@ static bool HasPermission( HexPlayerComponent player, string requirement )
 | `GetFlagInfo` | Get info about a registered flag. |
 | `GetAllFlags` | Get all registered flags. |
 | `HasPermission` | Check if a player has permission for a given requirement. If requirement is 1-2 characters and all are registered flags, checks character flags directly. Otherwise fires IPermissionCheckListener for schema-defined permissions. The 's' (Super Admin) flag bypasses all checks. |
+| `string` |  |
 
 ### IHexPermissionEvent (interface) : ISceneEvent<IHexPermissionEvent>
 
@@ -2096,6 +2108,7 @@ A world-placed storage container that players can interact with via USE key. Ite
 [Property] int Height { get; set; }
 [Property] string InventoryId { get; set; }
 HexInventory Inventory
+static event Func<HexPlayerComponent, StorageComponent
 bool CanPress( Component.IPressable.Event e )
 bool Press( Component.IPressable.Event e )
 void Release( Component.IPressable.Event e )
@@ -2109,6 +2122,7 @@ void Blur( Component.IPressable.Event e )
 | `Height` | Grid height of the storage inventory. |
 | `InventoryId` | Persisted inventory ID. Set automatically on first interaction. |
 | `Inventory` | The backing inventory for this container. |
+| `StorageComponent` |  |
 | `CanPress` |  |
 | `Press` |  |
 | `Release` |  |
@@ -2321,6 +2335,8 @@ List<VendorItem> Items { get; set; }
 Manages vendor registration, buy/sell operations, and lookup. VendorComponents register/unregister themselves on enable/disable. Persistence is handled directly by each VendorComponent via DatabaseManager.
 
 ```csharp
+static event Func<HexPlayerComponent, VendorComponent
+static event Func<HexPlayerComponent, VendorComponent
 override void Dispose()
 static VendorComponent GetVendor( string vendorId )
 static IReadOnlyDictionary<string, VendorComponent> GetAllVendors()
@@ -2328,6 +2344,8 @@ static IReadOnlyDictionary<string, VendorComponent> GetAllVendors()
 
 | Member | Description |
 |--------|-------------|
+| `VendorComponent` |  |
+| `VendorComponent` |  |
 | `Dispose` |  |
 | `GetVendor` | Get a vendor component by its ID. |
 | `GetAllVendors` | Get all registered vendors. |

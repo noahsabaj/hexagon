@@ -12,6 +12,8 @@ public sealed class CommandManager : GameObjectSystem<CommandManager>
 	private readonly Dictionary<string, HexCommand> _commands = new();
 	private readonly Dictionary<string, string> _aliases = new();
 
+	public static event Func<HexPlayerComponent, HexCommand, bool> OnCanRunCommand;
+
 	public CommandManager( Scene scene ) : base( scene )
 	{
 		_instance = this;
@@ -85,9 +87,13 @@ public sealed class CommandManager : GameObjectSystem<CommandManager>
 			return "You do not have permission to use this command.";
 
 		// Hook: ICanRunCommandListener
-		if ( !SceneEventExtensions.CanAll<IHexCommandEvent>(
-			x => x.CanRunCommand( caller, command ) ) )
-			return "You are not allowed to run this command.";
+		if ( OnCanRunCommand != null )
+		{
+			foreach ( Func<HexPlayerComponent, HexCommand, bool> handler in OnCanRunCommand.GetInvocationList() )
+			{
+				if ( !handler( caller, command ) ) return "You are not allowed to run this command.";
+			}
+		}
 
 		// Parse arguments
 		var context = ParseArguments( command, rawArgs, out var error );

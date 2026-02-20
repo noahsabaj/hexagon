@@ -12,6 +12,28 @@ public sealed class VendorManager : GameObjectSystem<VendorManager>
 
 	private readonly Dictionary<string, VendorComponent> _vendors = new();
 
+	/// <summary>Called to check if a player can buy an item from a vendor.</summary>
+	public static event Func<HexPlayerComponent, VendorComponent, VendorItem, bool> OnCanBuyItem;
+	
+	/// <summary>Called to check if a player can sell an item to a vendor.</summary>
+	public static event Func<HexPlayerComponent, VendorComponent, VendorItem, ItemInstance, bool> OnCanSellItem;
+
+	internal static bool CheckCanBuy( HexPlayerComponent player, VendorComponent vendor, VendorItem item )
+	{
+		if ( OnCanBuyItem == null ) return true;
+		foreach ( Func<HexPlayerComponent, VendorComponent, VendorItem, bool> handler in OnCanBuyItem.GetInvocationList() )
+			if ( !handler( player, vendor, item ) ) return false;
+		return true;
+	}
+
+	internal static bool CheckCanSell( HexPlayerComponent player, VendorComponent vendor, VendorItem vendorItem, ItemInstance item )
+	{
+		if ( OnCanSellItem == null ) return true;
+		foreach ( Func<HexPlayerComponent, VendorComponent, VendorItem, ItemInstance, bool> handler in OnCanSellItem.GetInvocationList() )
+			if ( !handler( player, vendor, vendorItem, item ) ) return false;
+		return true;
+	}
+
 	public VendorManager( Scene scene ) : base( scene )
 	{
 		_instance = this;
@@ -78,8 +100,7 @@ public sealed class VendorManager : GameObjectSystem<VendorManager>
 			return (false, "Invalid item definition.");
 
 		// Hook: can buy?
-		if ( !SceneEventExtensions.CanAll<IHexVendorEvent>(
-			x => x.CanBuyItem( player, vendor, vendorItem ) ) )
+		if ( !CheckCanBuy( player, vendor, vendorItem ) )
 			return (false, "You are not allowed to buy this item.");
 
 		// Check money
@@ -148,8 +169,7 @@ public sealed class VendorManager : GameObjectSystem<VendorManager>
 			return (false, "This vendor doesn't buy that item.");
 
 		// Hook: can sell?
-		if ( !SceneEventExtensions.CanAll<IHexVendorEvent>(
-			x => x.CanSellItem( player, vendor, vendorItem, instance ) ) )
+		if ( !CheckCanSell( player, vendor, vendorItem, instance ) )
 			return (false, "You are not allowed to sell this item.");
 
 		// Remove from inventory

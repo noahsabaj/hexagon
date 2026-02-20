@@ -12,6 +12,9 @@ namespace Hexagon.Doors;
 /// </summary>
 public sealed class DoorComponent : Component, Component.IPressable, Component.IDamageable
 {
+	public static event Func<HexPlayerComponent, DoorComponent, bool> OnCanUseDoor;
+	public static event Func<HexPlayerComponent, DoorComponent, bool> OnCanKickDoor;
+
 	/// <summary>
 	/// Unique identifier for this door. Auto-generated if empty on enable.
 	/// </summary>
@@ -97,8 +100,12 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 		var player = Core.PressableHelper.GetPlayer( e );
 		if ( player?.Character == null ) return false;
 
-		return SceneEventExtensions.CanAll<IHexDoorEvent>(
-			x => x.CanUseDoor( player, this ) );
+		if ( OnCanUseDoor == null ) return true;
+		foreach ( Func<HexPlayerComponent, DoorComponent, bool> handler in OnCanUseDoor.GetInvocationList() )
+		{
+			if ( !handler( player, this ) ) return false;
+		}
+		return true;
 	}
 
 	public bool Press( Component.IPressable.Event e )
@@ -202,9 +209,13 @@ public sealed class DoorComponent : Component, Component.IPressable, Component.I
 		if ( !Config.HexConfig.Get<bool>( "door.kickEnabled", true ) ) return;
 
 		// Permission hook
-		if ( !SceneEventExtensions.CanAll<IHexDoorEvent>(
-			x => x.CanKickDoor( player, this ) ) )
-			return;
+		if ( OnCanKickDoor != null )
+		{
+			foreach ( Func<HexPlayerComponent, DoorComponent, bool> handler in OnCanKickDoor.GetInvocationList() )
+			{
+				if ( !handler( player, this ) ) return;
+			}
+		}
 
 		var kickTime = Config.HexConfig.Get<float>( "door.kickTime", 3.0f );
 

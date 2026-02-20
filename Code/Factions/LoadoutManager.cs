@@ -6,6 +6,9 @@ namespace Hexagon.Factions;
 /// </summary>
 public static class LoadoutManager
 {
+	/// <summary>Called to check if a loadout can be applied.</summary>
+	public static event Func<HexPlayerComponent, Characters.HexCharacter, ClassDefinition, bool> OnCanApplyLoadout;
+
 	/// <summary>
 	/// Apply the loadout for a character's class. Creates items and adds them to the character's main inventory.
 	/// </summary>
@@ -21,9 +24,13 @@ public static class LoadoutManager
 			return;
 
 		// Permission check
-		if ( !SceneEventExtensions.CanAll<IHexLoadoutEvent>(
-			x => x.CanApplyLoadout( player, character, classDef ) ) )
-			return;
+		if ( OnCanApplyLoadout != null )
+		{
+			foreach ( Func<HexPlayerComponent, Characters.HexCharacter, ClassDefinition, bool> handler in OnCanApplyLoadout.GetInvocationList() )
+			{
+				if ( !handler( player, character, classDef ) ) return;
+			}
+		}
 
 		// Find or create the character's main inventory
 		var inventories = Inventory.InventoryManager.LoadForCharacter( character.Data.Id );

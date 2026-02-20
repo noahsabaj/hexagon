@@ -34,8 +34,13 @@ public sealed class ActionBarComponent : Component
 		var player = GetComponent<HexPlayerComponent>();
 		if ( player == null || time <= 0 ) return;
 
-		if ( !SceneEventExtensions.CanAll<IHexActionEvent>( x => x.CanStartAction( player, text ) ) )
-			return;
+		if ( OnCanStartAction != null )
+		{
+			foreach ( Func<HexPlayerComponent, string, bool> handler in OnCanStartAction.GetInvocationList() )
+			{
+				if ( !handler( player, text ) ) return;
+			}
+		}
 
 		_action = new ActiveAction
 		{
@@ -58,8 +63,13 @@ public sealed class ActionBarComponent : Component
 		var player = GetComponent<HexPlayerComponent>();
 		if ( player == null || target == null || time <= 0 ) return;
 
-		if ( !SceneEventExtensions.CanAll<IHexActionEvent>( x => x.CanStartAction( player, text ) ) )
-			return;
+		if ( OnCanStartAction != null )
+		{
+			foreach ( Func<HexPlayerComponent, string, bool> handler in OnCanStartAction.GetInvocationList() )
+			{
+				if ( !handler( player, text ) ) return;
+			}
+		}
 
 		_action = new ActiveAction
 		{
@@ -185,4 +195,7 @@ public sealed class ActionBarComponent : Component
 		IHexActionEvent.Post( x => x.OnActionCancelled( player, action.Text ) );
 		IHexActionEvent.Post( x => x.OnActionBarUpdated( player ) );
 	}
+
+	/// <summary>Called to check if an action can be started.</summary>
+	public static event Func<HexPlayerComponent, string, bool> OnCanStartAction;
 }

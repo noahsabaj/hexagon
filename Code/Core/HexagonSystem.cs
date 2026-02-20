@@ -18,6 +18,8 @@ public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.I
 
 	private readonly Dictionary<ulong, HexPlayerComponent> _players = new();
 
+	public static event Func<Connection, Vector3, Vector3> OnGetSpawnPosition;
+
 	/// <summary>
 	/// All currently connected players keyed by Steam ID.
 	/// </summary>
@@ -85,9 +87,13 @@ public sealed class HexagonSystem : GameObjectSystem<HexagonSystem>, Component.I
 		var config = Scene.GetAll<HexagonConfigComponent>().FirstOrDefault();
 		var spawnPos = config?.SpawnPosition ?? new Vector3( 0, 0, 100 );
 
-		spawnPos = SceneEventExtensions.Reduce<IHexPlayerEvent, Vector3>(
-			spawnPos, ( listener, pos ) => listener.GetSpawnPosition( connection, pos )
-		);
+		if ( OnGetSpawnPosition != null )
+		{
+			foreach ( Func<Connection, Vector3, Vector3> handler in OnGetSpawnPosition.GetInvocationList() )
+			{
+				spawnPos = handler( connection, spawnPos );
+			}
+		}
 
 		// Create bare networking object — no body until character loads
 		var playerGo = new GameObject( true, $"Player - {connection.DisplayName}" );

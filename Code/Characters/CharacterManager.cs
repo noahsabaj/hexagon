@@ -24,6 +24,8 @@ public sealed class CharacterManager : GameObjectSystem<CharacterManager>
 		_instance = this;
 	}
 
+	public static event Func<HexPlayerComponent, HexCharacterData, bool> OnCanCharacterCreate;
+
 	public override void Dispose()
 	{
 		SaveAll();
@@ -189,10 +191,16 @@ public sealed class CharacterManager : GameObjectSystem<CharacterManager>
 	{
 		if ( Instance == null ) return null;
 
-		if ( !SceneEventExtensions.CanAll<IHexCharacterEvent>( x => x.CanCharacterCreate( player, data ) ) )
+		if ( OnCanCharacterCreate != null )
 		{
-			Log.Warning( $"Hexagon: Character creation blocked for {player.DisplayName}" );
-			return null;
+			foreach ( Func<HexPlayerComponent, HexCharacterData, bool> handler in OnCanCharacterCreate.GetInvocationList() )
+			{
+				if ( !handler( player, data ) )
+				{
+					Log.Warning( $"Hexagon: Character creation blocked for {player.DisplayName}" );
+					return null;
+				}
+			}
 		}
 
 		var maxChars = Config.HexConfig.Get<int>( "character.maxPerPlayer", 5 );

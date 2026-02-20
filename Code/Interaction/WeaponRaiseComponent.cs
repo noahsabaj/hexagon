@@ -10,6 +10,17 @@ namespace Hexagon.Interaction;
 /// </summary>
 public sealed class WeaponRaiseComponent : Component
 {
+	/// <summary>Called to check if a player can raise their weapon.</summary>
+	public static event Func<HexPlayerComponent, bool> OnCanRaiseWeapon;
+
+	private static bool CheckCanRaiseWeapon( HexPlayerComponent player )
+	{
+		if ( OnCanRaiseWeapon == null ) return true;
+		foreach ( Func<HexPlayerComponent, bool> handler in OnCanRaiseWeapon.GetInvocationList() )
+			if ( !handler( player ) ) return false;
+		return true;
+	}
+
 	/// <summary>
 	/// Whether the weapon is currently raised. Synced to all players for animations.
 	/// </summary>
@@ -43,7 +54,7 @@ public sealed class WeaponRaiseComponent : Component
 			return;
 
 		// Permission hook (only when raising)
-		if ( !IsWeaponRaised && !SceneEventExtensions.CanAll<IHexWeaponEvent>( x => x.CanRaiseWeapon( player ) ) )
+		if ( !IsWeaponRaised && !CheckCanRaiseWeapon( player ) )
 			return;
 
 		ToggleRaised();

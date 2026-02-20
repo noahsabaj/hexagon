@@ -6,6 +6,8 @@ namespace Hexagon.Currency;
 /// </summary>
 public static class CurrencyManager
 {
+	public static event Func<Characters.HexCharacter, int, int, string, bool> OnCanMoneyChange;
+
 	/// <summary>
 	/// Format a money amount with the configured currency symbol (e.g. "$500").
 	/// </summary>
@@ -60,9 +62,13 @@ public static class CurrencyManager
 
 	private static bool TryChangeMoney( HexCharacter character, int current, int newAmount, string reason )
 	{
-		if ( !SceneEventExtensions.CanAll<IHexCurrencyEvent>(
-			x => x.CanMoneyChange( character, current, newAmount, reason ) ) )
-			return false;
+		if ( OnCanMoneyChange != null )
+		{
+			foreach ( Func<Characters.HexCharacter, int, int, string, bool> handler in OnCanMoneyChange.GetInvocationList() )
+			{
+				if ( !handler( character, current, newAmount, reason ) ) return false;
+			}
+		}
 
 		character.SetVar( "Money", newAmount );
 		IHexCurrencyEvent.Post(

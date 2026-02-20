@@ -56,13 +56,21 @@ public sealed class StorageComponent : Component, Component.IPressable
 
 	// --- IPressable ---
 
+	public static event Func<HexPlayerComponent, StorageComponent, bool> OnCanOpenStorage;
+
 	public bool CanPress( Component.IPressable.Event e )
 	{
 		var player = Core.PressableHelper.GetPlayer( e );
 		if ( player?.Character == null ) return false;
 
-		return SceneEventExtensions.CanAll<IHexStorageEvent>(
-			x => x.CanOpenStorage( player, this ) );
+		if ( OnCanOpenStorage == null ) return true;
+
+		foreach ( Func<HexPlayerComponent, StorageComponent, bool> handler in OnCanOpenStorage.GetInvocationList() )
+		{
+			if ( !handler( player, this ) ) return false;
+		}
+
+		return true;
 	}
 
 	public bool Press( Component.IPressable.Event e )

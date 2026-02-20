@@ -46,15 +46,15 @@ public sealed class CharacterCrudComponent : Component
 	}
 
 	/// <summary>
-	/// Client requests to create a new character from JSON data.
+	/// Client requests to create a new character from provided data.
 	/// </summary>
 	[Rpc.Host]
-	public void RequestCreateCharacter( string json )
+	public void RequestCreateCharacter( Dictionary<string, string> values )
 	{
 		var player = Core.RpcHelper.GetCallingPlayer();
 		if ( player == null || player != Player ) return;
 
-		if ( string.IsNullOrEmpty( json ) )
+		if ( values == null )
 		{
 			ReceiveCharacterCreateResult( false, "Invalid character data." );
 			return;
@@ -64,24 +64,17 @@ public sealed class CharacterCrudComponent : Component
 		{
 			var data = CharacterManager.CreateDefaultData();
 
-			var values = Json.Deserialize<Dictionary<string, object>>( json );
-			if ( values == null )
-			{
-				ReceiveCharacterCreateResult( false, "Invalid character data." );
-				return;
-			}
-
 			foreach ( var kvp in values )
 			{
 				if ( kvp.Key == "Faction" )
 				{
-					data.Faction = kvp.Value?.ToString();
+					data.Faction = kvp.Value;
 					continue;
 				}
 
 				if ( kvp.Key == "Class" )
 				{
-					data.Class = kvp.Value?.ToString();
+					data.Class = kvp.Value;
 					continue;
 				}
 
@@ -91,16 +84,21 @@ public sealed class CharacterCrudComponent : Component
 
 				if ( varInfo.PropertyType == typeof( string ) )
 				{
-					varInfo.SetValue( data, kvp.Value?.ToString() ?? "" );
+					varInfo.SetValue( data, kvp.Value ?? "" );
 				}
 				else if ( varInfo.PropertyType == typeof( int ) )
 				{
-					if ( int.TryParse( kvp.Value?.ToString(), out var intVal ) )
+					if ( int.TryParse( kvp.Value, out var intVal ) )
 						varInfo.SetValue( data, intVal );
 				}
 				else
 				{
-					varInfo.SetValue( data, kvp.Value );
+					// For other types, try to use Convert
+					try
+					{
+						varInfo.SetValue( data, Convert.ChangeType( kvp.Value, varInfo.PropertyType ) );
+					}
+					catch { }
 				}
 			}
 
@@ -142,18 +140,9 @@ public sealed class CharacterCrudComponent : Component
 	// --- Client-bound RPCs (server calls these) ---
 
 	[Rpc.Owner]
-	private void ReceiveCharacterList( string json )
+	private void ReceiveCharacterList( List<CharacterListEntry> entries )
 	{
-		try
-		{
-			ClientCharacterList = Json.Deserialize<List<CharacterListEntry>>( json ) ?? new();
-		}
-		catch ( Exception ex )
-		{
-			Log.Error( $"Hexagon: Failed to deserialize character list from server: {ex.Message}" );
-			ClientCharacterList = new();
-		}
-
+		ClientCharacterList = entries ?? new();
 		IHexCrudEvent.Post( x => x.OnCharacterListReceived() );
 	}
 
@@ -190,7 +179,6 @@ public sealed class CharacterCrudComponent : Component
 			};
 		} ).ToList();
 
-		var json = Json.Serialize( entries );
-		ReceiveCharacterList( json );
+		ReceiveCharacterList( entries );
 	}
 }

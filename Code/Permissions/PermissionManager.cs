@@ -94,8 +94,16 @@ public sealed class PermissionManager : GameObjectSystem<PermissionManager>
 		}
 
 		// Custom permission — fire hook
-		return SceneEventExtensions.CanAll<IHexPermissionEvent>(
-			x => x.OnPermissionCheck( player, requirement )
-		);
+		if ( OnPermissionCheck == null ) return true;
+
+		foreach ( Func<HexPlayerComponent, string, bool> handler in OnPermissionCheck.GetInvocationList() )
+		{
+			if ( !handler( player, requirement ) ) return false;
+		}
+
+		return true;
 	}
+
+	/// <summary>Called when checking a custom permission string.</summary>
+	public static event Func<HexPlayerComponent, string, bool> OnPermissionCheck;
 }
