@@ -1,3 +1,6 @@
+using System.Threading;
+using System.Threading.Tasks;
+
 namespace Hexagon.Persistence;
 
 /// <summary>
@@ -19,15 +22,59 @@ public sealed class DatabaseManager : GameObjectSystem<DatabaseManager>
 	private readonly Dictionary<string, Dictionary<string, ICollectionIndex>> _indexes = new();
 	private const string BasePath = "hexagon";
 
+	// Background queue for disk IO
+	private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _writeQueue = new();
+	private readonly CancellationTokenSource _cts = new();
+	private Task _workerTask;
+
 	public DatabaseManager( Scene scene ) : base( scene )
 	{
 		_instance = this;
 		FileSystem.Data.CreateDirectory( BasePath );
+
+		// Start background writer
+		_workerTask = GameTask.RunInThreadAsync( ProcessWriteQueue );
+
 		Log.Info( "Hexagon: Database initialized." );
+	}
+
+	private async Task ProcessWriteQueue()
+	{
+		var token = _cts.Token;
+		while ( !token.IsCancellationRequested )
+		{
+			if ( _writeQueue.TryDequeue( out var action ) )
+			{
+				try
+				{
+					action();
+				}
+				catch ( Exception e )
+				{
+					Log.Error( $"Hexagon Database IO error: {e}" );
+				}
+			}
+			else
+			{
+				// Yield softly when queue is empty
+				await Task.Delay( 10, token );
+			}
+		}
 	}
 
 	public override void Dispose()
 	{
+		// Cancel the background loop and theoretically flush remaining writes
+		_cts.Cancel();
+		
+		// Flush remaining queue synchronously on shutdown
+		while ( _writeQueue.TryDequeue( out var action ) )
+		{
+			try { action(); } catch { }
+		}
+
+		_cts.Dispose();
+
 		_cache.Clear();
 		_indexes.Clear();
 
@@ -75,7 +122,10 @@ public sealed class DatabaseManager : GameObjectSystem<DatabaseManager>
 		Instance._cache[collection][key] = json;
 
 		var path = GetPath( collection, key );
-		FileSystem.Data.WriteAllText( path, json );
+		Instance._writeQueue.Enqueue( () => 
+		{
+			FileSystem.Data.WriteAllText( path, json );
+		} );
 
 		if ( Instance._indexes.TryGetValue( collection, out var byField ) )
 			foreach ( var idx in byField.Values )
@@ -125,8 +175,19 @@ public sealed class DatabaseManager : GameObjectSystem<DatabaseManager>
 			col.Remove( key );
 
 		var path = GetPath( collection, key );
-		if ( FileSystem.Data.FileExists( path ) )
-			FileSystem.Data.DeleteFile( path );
+		if ( Instance != null )
+		{
+			Instance._writeQueue.Enqueue( () => 
+			{
+				if ( FileSystem.Data.FileExists( path ) )
+					FileSystem.Data.DeleteFile( path );
+			} );
+		}
+		else
+		{
+			if ( FileSystem.Data.FileExists( path ) )
+				FileSystem.Data.DeleteFile( path );
+		}
 
 		if ( Instance?._indexes.TryGetValue( collection, out var byField ) == true )
 			foreach ( var idx in byField.Values )
