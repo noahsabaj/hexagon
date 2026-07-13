@@ -6,6 +6,7 @@
 .vs/*
 .vscode/*
 *.csproj
+!tests/**/*.csproj
 obj
 bin
 Properties/*
@@ -22,6 +23,8 @@ code/Properties/*
 *launchSettings.json
 *.sln
 *.slnx
+!tests/**/*.sln
+!tests/**/*.slnx
 
 *idea
 

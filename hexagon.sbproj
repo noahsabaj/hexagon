@@ -22,7 +22,6 @@
     "RankType": "None",
     "PerMapRanking": false,
     "LeaderboardType": "None",
-    "CsProjName": "",
-    "StartupScene": "scenes/minimal.scene"
+    "CsProjName": ""
   }
 }
