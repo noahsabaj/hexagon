@@ -2,13 +2,13 @@
 
 ## Composition
 
-`HexagonBootstrapComponent` declares a stable schema ID. Scene-scoped `IHexSchemaSource` implementations explicitly offer descriptors; duplicate or missing IDs fail startup. `SchemaCompiler` invokes `IHexSchema.Configure(SchemaBuilder)`, configures each `IHexModule`, validates registrations, and topologically orders modules by declared dependencies and stable ID.
+`HexagonBootstrapComponent` declares a stable schema ID. Scene-scoped `IHexSchemaSource` implementations explicitly offer descriptors; duplicate or missing IDs fail startup. Each descriptor supplies the game-owned `IPersistenceStorage` factory so the whitelisted library never owns raw operating-system access. Duplicate or missing schema IDs, a throwing factory, or a null adapter fail startup. `SchemaCompiler` invokes `IHexSchema.Configure(SchemaBuilder)`, configures each `IHexModule`, validates registrations, and topologically orders modules by declared dependencies and stable ID.
 
-Host and client are separate scopes even in a listen-server process. The host owns persistence, domain services, policies, interaction sessions, and one network-spawned command transport. The client owns a non-networked `HexClientStore`, controller, and Razor root. Scene disposal revokes command/session state and drains persistence.
+Host and client are separate scopes even in a listen-server process. The host owns persistence, domain services, policies, interaction sessions, and one network-spawned command transport. The client owns a non-networked `HexClientStore`, controller, and Razor root. Scene disposal revokes command/session state and performs the provider's idempotent structured shutdown.
 
 ## Layers
 
-Domain and Application do not reference Sandbox. Networking contains closed DTOs and commands, never server aggregates. Runtime and Infrastructure adapt `Rpc.Caller`, `[Rpc.*]`, `[Sync]`, scene tracing, resources, and `FileSystem.Data` at the edge. Architectural tests enforce these boundaries.
+Domain and Application do not reference Sandbox. Networking contains closed DTOs and commands, never server aggregates. Runtime and Infrastructure adapt `Rpc.Caller`, `[Rpc.*]`, `[Sync]`, scene tracing, and resources at the edge. The consuming standalone game maps `FileSystem.Data` to its physical storage adapter. Architectural tests enforce these boundaries.
 
 ## Mutation flow
 

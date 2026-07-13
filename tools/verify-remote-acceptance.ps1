@@ -9,6 +9,14 @@ param(
     [Parameter(Mandatory)]
     [string] $SchemaRoot,
 
+    [Parameter(Mandatory)]
+    [ValidatePattern('^[a-f0-9]{40}$')]
+    [string] $HexagonSha,
+
+    [Parameter(Mandatory)]
+    [ValidatePattern('^[a-f0-9]{40}$')]
+    [string] $HL2RPSha,
+
     [Parameter()]
     [switch] $WriteTemplate
 )
@@ -31,24 +39,47 @@ $requiredObservations = @(
     'restart_restores_all_state'
 )
 
+function Get-RepositoryHead {
+    param([Parameter(Mandatory)][string] $Root)
+
+    $global:LASTEXITCODE = 0
+    $head = (& git -C $Root rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $head -cnotmatch '^[a-f0-9]{40}$') {
+        throw "Could not resolve a lowercase full Git HEAD for '$Root'."
+    }
+    return $head
+}
+
 function Get-SourceFingerprint {
-    param([Parameter(Mandatory)][string[]] $Roots)
+    param([Parameter(Mandatory)][object[]] $Repositories)
 
     $sha = [System.Security.Cryptography.IncrementalHash]::CreateHash(
         [System.Security.Cryptography.HashAlgorithmName]::SHA256)
     try {
-        foreach ($root in $Roots) {
-            $resolved = (Resolve-Path -LiteralPath $root).Path.TrimEnd('\')
-            $files = Get-ChildItem -LiteralPath $resolved -Recurse -File | Where-Object {
-                $_.FullName -notmatch '[\\/](\.git|bin|obj|\.vs|Libraries)[\\/]' -and
-                $_.Name -notmatch '^remote-acceptance(?:[.-].*)?\.json$' -and
-                $_.Extension -in @('.cs', '.razor', '.scss', '.json', '.scene', '.sbproj', '.ps1', '.md')
-            } | Sort-Object FullName
-            foreach ($file in $files) {
-                $relative = $file.FullName.Substring($resolved.Length + 1).Replace('\', '/')
-                $pathBytes = [System.Text.Encoding]::UTF8.GetBytes("$relative`n")
+        foreach ($repository in $Repositories) {
+            $resolved = (Resolve-Path -LiteralPath ([string]$repository.Root)).Path.TrimEnd('\')
+            $global:LASTEXITCODE = 0
+            [string[]]$tracked = @(& git -C $resolved ls-files --cached --others --exclude-standard)
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not enumerate tracked release inputs for '$resolved'."
+            }
+            [Array]::Sort($tracked, [System.StringComparer]::Ordinal)
+            foreach ($trackedPath in $tracked) {
+                $relative = $trackedPath.Replace('\', '/')
+                # Evidence manifests are outputs of this verifier, not release inputs.
+                if ($relative -match '(^|/)remote-acceptance(?:[.-][^/]*)?\.json$') { continue }
+                $filePath = Join-Path $resolved $relative.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+                if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+                    # A dirty pre-commit worktree can contain an indexed deletion. The release
+                    # publisher separately requires a clean checkout, where every enumerated
+                    # path is tracked and present; template verification still fingerprints the
+                    # exact current tree used by local remediation checks.
+                    continue
+                }
+                $pathBytes = [System.Text.Encoding]::UTF8.GetBytes(
+                    "$([string]$repository.Label)/$relative`n")
                 $sha.AppendData($pathBytes)
-                $stream = [System.IO.File]::OpenRead($file.FullName)
+                $stream = [System.IO.File]::OpenRead($filePath)
                 try {
                     $buffer = [byte[]]::new(65536)
                     while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
@@ -74,7 +105,16 @@ function Get-FileSha256 {
 
 $hexagonRootPath = (Resolve-Path -LiteralPath $HexagonRoot).Path
 $schemaRootPath = (Resolve-Path -LiteralPath $SchemaRoot).Path
-$fingerprint = Get-SourceFingerprint -Roots @($hexagonRootPath, $schemaRootPath)
+if ((Get-RepositoryHead -Root $hexagonRootPath) -cne $HexagonSha) {
+    throw "Hexagon checkout HEAD does not match evidence SHA '$HexagonSha'."
+}
+if ((Get-RepositoryHead -Root $schemaRootPath) -cne $HL2RPSha) {
+    throw "HL2RP checkout HEAD does not match evidence SHA '$HL2RPSha'."
+}
+$fingerprint = Get-SourceFingerprint -Repositories @(
+    [pscustomobject]@{ Label = 'hexagon'; Root = $hexagonRootPath },
+    [pscustomobject]@{ Label = 'hl2rp-hexagon'; Root = $schemaRootPath }
+)
 $evidenceFullPath = [System.IO.Path]::GetFullPath($EvidencePath)
 $attestationStatement = 'I attest that I personally executed the documented Hexagon v2 dedicated-server/two-client run and that every passing observation references contemporaneous artifacts from that run.'
 
@@ -88,13 +128,15 @@ if ($WriteTemplate) {
         }
     }
     $template = [ordered]@{
-        format = 'hexagon-v2-manual-remote-acceptance/1'
+        format = 'hexagon-v2-manual-remote-acceptance/2'
         evidence_kind = 'manual_operator_attestation'
         schema = 'hl2rp'
         runbook = 'hexagon/docs/testing.md#manual-dedicated-server-two-client-runbook'
         run_id = [Guid]::NewGuid().ToString('D')
         started_at_utc = ''
         completed_at_utc = ''
+        hexagon_sha = $HexagonSha
+        hl2rp_sha = $HL2RPSha
         source_fingerprint = $fingerprint
         operator = [ordered]@{
             name = ''
@@ -133,13 +175,17 @@ if (-not (Test-Path -LiteralPath $evidenceFullPath -PathType Leaf)) {
     throw "Manual remote-acceptance evidence was not found at '$evidenceFullPath'."
 }
 $evidence = Get-Content -LiteralPath $evidenceFullPath -Raw | ConvertFrom-Json
-if ($evidence.format -cne 'hexagon-v2-manual-remote-acceptance/1' -or
+if ($evidence.format -cne 'hexagon-v2-manual-remote-acceptance/2' -or
     $evidence.evidence_kind -cne 'manual_operator_attestation' -or
     $evidence.schema -cne 'hl2rp') {
     throw 'Remote acceptance evidence is not the supported manual-attestation format.'
 }
 if ($evidence.runbook -cne 'hexagon/docs/testing.md#manual-dedicated-server-two-client-runbook') {
     throw 'Remote acceptance evidence targets an unknown runbook revision.'
+}
+if ([string]$evidence.hexagon_sha -cne $HexagonSha -or
+    [string]$evidence.hl2rp_sha -cne $HL2RPSha) {
+    throw 'Remote acceptance evidence does not target both exact source SHAs.'
 }
 if ($evidence.source_fingerprint -cne $fingerprint) {
     throw "Remote acceptance evidence targets a different source fingerprint. Expected '$fingerprint'."

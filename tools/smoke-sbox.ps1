@@ -99,6 +99,7 @@ function Invoke-ProbeRun {
         0L
     }
     $captured = [System.Text.StringBuilder]::new()
+    $fatalPattern = '(?i)Whitelist violation|Compile of .* Failed|Resource Compile Failed|ERROR recompiling|Invalid full path|problem opening the StartupScene|Broken Reference:|Error opening (stylesheet|resource).*\b(hexagon|hl2rp)|Error when trying to network (serialize|deserialize) object|\]\s+(Error|Fatal)\s*(\||:)|\b[A-Za-z0-9_.]+Exception:\s|HEXAGON_(HOST|CLIENT)_FAILED|HEXAGON_SNAPSHOT_WIRE_(ENCODE|DECODE)_FAILED|HEXAGON_DRAIN_(FAILED|DEGRADED)|HL2RP_PROBE_FAILED'
     $escapedManifest = $manifestPath.Replace('"', '\"')
     $arguments = "-project `"$escapedManifest`" +hexagon-data-root `"$DataRoot`" +hexagon-verification-probe `"$Probe`""
 
@@ -113,6 +114,7 @@ function Invoke-ProbeRun {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $hostReady = $false
     $clientReady = $false
+    $clientSessionReady = $false
     $drained = $false
     $probeMatch = $null
 
@@ -259,6 +261,16 @@ function Invoke-ProbeRun {
 				finally {
 					$typeContent.Dispose()
 				}
+				$compileDelta = Read-LogDelta -Path $logPath -Offset $logOffset
+				$logOffset = $compileDelta.Offset
+				if (-not [string]::IsNullOrEmpty($compileDelta.Text)) {
+					[void]$captured.Append($compileDelta.Text)
+				}
+				$compileFatal = @($captured.ToString() -split "`r?`n" | Where-Object { $_ -match $fatalPattern })
+				if ($compileFatal.Count -gt 0) {
+					$summary = ($compileFatal | Select-Object -Unique | Select-Object -First 30) -join "`n"
+					throw "s&box '$Probe' failed before component hotload:`n$summary"
+				}
 				if (-not $typeReady) {
 					Start-Sleep -Milliseconds 250
 				}
@@ -397,9 +409,7 @@ function Invoke-ProbeRun {
             }
 
             $logText = $captured.ToString()
-            $fatalLines = @($logText -split "`r?`n" | Where-Object {
-                $_ -match '(?i)Whitelist violation|Compile of .* Failed|Resource Compile Failed|ERROR recompiling|Invalid full path|problem opening the StartupScene|Broken Reference:|Error opening (stylesheet|resource).*\b(hexagon|hl2rp)|\]\s+(Error|Fatal)\s*(\||:)|\b[A-Za-z0-9_.]+Exception:\s|HEXAGON_(HOST|CLIENT)_FAILED|HEXAGON_DRAIN_FAILED|HL2RP_PROBE_FAILED'
-            })
+            $fatalLines = @($logText -split "`r?`n" | Where-Object { $_ -match $fatalPattern })
             if ($fatalLines.Count -gt 0) {
                 $summary = ($fatalLines | Select-Object -Unique | Select-Object -First 30) -join "`n"
                 throw "s&box '$Probe' run reported fatal compiler/resource/runtime errors:`n$summary"
@@ -407,11 +417,12 @@ function Invoke-ProbeRun {
 
             $hostReady = $logText -match '(?m)HEXAGON_READY host\b'
             $clientReady = $logText -match '(?m)HEXAGON_READY client\b'
+            $clientSessionReady = $logText -match '(?m)HEXAGON_SESSION_READY client\b'
             $drained = $logText -match '(?m)HEXAGON_DRAINED host\b'
             $probeMatch = [regex]::Match(
                 $logText,
                 "(?m)$ExpectedSentinel sequence=(?<sequence>[1-9][0-9]*) digest=(?<digest>[a-f0-9]{64})" )
-            if ($hostReady -and $clientReady -and $probeMatch.Success -and $drained) {
+            if ($hostReady -and $clientReady -and $clientSessionReady -and $probeMatch.Success -and $drained) {
                 break
             }
 
@@ -420,10 +431,10 @@ function Invoke-ProbeRun {
             }
         }
 
-        if (-not ($hostReady -and $clientReady -and $probeMatch.Success -and $drained)) {
+        if (-not ($hostReady -and $clientReady -and $clientSessionReady -and $probeMatch.Success -and $drained)) {
             $tail = ($captured.ToString() -split "`r?`n" | Select-Object -Last 50) -join "`n"
             throw "Timed out after $TimeoutSeconds seconds waiting for '$Probe' sentinels " +
-                "(host=$hostReady, client=$clientReady, probe=$($probeMatch.Success), drained=$drained). " +
+                "(host=$hostReady, client=$clientReady, clientSession=$clientSessionReady, probe=$($probeMatch.Success), drained=$drained). " +
                 "Recent log output:`n$tail"
         }
 

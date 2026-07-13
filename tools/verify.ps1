@@ -9,7 +9,9 @@ then launches isolated hidden editor runs to exercise whitelist/asset startup,
 transactional interaction, drain, and exact persistence recovery. A complete
 release invocation also checks the completeness, source binding, and artifact
 integrity of a named operator's manual two-remote-client attestation. It does
-not launch or independently prove that external run.
+not launch or independently prove that external run. Passing -SkipSboxSmoke
+also skips the authoritative engine whitelist, startup, hotload, and recovery
+evidence; a generated-project build alone does not prove those engine paths.
 
 .EXAMPLE
 ./tools/verify.ps1 -RemoteAcceptanceEvidence ./remote-acceptance.json
@@ -39,6 +41,14 @@ param(
 
     [Parameter()]
     [string] $RemoteAcceptanceEvidence,
+
+    [Parameter()]
+    [ValidatePattern('^[a-f0-9]{40}$')]
+    [string] $HexagonSha,
+
+    [Parameter()]
+    [ValidatePattern('^[a-f0-9]{40}$')]
+    [string] $HL2RPSha,
 
     [Parameter()]
     [switch] $SkipRemoteAcceptance,
@@ -77,6 +87,71 @@ function Invoke-CheckedCommand {
     }
 }
 
+function Get-NormalizedAbsolutePath {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter()][string] $BasePath
+    )
+
+    $candidate = $Path
+    if (-not [System.IO.Path]::IsPathRooted($candidate)) {
+        if ([string]::IsNullOrWhiteSpace($BasePath)) {
+            throw "A base path is required to resolve relative path '$Path'."
+        }
+        $candidate = Join-Path $BasePath $candidate
+    }
+
+    return [System.IO.Path]::GetFullPath($candidate).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+}
+
+function Resolve-DirectoryTarget {
+    param(
+        [Parameter(Mandatory)][string] $Path
+    )
+
+    $item = Get-Item -LiteralPath $Path -Force
+    $candidate = $item.FullName
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        $targets = @($item.Target | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($targets.Count -ne 1) {
+            throw "'$Path' must resolve through exactly one directory target; found $($targets.Count)."
+        }
+
+        $candidate = $targets[0]
+        if (-not [System.IO.Path]::IsPathRooted($candidate)) {
+            $candidate = Join-Path $item.Parent.FullName $candidate
+        }
+    }
+
+    return Get-NormalizedAbsolutePath -Path (Resolve-Path -LiteralPath $candidate).Path
+}
+
+function Test-ExactPath {
+    param(
+        [Parameter(Mandatory)][string] $Left,
+        [Parameter(Mandatory)][string] $Right
+    )
+
+    return [System.StringComparer]::OrdinalIgnoreCase.Equals(
+        (Get-NormalizedAbsolutePath -Path $Left),
+        (Get-NormalizedAbsolutePath -Path $Right)
+    )
+}
+
+function Get-RepositoryHead {
+    param([Parameter(Mandatory)][string] $Root)
+
+    $global:LASTEXITCODE = 0
+    $head = (& git -C $Root rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $head -cnotmatch '^[a-f0-9]{40}$') {
+        throw "Could not resolve a lowercase full Git HEAD for '$Root'."
+    }
+    return $head
+}
+
 Write-Host '==> Validating package and asset layout' -ForegroundColor Cyan
 & (Join-Path $PSScriptRoot 'validate-project.ps1') `
     -HexagonRoot $hexagonRoot `
@@ -95,10 +170,15 @@ if (-not $SkipTests) {
 
     foreach ($testProject in $testProjects) {
         $relativeProject = $testProject.FullName
-        $testArguments = @('test', $testProject.FullName, '--configuration', 'Release', '--nologo', '--warnaserror')
-        if ($NoRestore) {
-            $testArguments += '--no-restore'
+        if (-not $NoRestore) {
+            Invoke-CheckedCommand -Description "Restoring locked and audited dependencies: $relativeProject" -FilePath 'dotnet' -Arguments @(
+                'restore', $testProject.FullName, '--locked-mode', '--nologo', '-warnaserror',
+                '-p:NuGetAudit=true', '-p:NuGetAuditMode=all'
+            )
         }
+        $testArguments = @(
+            'test', $testProject.FullName, '--configuration', 'Release', '--no-restore', '--nologo', '--warnaserror'
+        )
         Invoke-CheckedCommand -Description "Running conformance tests: $relativeProject" -FilePath 'dotnet' -Arguments $testArguments
     }
 }
@@ -119,9 +199,14 @@ if (-not $SkipSboxBuild) {
     if (-not (Test-Path -LiteralPath $libraryLink -PathType Container)) {
         [void](New-Item -ItemType Junction -Path $libraryLink -Target $hexagonRoot)
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $libraryLink 'hexagon.sbproj') -PathType Leaf)) {
-        throw "'$libraryLink' does not resolve to a Hexagon source checkout. Remove the stale Libraries/hexagon entry and retry."
+    $resolvedLibraryTarget = Resolve-DirectoryTarget -Path $libraryLink
+    if (-not (Test-ExactPath -Left $resolvedLibraryTarget -Right $hexagonRoot)) {
+        throw "'$libraryLink' resolves to '$resolvedLibraryTarget', not the expected sibling Hexagon source '$hexagonRoot'. Remove the stale Libraries/hexagon entry and retry."
     }
+    if (-not (Test-Path -LiteralPath (Join-Path $resolvedLibraryTarget 'hexagon.sbproj') -PathType Leaf)) {
+        throw "The expected sibling Hexagon source '$resolvedLibraryTarget' does not contain hexagon.sbproj."
+    }
+    Write-Host "==> Verified Libraries/hexagon source binding: $resolvedLibraryTarget" -ForegroundColor Cyan
 
     $generatedProject = Join-Path $schemaRootPath 'Code\hl2rp.csproj'
     $generatedLibraryProject = Join-Path $hexagonRoot 'Code\hexagon.csproj'
@@ -184,6 +269,37 @@ if (-not $SkipSboxBuild) {
         throw 'Generated s&box projects disappeared after generation; another verifier may be running concurrently.'
     }
 
+    [xml] $generatedProjectXml = Get-Content -LiteralPath $generatedProject -Raw
+    $projectDirectory = Split-Path -Parent $generatedProject
+    $projectReferences = @($generatedProjectXml.SelectNodes("//*[local-name()='ProjectReference']"))
+    $resolvedHexagonReferences = @(
+        foreach ($projectReference in $projectReferences) {
+            $include = $projectReference.GetAttribute('Include')
+            if ([string]::IsNullOrWhiteSpace($include)) {
+                continue
+            }
+
+            $resolvedReference = Get-NormalizedAbsolutePath -Path $include -BasePath $projectDirectory
+            if ([System.StringComparer]::OrdinalIgnoreCase.Equals(
+                    [System.IO.Path]::GetFileName($resolvedReference),
+                    'hexagon.csproj')) {
+                $resolvedReference
+            }
+        }
+    )
+    $expectedLibraryProject = Get-NormalizedAbsolutePath -Path $generatedLibraryProject
+    if ($resolvedHexagonReferences.Count -ne 1 -or
+        -not (Test-ExactPath -Left $resolvedHexagonReferences[0] -Right $expectedLibraryProject)) {
+        $observedReferences = if ($resolvedHexagonReferences.Count -eq 0) {
+            '<none>'
+        }
+        else {
+            $resolvedHexagonReferences -join '; '
+        }
+        throw "Generated project '$generatedProject' must reference exactly '$expectedLibraryProject'; observed Hexagon project references: $observedReferences."
+    }
+    Write-Host "==> Verified generated HL2RP source binding: $expectedLibraryProject" -ForegroundColor Cyan
+
     if (-not $NoRestore) {
         Invoke-CheckedCommand -Description 'Restoring the generated s&box project' -FilePath 'dotnet' -Arguments @('restore', $generatedProject, '--nologo')
     }
@@ -205,6 +321,9 @@ if (-not $SkipSboxBuild) {
             -SboxRoot $SboxRoot `
             -TimeoutSeconds $SmokeTimeoutSeconds
     }
+    else {
+        Write-Warning 's&box smoke was explicitly skipped; authoritative engine whitelist, startup, hotload, and exact-recovery evidence was not exercised.'
+    }
 }
 
 if ($SkipRemoteAcceptance) {
@@ -214,10 +333,20 @@ elseif ([string]::IsNullOrWhiteSpace($RemoteAcceptanceEvidence)) {
     throw 'A real dedicated-server/two-authenticated-client evidence manifest is required. Pass -RemoteAcceptanceEvidence, or explicitly use -SkipRemoteAcceptance for an incomplete local-only run.'
 }
 else {
+    $evidenceHexagonSha = if ([string]::IsNullOrWhiteSpace($HexagonSha)) {
+        Get-RepositoryHead -Root $hexagonRoot
+    }
+    else { $HexagonSha }
+    $evidenceHL2RPSha = if ([string]::IsNullOrWhiteSpace($HL2RPSha)) {
+        Get-RepositoryHead -Root $schemaRootPath
+    }
+    else { $HL2RPSha }
     & (Join-Path $PSScriptRoot 'verify-remote-acceptance.ps1') `
         -EvidencePath $RemoteAcceptanceEvidence `
         -HexagonRoot $hexagonRoot `
-        -SchemaRoot $schemaRootPath
+        -SchemaRoot $schemaRootPath `
+        -HexagonSha $evidenceHexagonSha `
+        -HL2RPSha $evidenceHL2RPSha
 }
 
 if ($SkipRemoteAcceptance) {

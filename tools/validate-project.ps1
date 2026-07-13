@@ -7,7 +7,10 @@ param(
     [string] $SchemaRoot = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'hl2rp-hexagon'),
 
     [Parameter()]
-    [string] $SboxRoot = 'C:\Program Files (x86)\Steam\steamapps\common\sbox'
+    [string] $SboxRoot = 'C:\Program Files (x86)\Steam\steamapps\common\sbox',
+
+    [Parameter()]
+    [switch] $SkipEngineModelValidation
 )
 
 Set-StrictMode -Version Latest
@@ -31,6 +34,19 @@ function Read-JsonFile {
         Add-Failure "Invalid JSON '$Path': $($_.Exception.Message)"
         return $null
     }
+}
+
+function Get-JsonProperty {
+    param(
+        [Parameter()][AllowNull()] $Value,
+        [Parameter(Mandatory)][string] $Name
+    )
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    return $Value.PSObject.Properties[$Name]
 }
 
 function Get-NormalizedAssetPath {
@@ -90,12 +106,31 @@ function Test-ProjectManifest {
         return
     }
 
-    if ($manifest.Type -ne $ExpectedType) {
-        Add-Failure "'$manifestPath' must have Type '$ExpectedType', found '$($manifest.Type)'."
+    $typeProperty = Get-JsonProperty -Value $manifest -Name 'Type'
+    $actualType = if ($null -eq $typeProperty) { '' } else { [string]$typeProperty.Value }
+    if ($actualType -ne $ExpectedType) {
+        Add-Failure "'$manifestPath' must have Type '$ExpectedType', found '$actualType'."
     }
 
-    $startupProperty = $manifest.Metadata.PSObject.Properties['StartupScene']
+    $standaloneProperty = Get-JsonProperty -Value $manifest -Name 'IsStandaloneOnly'
+    $legacyWhitelistProperty = Get-JsonProperty -Value $manifest -Name 'IsWhitelistDisabled'
+    $metadataProperty = Get-JsonProperty -Value $manifest -Name 'Metadata'
+    $metadata = if ($null -eq $metadataProperty) { $null } else { $metadataProperty.Value }
+    $compilerProperty = Get-JsonProperty -Value $metadata -Name 'Compiler'
+    $compiler = if ($null -eq $compilerProperty) { $null } else { $compilerProperty.Value }
+    $compilerWhitelistProperty = Get-JsonProperty -Value $compiler -Name 'Whitelist'
+    $startupProperty = Get-JsonProperty -Value $metadata -Name 'StartupScene'
+    $isStandaloneOnly = $null -ne $standaloneProperty -and $standaloneProperty.Value -eq $true
+
+    if ($null -ne $legacyWhitelistProperty) {
+        Add-Failure "'$manifestPath' must not declare top-level IsWhitelistDisabled; s&box game/library compilation uses IsStandaloneOnly and Metadata.Compiler.Whitelist."
+    }
+
     if ($ExpectedType -eq 'library') {
+        if ($isStandaloneOnly -or
+            $null -eq $compilerWhitelistProperty -or $compilerWhitelistProperty.Value -ne $true) {
+            Add-Failure "'$manifestPath' must remain platform-whitelisted; raw OS persistence belongs to the consuming standalone game."
+        }
         if ($null -ne $startupProperty) {
             Add-Failure "Library package '$manifestPath' must not declare Metadata.StartupScene."
         }
@@ -105,6 +140,11 @@ function Test-ProjectManifest {
             Add-Failure "Library package '$manifestPath' owns scene resources: $($libraryScenes.FullName -join ', ')"
         }
         return
+    }
+
+    if (-not $isStandaloneOnly -or
+        $null -eq $compilerWhitelistProperty -or $compilerWhitelistProperty.Value -ne $false) {
+        Add-Failure "'$manifestPath' must remain standalone-only with its API whitelist disabled because it owns the OS-level persistence adapter."
     }
 
     if ($null -eq $startupProperty -or [string]::IsNullOrWhiteSpace([string]$startupProperty.Value)) {
@@ -118,7 +158,7 @@ function Test-ProjectManifest {
         Add-Failure "Startup scene '$($startupProperty.Value)' does not exist at '$startupPath'."
     }
 
-    $dedicatedProperty = $manifest.Metadata.PSObject.Properties['DedicatedServerStartupScene']
+    $dedicatedProperty = Get-JsonProperty -Value $metadata -Name 'DedicatedServerStartupScene'
     if ($null -eq $dedicatedProperty -or [string]::IsNullOrWhiteSpace([string]$dedicatedProperty.Value)) {
         Add-Failure "Game package '$manifestPath' must declare Metadata.DedicatedServerStartupScene."
     }
@@ -239,7 +279,7 @@ function Test-SceneIdentity {
 function Test-ShowcaseScene {
     param([Parameter(Mandatory)][string] $GameRoot)
 
-    $scenePath = Join-Path $GameRoot 'Assets\scenes\main.scene'
+    $scenePath = Join-Path $GameRoot 'Assets/scenes/main.scene'
     $scene = Read-JsonFile -Path $scenePath
     if ($null -eq $scene) {
         return
@@ -320,7 +360,9 @@ function Get-ResolvableModelPaths {
         }
     }
 
-    return $models
+    # Prevent PowerShell from unrolling an empty set to $null on hosts where the
+    # s&box installation is intentionally unavailable (for example hosted CI).
+    return ,$models
 }
 
 function Test-ModelReferences {
@@ -460,7 +502,12 @@ function Test-StaticModuleGraph {
 $HexagonRoot = (Resolve-Path -LiteralPath $HexagonRoot).Path
 $SchemaRoot = (Resolve-Path -LiteralPath $SchemaRoot).Path
 $projectRoots = @($HexagonRoot, $SchemaRoot)
-$resolvableModels = Get-ResolvableModelPaths -ProjectRoots $projectRoots -EngineRoot $SboxRoot
+$resolvableModels = if ($SkipEngineModelValidation) {
+    [System.Collections.Generic.HashSet[string]]::new($pathComparer)
+}
+else {
+    Get-ResolvableModelPaths -ProjectRoots $projectRoots -EngineRoot $SboxRoot
+}
 
 Test-ProjectManifest -ProjectRoot $HexagonRoot -ManifestName 'hexagon.sbproj' -ExpectedType 'library'
 Test-ProjectManifest -ProjectRoot $SchemaRoot -ManifestName 'hl2rp.sbproj' -ExpectedType 'game'
@@ -468,7 +515,9 @@ Test-AssetNamespaces -LibraryRoot $HexagonRoot -GameRoot $SchemaRoot
 Test-MountedAssetCollisions -ProjectRoots $projectRoots
 Test-SceneIdentity -ProjectRoots $projectRoots
 Test-ShowcaseScene -GameRoot $SchemaRoot
-Test-ModelReferences -ProjectRoots $projectRoots -ResolvableModels $resolvableModels
+if (-not $SkipEngineModelValidation) {
+    Test-ModelReferences -ProjectRoots $projectRoots -ResolvableModels $resolvableModels
+}
 Test-DefinitionIds -ProjectRoots $projectRoots
 Test-StaticModuleGraph -ProjectRoots $projectRoots
 
@@ -477,4 +526,10 @@ if ($script:Failures.Count -gt 0) {
     throw $message
 }
 
-Write-Host 'Project validation passed: manifests, mounted paths, scene identities, mounted models, definitions, and static module graphs.' -ForegroundColor Green
+$validatedSurface = if ($SkipEngineModelValidation) {
+    'manifests, mounted paths, scene identities, definitions, and static module graphs (engine model resolution deferred to the full profile)'
+}
+else {
+    'manifests, mounted paths, scene identities, mounted models, definitions, and static module graphs'
+}
+Write-Host "Project validation passed: $validatedSurface." -ForegroundColor Green
