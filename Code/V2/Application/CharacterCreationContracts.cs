@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using Hexagon.V2.Domain;
 using Hexagon.V2.Kernel;
+using Hexagon.V2.Persistence;
 
 namespace Hexagon.V2.Application;
 
@@ -67,14 +68,25 @@ public interface ICharacterModelCatalog
 public sealed record CharacterCreatedEvent(
 	CharacterRecord Character,
 	InventoryRecord MainInventory,
+	IReadOnlyList<InventoryRecord> Inventories,
 	IReadOnlyList<ItemRecord> Items,
-	long CommitSequence );
+	CommitReceipt Commit );
 
-public sealed record CharacterDeletedEvent( CharacterId CharacterId, AccountId AccountId, long CommitSequence );
+public sealed record CharacterDeletedEvent(
+	CharacterId CharacterId,
+	AccountId AccountId,
+	CommitReceipt Commit );
 
 public sealed record CharacterCreationReceipt(
 	CharacterRecord Character,
 	InventoryRecord MainInventory,
-	IReadOnlyList<ItemRecord> Items );
+	IReadOnlyList<InventoryRecord> Inventories,
+	IReadOnlyList<ItemRecord> Items,
+	CommitReceipt Commit );
+
+public sealed record CharacterDeletionReceipt(
+	CharacterId CharacterId,
+	AccountId AccountId,
+	CommitReceipt Commit );
 
 public sealed record CharacterDeletionContext( AccountId ActorAccountId, CharacterRecord Character );

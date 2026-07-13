@@ -21,6 +21,7 @@ public sealed class DomainRepositories
 
 		Characters = provider.Repository<CharacterRecord>( DomainCollections.Characters );
 		CharacterSlots = provider.Repository<CharacterSlotRecord>( DomainCollections.CharacterSlots );
+		CharacterLifecycleGuards = provider.Repository<CharacterLifecycleGuardRecord>( DomainCollections.CharacterLifecycleGuards );
 		Inventories = provider.Repository<InventoryRecord>( DomainCollections.Inventories );
 		OwnerInventories = provider.Repository<OwnerInventoryRecord>( DomainCollections.OwnerInventories );
 		Items = provider.Repository<ItemRecord>( DomainCollections.Items );
@@ -33,6 +34,7 @@ public sealed class DomainRepositories
 	public IPersistenceProvider Provider { get; }
 	public IPersistenceRepository<CharacterRecord> Characters { get; }
 	public IPersistenceRepository<CharacterSlotRecord> CharacterSlots { get; }
+	public IPersistenceRepository<CharacterLifecycleGuardRecord> CharacterLifecycleGuards { get; }
 	public IPersistenceRepository<InventoryRecord> Inventories { get; }
 	public IPersistenceRepository<OwnerInventoryRecord> OwnerInventories { get; }
 	public IPersistenceRepository<ItemRecord> Items { get; }
@@ -45,6 +47,7 @@ public sealed class DomainRepositories
 public static class DomainKeys
 {
 	public static string Character( CharacterId id ) => id.Value.ToString( "N" );
+	public static string CharacterLifecycleGuard( CharacterId id ) => Character( id );
 	public static string Inventory( InventoryId id ) => id.Value.ToString( "N" );
 	public static string Item( ItemId id ) => id.Value.ToString( "N" );
 	public static string SceneEntity( SceneEntityId id ) => id.Value.ToString( "N" );

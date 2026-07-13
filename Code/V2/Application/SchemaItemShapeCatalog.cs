@@ -8,7 +8,12 @@ namespace Hexagon.V2.Application;
 public sealed class SchemaItemShapeCatalog : IItemShapeCatalog
 {
 	private readonly CompiledSchema _schema;
-	private readonly DomainRepositories _repositories;
+	private readonly DomainRepositories? _repositories;
+
+	public SchemaItemShapeCatalog( CompiledSchema schema )
+	{
+		_schema = schema ?? throw new System.ArgumentNullException( nameof(schema) );
+	}
 
 	public SchemaItemShapeCatalog( CompiledSchema schema, DomainRepositories repositories )
 	{
@@ -30,7 +35,7 @@ public sealed class SchemaItemShapeCatalog : IItemShapeCatalog
 
 	public bool TryGetShape( ItemId itemId, out ItemShape shape )
 	{
-		var item = _repositories.Items.Find( DomainKeys.Item( itemId ) );
+		var item = _repositories?.Items.Find( DomainKeys.Item( itemId ) );
 		if ( item is not null ) return TryGetShape( item.Value.Definition, out shape );
 		shape = default;
 		return false;

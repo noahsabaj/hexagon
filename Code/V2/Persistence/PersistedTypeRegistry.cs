@@ -25,6 +25,100 @@ public interface IPersistedTypeCodec<T> : IPersistedTypeCodec where T : class
 	T PrepareForPublication( T value );
 }
 
+internal sealed record CanonicalPersistedValue( object Value, JsonElement Payload );
+
+/// <summary>
+/// Applies the complete persisted-codec boundary consistently. Canonical values are isolated by a
+/// serialization round-trip, prepared for immutable publication, and then prepared a second time
+/// from their canonical payload to prove that publication is idempotent.
+/// </summary>
+internal static class PersistedCodecCanonicalization
+{
+	public static CanonicalPersistedValue FromValue( IPersistedTypeCodec codec, object value )
+	{
+		ArgumentNullException.ThrowIfNull( codec );
+		ArgumentNullException.ThrowIfNull( value );
+		var proposedPayload = codec.Serialize( value ).Clone();
+		var decoded = codec.Deserialize( proposedPayload, codec.CurrentVersion );
+		return FromDecodedValue( codec, decoded );
+	}
+
+	public static CanonicalPersistedValue FromPayload(
+		IPersistedTypeCodec codec,
+		JsonElement payload,
+		int storedVersion,
+		bool requireCanonicalPayload )
+	{
+		ArgumentNullException.ThrowIfNull( codec );
+		var suppliedPayload = payload.Clone();
+		var decoded = codec.Deserialize( suppliedPayload, storedVersion );
+		var canonical = FromDecodedValue( codec, decoded );
+		if ( requireCanonicalPayload && !HasCanonicalJsonShape( suppliedPayload, canonical.Payload ) )
+		{
+			throw new InvalidOperationException(
+				$"Persisted codec '{codec.Key}' received a payload that is not in canonical form." );
+		}
+
+		return canonical;
+	}
+
+	private static CanonicalPersistedValue FromDecodedValue( IPersistedTypeCodec codec, object decoded )
+	{
+		var prepared = codec.PrepareForPublication( decoded );
+		var canonicalPayload = codec.Serialize( prepared ).Clone();
+		var decodedAgain = codec.Deserialize( canonicalPayload, codec.CurrentVersion );
+		var preparedAgain = codec.PrepareForPublication( decodedAgain );
+		var canonicalPayloadAgain = codec.Serialize( preparedAgain ).Clone();
+		if ( !HasCanonicalJsonShape( canonicalPayload, canonicalPayloadAgain ) )
+		{
+			throw new InvalidOperationException(
+				$"Persisted codec '{codec.Key}' is not idempotent across publication preparation and a current-version round-trip." );
+		}
+
+		return new CanonicalPersistedValue( prepared, canonicalPayload );
+	}
+
+	private static bool HasCanonicalJsonShape( JsonElement actual, JsonElement canonical )
+	{
+		if ( actual.ValueKind != canonical.ValueKind ) return false;
+		switch ( actual.ValueKind )
+		{
+			case JsonValueKind.Object:
+			{
+				var actualProperties = actual.EnumerateObject().ToArray();
+				var canonicalProperties = canonical.EnumerateObject().ToArray();
+				if ( actualProperties.Length != canonicalProperties.Length ) return false;
+				for ( var index = 0; index < actualProperties.Length; index++ )
+				{
+					if ( !string.Equals(
+						actualProperties[index].Name,
+						canonicalProperties[index].Name,
+						StringComparison.Ordinal ) ||
+						!HasCanonicalJsonShape(
+							actualProperties[index].Value,
+							canonicalProperties[index].Value ) ) return false;
+				}
+				return true;
+			}
+			case JsonValueKind.Array:
+			{
+				var actualElements = actual.EnumerateArray().ToArray();
+				var canonicalElements = canonical.EnumerateArray().ToArray();
+				if ( actualElements.Length != canonicalElements.Length ) return false;
+				for ( var index = 0; index < actualElements.Length; index++ )
+				{
+					if ( !HasCanonicalJsonShape( actualElements[index], canonicalElements[index] ) ) return false;
+				}
+				return true;
+			}
+			case JsonValueKind.String:
+				return string.Equals( actual.GetString(), canonical.GetString(), StringComparison.Ordinal );
+			default:
+				return string.Equals( actual.GetRawText(), canonical.GetRawText(), StringComparison.Ordinal );
+		}
+	}
+}
+
 /// <summary>
 /// s&amp;box-safe helpers for explicit immutable publication. Every persisted codec
 /// supplies a typed publication function; aggregate authors use these helpers to

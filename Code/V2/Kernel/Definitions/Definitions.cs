@@ -73,9 +73,17 @@ public sealed record ChatChannelDefinition(
 	string? PermissionId = null
 ) : IDefinition;
 
+public enum CommandCostClass
+{
+	Cheap = 1,
+	Standard = 2,
+	Expensive = 4
+}
+
 public sealed record CommandDefinition(
 	string Id,
-	string? PermissionId = null
+	string? PermissionId = null,
+	CommandCostClass Cost = CommandCostClass.Standard
 ) : IDefinition;
 
 public sealed record PanelDefinition(

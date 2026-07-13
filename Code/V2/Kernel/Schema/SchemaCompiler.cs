@@ -436,6 +436,16 @@ public static class SchemaCompiler
 		IReadOnlyDictionary<string, PermissionDefinition> permissions,
 		List<ConformanceIssue> issues)
 	{
+		foreach ( var command in commands.Values )
+		{
+			if ( !Enum.IsDefined( command.Cost ) )
+			{
+				issues.Add(new ConformanceIssue(ErrorCode.SchemaInvalid,
+					$"commands.{command.Id}.cost",
+					$"Command '{command.Id}' declares an invalid admission cost."));
+			}
+		}
+
 		foreach (var channel in channels.Values.Where(x => x.PermissionId is not null))
 		{
 			if (!ValidateId(channel.PermissionId, $"chat_channels.{channel.Id}.permission", issues))

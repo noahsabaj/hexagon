@@ -13,12 +13,18 @@ namespace Hexagon.V2.Persistence;
 /// </summary>
 public sealed class InMemoryPersistenceProvider : TransactionalPersistenceProvider
 {
-	public InMemoryPersistenceProvider( PersistedTypeRegistry? types = null ) : base( types ) { }
+	public InMemoryPersistenceProvider(
+		PersistedTypeRegistry? types = null,
+		IPersistenceInvariantSet? invariants = null ) : base( types, invariants ) { }
 
 	private protected override ValueTask<RecoveryState> RecoverCoreAsync( CancellationToken cancellationToken )
 	{
 		cancellationToken.ThrowIfCancellationRequested();
 		return ValueTask.FromResult( new RecoveryState(
+			Guid.NewGuid(),
+			Guid.NewGuid(),
+			0,
+			string.Empty,
 			0,
 			0,
 			Array.Empty<PersistedMutation>(),
@@ -27,9 +33,13 @@ public sealed class InMemoryPersistenceProvider : TransactionalPersistenceProvid
 			null ) );
 	}
 
-	private protected override ValueTask PersistCommitCoreAsync( WalCommitBatch batch, CancellationToken cancellationToken ) =>
-		ValueTask.CompletedTask;
+	private protected override ValueTask<CommitPersistenceOutcome> PersistCommitCoreAsync(
+		WalCommitBatch batch,
+		CancellationToken cancellationToken ) =>
+		ValueTask.FromResult( CommitPersistenceOutcome.Clean );
 
-	private protected override ValueTask PersistCheckpointCoreAsync( CheckpointSnapshot snapshot, CancellationToken cancellationToken ) =>
-		ValueTask.CompletedTask;
+	private protected override ValueTask<CheckpointPersistenceOutcome> PersistCheckpointCoreAsync(
+		CheckpointSnapshot snapshot,
+		CancellationToken cancellationToken ) =>
+		ValueTask.FromResult( CheckpointPersistenceOutcome.Clean );
 }

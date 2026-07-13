@@ -92,18 +92,20 @@ public sealed class CharacterService
 		return CreateCoreAsync( authenticatedAccount, request, cancellationToken );
 	}
 
-	public async ValueTask<OperationResult> DeleteAsync(
+	public async ValueTask<OperationResult<CharacterDeletionReceipt>> DeleteAsync(
 		AccountId authenticatedAccount,
 		CharacterId characterId,
 		CancellationToken cancellationToken = default )
 	{
 		var characterDocument = _repositories.Characters.Find( DomainKeys.Character( characterId ) );
 			if ( characterDocument is null || characterDocument.Value.AccountId != authenticatedAccount )
-				return OperationResult.Failure( ErrorCode.NotFound, "Character was not found for the authenticated account." );
+				return OperationResult<CharacterDeletionReceipt>.Failure(
+					ErrorCode.NotFound, "Character was not found for the authenticated account." );
 
 			var character = characterDocument.Value;
 			var policy = _deletionPolicy.Evaluate( new CharacterDeletionContext( authenticatedAccount, character ) );
-			if ( policy.Failed ) return policy;
+			if ( policy.Failed )
+				return OperationResult<CharacterDeletionReceipt>.Failure( policy.Error!.Code, policy.Error.Message );
 
 			var inventories = FindOwnedInventoryGraph( character.Id );
 			var ownedItemIds = inventories
@@ -113,7 +115,13 @@ public sealed class CharacterService
 			var slotDocument = _repositories.CharacterSlots.Find(
 				DomainKeys.CharacterSlot( character.AccountId, character.Slot ) );
 			if ( slotDocument is null )
-				return OperationResult.Failure( ErrorCode.Conflict, "Character owner-slot guard is missing." );
+				return OperationResult<CharacterDeletionReceipt>.Failure(
+					ErrorCode.Conflict, "Character owner-slot guard is missing." );
+			var lifecycleGuard = _repositories.CharacterLifecycleGuards.Find(
+				DomainKeys.CharacterLifecycleGuard( character.Id ) );
+			if ( lifecycleGuard is null )
+				return OperationResult<CharacterDeletionReceipt>.Failure(
+					ErrorCode.Conflict, "Character lifecycle guard is missing." );
 			var ownerIndexes = inventories
 				.Select( inventory =>
 				{
@@ -136,10 +144,25 @@ public sealed class CharacterService
 				.Where( document => document.Value.CharacterId == character.Id ||
 					document.Value.RelatedCharacterId == character.Id )
 				.ToArray();
+			var relatedGuardDocuments = references
+				.SelectMany( reference => new[]
+				{
+					reference.Value.CharacterId,
+					reference.Value.RelatedCharacterId
+				} )
+				.Where( target => target is not null && target.Value != character.Id )
+				.Select( target => target!.Value )
+				.Distinct()
+				.Select( target => _repositories.CharacterLifecycleGuards.Find(
+					DomainKeys.CharacterLifecycleGuard( target ) ) )
+				.Where( document => document is not null )
+				.Select( document => document! )
+				.ToArray();
 
 			var unitOfWork = _repositories.Provider.BeginUnitOfWork();
 			unitOfWork.Delete( _repositories.Characters, characterDocument );
 			unitOfWork.Delete( _repositories.CharacterSlots, slotDocument );
+			unitOfWork.Delete( _repositories.CharacterLifecycleGuards, lifecycleGuard );
 
 			foreach ( var inventory in inventories )
 				unitOfWork.Delete( _repositories.Inventories, inventory );
@@ -154,13 +177,30 @@ public sealed class CharacterService
 
 			foreach ( var reference in references )
 				unitOfWork.Delete( _repositories.CharacterReferences, reference );
+			foreach ( var relatedGuard in relatedGuardDocuments )
+			{
+				var editor = unitOfWork.Edit( _repositories.CharacterLifecycleGuards, relatedGuard );
+				if ( editor is null )
+				{
+					await unitOfWork.DisposeAsync();
+					return OperationResult<CharacterDeletionReceipt>.Failure(
+						ErrorCode.Conflict, "Related character lifecycle guard changed." );
+				}
+				editor.Replace( editor.Value with
+				{
+					ReferenceRevision = checked(editor.Value.ReferenceRevision + 1)
+				} );
+				unitOfWork.Save( editor );
+			}
 
 			var committed = await unitOfWork.CommitAsync( cancellationToken );
 			await unitOfWork.DisposeAsync();
-			if ( !committed.Succeeded ) return PersistenceResultMapping.Failure( committed.Error! );
+			if ( !committed.Succeeded )
+				return PersistenceResultMapping.Failure<CharacterDeletionReceipt>( committed.Error! );
 
-			_deletedEvents.Publish( new CharacterDeletedEvent( character.Id, character.AccountId, committed.Value!.Sequence ) );
-			return OperationResult.Success();
+			var receipt = new CharacterDeletionReceipt( character.Id, character.AccountId, committed.Value! );
+			_deletedEvents.Publish( new CharacterDeletedEvent( character.Id, character.AccountId, committed.Value! ) );
+			return OperationResult<CharacterDeletionReceipt>.Success( receipt );
 	}
 
 	private async ValueTask<OperationResult<CharacterCreationReceipt>> CreateCoreAsync(
@@ -317,6 +357,10 @@ public sealed class CharacterService
 			CharacterId = character.Id
 		} );
 		unitOfWork.Create( _repositories.Characters, DomainKeys.Character( character.Id ), character );
+		unitOfWork.Create(
+			_repositories.CharacterLifecycleGuards,
+			DomainKeys.CharacterLifecycleGuard( character.Id ),
+			new CharacterLifecycleGuardRecord { CharacterId = character.Id, ReferenceRevision = 0 } );
 
 		foreach ( var inventory in inventories )
 			unitOfWork.Create( _repositories.Inventories, DomainKeys.Inventory( inventory.Id ), inventory );
@@ -342,9 +386,12 @@ public sealed class CharacterService
 		await unitOfWork.DisposeAsync();
 		if ( !committed.Succeeded ) return PersistenceResultMapping.Failure<CharacterCreationReceipt>( committed.Error! );
 
-		var receipt = new CharacterCreationReceipt( character, mainInventory, items.ToArray() );
+		var committedInventories = inventories.ToArray();
+		var committedItems = items.ToArray();
+		var receipt = new CharacterCreationReceipt(
+			character, mainInventory, committedInventories, committedItems, committed.Value! );
 		_createdEvents.Publish( new CharacterCreatedEvent(
-			character, mainInventory, items.ToArray(), committed.Value!.Sequence ) );
+			character, mainInventory, committedInventories, committedItems, committed.Value! ) );
 		return OperationResult<CharacterCreationReceipt>.Success( receipt );
 	}
 

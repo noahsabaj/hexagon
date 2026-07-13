@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -12,11 +13,13 @@ namespace Hexagon.V2.Persistence;
 
 /// <summary>
 /// Durability boundary used by <c>FileSystemPersistenceProvider</c>. Paths are normalized,
-/// relative storage keys. Implementations must make AppendAsync durable before returning. An append
-/// failure may leave a partial suffix; the provider enters a fatal state and repairs that suffix on restart.
+/// relative storage keys. Immutable publication must be absent-or-complete and durable before returning.
 /// </summary>
 public interface IPersistenceStorage
 {
+	ValueTask<IPersistenceLease> AcquireExclusiveLeaseAsync(
+		string path,
+		CancellationToken cancellationToken = default );
 	ValueTask<bool> ExistsAsync( string path, CancellationToken cancellationToken = default );
 	ValueTask<ReadOnlyMemory<byte>?> ReadAsync( string path, CancellationToken cancellationToken = default );
 	ValueTask<IReadOnlyList<string>> ListAsync( string prefix, CancellationToken cancellationToken = default );
@@ -24,9 +27,13 @@ public interface IPersistenceStorage
 		string path,
 		ReadOnlyMemory<byte> content,
 		CancellationToken cancellationToken = default );
-	ValueTask AppendAsync( string path, ReadOnlyMemory<byte> content, CancellationToken cancellationToken = default );
-	ValueTask TruncateAsync( string path, long length, CancellationToken cancellationToken = default );
 	ValueTask DeleteAsync( string path, CancellationToken cancellationToken = default );
+}
+
+public interface IPersistenceLease : IAsyncDisposable
+{
+	string Path { get; }
+	bool IsReleased { get; }
 }
 
 /// <summary>
@@ -36,6 +43,19 @@ public interface IPersistenceStorage
 public sealed class InMemoryPersistenceStorage : IPersistenceStorage
 {
 	private readonly ConcurrentDictionary<string, byte[]> _files = new( StringComparer.Ordinal );
+	private readonly ConcurrentDictionary<string, InMemoryLease> _leases = new( StringComparer.Ordinal );
+
+	public ValueTask<IPersistenceLease> AcquireExclusiveLeaseAsync(
+		string path,
+		CancellationToken cancellationToken = default )
+	{
+		cancellationToken.ThrowIfCancellationRequested();
+		var normalized = NormalizePath( path );
+		var lease = new InMemoryLease( normalized, ReleaseLease );
+		if ( !_leases.TryAdd( normalized, lease ) )
+			throw new PersistenceLeaseUnavailableException( $"Persistence lease '{normalized}' is already held." );
+		return ValueTask.FromResult<IPersistenceLease>( lease );
+	}
 
 	public ValueTask<bool> ExistsAsync( string path, CancellationToken cancellationToken = default )
 	{
@@ -75,50 +95,6 @@ public sealed class InMemoryPersistenceStorage : IPersistenceStorage
 		return ValueTask.FromResult( _files.TryAdd( NormalizePath( path ), content.ToArray() ) );
 	}
 
-	public ValueTask AppendAsync(
-		string path,
-		ReadOnlyMemory<byte> content,
-		CancellationToken cancellationToken = default )
-	{
-		cancellationToken.ThrowIfCancellationRequested();
-		var normalized = NormalizePath( path );
-		_files.AddOrUpdate(
-			normalized,
-			_ => content.ToArray(),
-			(_, existing) =>
-			{
-				var combined = new byte[existing.Length + content.Length];
-				existing.CopyTo( combined, 0 );
-				content.Span.CopyTo( combined.AsSpan( existing.Length ) );
-				return combined;
-			} );
-		return ValueTask.CompletedTask;
-	}
-
-	public ValueTask TruncateAsync( string path, long length, CancellationToken cancellationToken = default )
-	{
-		cancellationToken.ThrowIfCancellationRequested();
-		if ( length < 0 || length > int.MaxValue )
-		{
-			throw new ArgumentOutOfRangeException( nameof(length) );
-		}
-
-		var normalized = NormalizePath( path );
-		_files.AddOrUpdate(
-			normalized,
-			_ => length == 0 ? Array.Empty<byte>() : throw new InvalidOperationException( $"Cannot truncate missing file '{normalized}'." ),
-			(_, existing) =>
-			{
-				if ( length > existing.LongLength )
-				{
-					throw new InvalidOperationException( $"Cannot extend '{normalized}' through truncate." );
-				}
-
-				return existing.AsSpan( 0, (int)length ).ToArray();
-			} );
-		return ValueTask.CompletedTask;
-	}
-
 	public ValueTask DeleteAsync( string path, CancellationToken cancellationToken = default )
 	{
 		cancellationToken.ThrowIfCancellationRequested();
@@ -137,16 +113,51 @@ public sealed class InMemoryPersistenceStorage : IPersistenceStorage
 
 		return normalized;
 	}
+
+	private void ReleaseLease( InMemoryLease lease ) => _leases.TryRemove( lease.Path, out _ );
+
+	private sealed class InMemoryLease : IPersistenceLease
+	{
+		private readonly Action<InMemoryLease> _release;
+		private int _released;
+
+		public InMemoryLease( string path, Action<InMemoryLease> release )
+		{
+			Path = path;
+			_release = release;
+		}
+
+		public string Path { get; }
+		public bool IsReleased => Interlocked.CompareExchange( ref _released, 0, 0 ) != 0;
+
+		public ValueTask DisposeAsync()
+		{
+			if ( Interlocked.Exchange( ref _released, 1 ) == 0 ) _release( this );
+			return ValueTask.CompletedTask;
+		}
+	}
+}
+
+public sealed class PersistenceLeaseUnavailableException : IOException
+{
+	public PersistenceLeaseUnavailableException( string message ) : base( message ) { }
+	public PersistenceLeaseUnavailableException( string message, Exception innerException ) : base( message, innerException ) { }
+}
+
+public sealed class PersistenceStorageLimitException : IOException
+{
+	public PersistenceStorageLimitException( string message ) : base( message ) { }
 }
 
 internal sealed record PersistenceFormatManifest
 {
 	public const string ExpectedFormat = "hexagon.persistence";
-	public const int CurrentVersion = 2;
+	public const int CurrentVersion = 3;
 
 	public required string Format { get; init; }
 	public required int Version { get; init; }
 	public required string SchemaId { get; init; }
+	public required Guid StoreId { get; init; }
 	public required DateTimeOffset CreatedAtUtc { get; init; }
 }
 
@@ -174,12 +185,55 @@ internal sealed record WalCommitBatch
 	public required IReadOnlyList<PersistedMutation> Mutations { get; init; }
 }
 
+internal sealed record WalFrame
+{
+	public const int CurrentFormatVersion = 1;
+	public required int FormatVersion { get; init; }
+	public required Guid StoreId { get; init; }
+	public required Guid WriterEpoch { get; init; }
+	public required long CompactionGeneration { get; init; }
+	public required long Sequence { get; init; }
+	public required string PreviousAckHash { get; init; }
+	public required DateTimeOffset CommittedAtUtc { get; init; }
+	public required IReadOnlyList<PersistedMutation> Mutations { get; init; }
+}
+
+internal sealed record WalAcknowledgement
+{
+	public const int CurrentFormatVersion = 1;
+	public required int FormatVersion { get; init; }
+	public required Guid StoreId { get; init; }
+	public required Guid WriterEpoch { get; init; }
+	public required long CompactionGeneration { get; init; }
+	public required long Sequence { get; init; }
+	public required string FramePath { get; init; }
+	public required string FrameHash { get; init; }
+	public required string PreviousAckHash { get; init; }
+}
+
+internal sealed record WalCommitHead
+{
+	public const int CurrentFormatVersion = 1;
+	public required int FormatVersion { get; init; }
+	public required Guid StoreId { get; init; }
+	public required Guid WriterEpoch { get; init; }
+	public required long CompactionGeneration { get; init; }
+	public required long Sequence { get; init; }
+	public required string AcknowledgementPath { get; init; }
+	public required string AcknowledgementHash { get; init; }
+	public required string FramePath { get; init; }
+	public required string FrameHash { get; init; }
+}
+
 internal sealed record CheckpointSnapshot
 {
 	public const int CurrentFormatVersion = 1;
 
 	public required int FormatVersion { get; init; }
 	public required long Sequence { get; init; }
+	public required Guid StoreId { get; init; }
+	public required long CompactionGeneration { get; init; }
+	public required string LastAckHash { get; init; }
 	public required IReadOnlyList<PersistedMutation> Documents { get; init; }
 }
 
@@ -189,7 +243,10 @@ internal sealed record CheckpointManifest
 
 	public required int FormatVersion { get; init; }
 	public required string SchemaId { get; init; }
+	public required Guid StoreId { get; init; }
 	public required long Sequence { get; init; }
+	public required long CompactionGeneration { get; init; }
+	public required string LastAckHash { get; init; }
 	public required string BlobPath { get; init; }
 	public required string BlobHash { get; init; }
 }
@@ -204,7 +261,24 @@ internal sealed record CheckpointCompletion
 	public required string ManifestHash { get; init; }
 }
 
+internal sealed record CheckpointPruneIntent
+{
+	public const int CurrentFormatVersion = 1;
+
+	public required int FormatVersion { get; init; }
+	public required Guid StoreId { get; init; }
+	public required long AnchorSequence { get; init; }
+	public required string AnchorAckHash { get; init; }
+	public required IReadOnlyList<string> ObsoleteCompletions { get; init; }
+	public required IReadOnlyList<string> ObsoleteManifests { get; init; }
+	public required IReadOnlyList<string> ObsoleteBlobs { get; init; }
+}
+
 internal sealed record RecoveryState(
+	Guid StoreId,
+	Guid WriterEpoch,
+	long CompactionGeneration,
+	string LastAckHash,
 	long Sequence,
 	long CheckpointSequence,
 	IReadOnlyList<PersistedMutation> Documents,

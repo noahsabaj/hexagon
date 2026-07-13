@@ -11,6 +11,7 @@ public static class DomainCollections
 {
 	public const string Characters = "characters";
 	public const string CharacterSlots = "character-slots";
+	public const string CharacterLifecycleGuards = "character-lifecycle-guards";
 	public const string Inventories = "inventories";
 	public const string OwnerInventories = "owner-inventories";
 	public const string Items = "items";
@@ -37,6 +38,8 @@ public static class DomainPersistence
 			.Register<CharacterRecord>( new PersistedTypeKey( "hexagon.character" ), 1,
 				static value => value with { SchemaState = value.SchemaState.DeepCopy() } )
 			.Register<CharacterSlotRecord>( new PersistedTypeKey( "hexagon.character-slot" ), 1,
+				PersistedValuePublication.Immutable )
+			.Register<CharacterLifecycleGuardRecord>( new PersistedTypeKey( "hexagon.character-lifecycle-guard" ), 1,
 				PersistedValuePublication.Immutable )
 			.Register<InventoryRecord>( new PersistedTypeKey( "hexagon.inventory" ), 1,
 				static value => value with

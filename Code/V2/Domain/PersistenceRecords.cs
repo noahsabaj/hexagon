@@ -14,6 +14,16 @@ public sealed record CharacterSlotRecord
 }
 
 /// <summary>
+/// Mutation fence for every reference that names a character. The revision is advanced in the
+/// same transaction as reference create/update/delete so character deletion cannot race a stale scan.
+/// </summary>
+public sealed record CharacterLifecycleGuardRecord
+{
+	public required CharacterId CharacterId { get; init; }
+	public long ReferenceRevision { get; init; }
+}
+
+/// <summary>
 /// Durable uniqueness guard for one framework-owned inventory role, such as a
 /// character's main inventory.
 /// </summary>

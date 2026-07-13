@@ -371,12 +371,17 @@ public sealed class CharacterServiceTests
 				Slot = character.Slot,
 				CharacterId = character.Id
 			});
+		unitOfWork.Create(
+			environment.Repositories.CharacterLifecycleGuards,
+			DomainKeys.CharacterLifecycleGuard(character.Id),
+			new CharacterLifecycleGuardRecord { CharacterId = character.Id, ReferenceRevision = 0 });
 	}
 
 	private static void AssertAllCreationCollectionsEmpty(ApplicationServiceTestEnvironment environment)
 	{
 		Assert.IsEmpty(environment.Repositories.Characters.All());
 		Assert.IsEmpty(environment.Repositories.CharacterSlots.All());
+		Assert.IsEmpty(environment.Repositories.CharacterLifecycleGuards.All());
 		Assert.IsEmpty(environment.Repositories.Inventories.All());
 		Assert.IsEmpty(environment.Repositories.OwnerInventories.All());
 		Assert.IsEmpty(environment.Repositories.Items.All());

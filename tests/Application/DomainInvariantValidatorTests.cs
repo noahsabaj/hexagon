@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Text.Json;
 using Hexagon.V2.Application;
 using Hexagon.V2.Domain;
 using Hexagon.V2.Kernel;
@@ -26,6 +27,10 @@ public sealed class DomainInvariantValidatorTests
 		await environment.SeedAsync(unitOfWork =>
 		{
 			unitOfWork.Create(environment.Repositories.Characters, DomainKeys.Character(character.Id), character);
+			unitOfWork.Create(
+				environment.Repositories.CharacterLifecycleGuards,
+				DomainKeys.CharacterLifecycleGuard(character.Id),
+				new CharacterLifecycleGuardRecord { CharacterId = character.Id, ReferenceRevision = 0 });
 			unitOfWork.Create(
 				environment.Repositories.CharacterSlots,
 				DomainKeys.CharacterSlot(account, 0),
@@ -332,7 +337,7 @@ public sealed class DomainInvariantValidatorTests
 			unit.Create(repositories.OwnerInventories, DomainKeys.OwnerInventory(inventory.Owner, "main"),
 				new OwnerInventoryRecord { Owner = inventory.Owner, Role = "main", InventoryId = inventory.Id });
 			Assert.IsTrue((await unit.CommitAsync()).Succeeded);
-			await first.DrainAsync();
+			Assert.IsTrue( (await first.ShutdownAsync()).IsClean );
 		}
 
 		await using var recovered = RecoveryProvider(storage, RecoveryRegistry());
@@ -352,6 +357,131 @@ public sealed class DomainInvariantValidatorTests
 		Assert.IsFalse(report.IsValid);
 		Assert.IsTrue(report.Issues.Any(issue => issue.Path.EndsWith("schema-state", StringComparison.Ordinal) &&
 			issue.Message.Contains("could not be decoded", StringComparison.Ordinal)));
+	}
+
+	[TestMethod]
+	public async Task NonCanonicalNestedPayloadFailsCodecRoundTripInvariant()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var account = new AccountId(9009);
+		var character = ApplicationServiceTestEnvironment.Character(account, 0) with
+		{
+			SchemaState = new TypedPayload
+			{
+				TypeId = new PersistedTypeId(ApplicationServiceTestEnvironment.StateTypeId),
+				TypeVersion = 1,
+				Data = System.Text.Json.JsonDocument.Parse("{ \"Name\" : \"test\" }").RootElement.Clone()
+			}
+		};
+		var inventory = ApplicationServiceTestEnvironment.Inventory(InventoryOwner.Character(character.Id));
+		await environment.SeedAsync(unit =>
+		{
+			unit.Create(environment.Repositories.Characters, DomainKeys.Character(character.Id), character);
+			unit.Create(environment.Repositories.CharacterSlots, DomainKeys.CharacterSlot(account, 0),
+				new CharacterSlotRecord { AccountId = account, Slot = 0, CharacterId = character.Id });
+			unit.Create(environment.Repositories.CharacterLifecycleGuards, DomainKeys.CharacterLifecycleGuard(character.Id),
+				new CharacterLifecycleGuardRecord { CharacterId = character.Id, ReferenceRevision = 0 });
+			unit.Create(environment.Repositories.Inventories, DomainKeys.Inventory(inventory.Id), inventory);
+			unit.Create(environment.Repositories.OwnerInventories, DomainKeys.OwnerInventory(inventory.Owner, "main"),
+				new OwnerInventoryRecord { Owner = inventory.Owner, Role = "main", InventoryId = inventory.Id });
+		});
+
+		var report = new DomainInvariantValidator(
+			environment.Repositories,
+			environment.Schema,
+			new SchemaItemShapeCatalog(environment.Schema, environment.Repositories),
+			environment.PersistenceProfile).Validate();
+
+		Assert.IsFalse(report.IsValid);
+		Assert.IsTrue(report.Issues.Any(issue =>
+			issue.Path.EndsWith("schema-state", StringComparison.Ordinal) &&
+			issue.Code == ErrorCode.PersistedTypeInvalid));
+	}
+
+	[TestMethod]
+	public async Task EquivalentJsonStringEscapesPassCodecRoundTripInvariant()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var account = new AccountId( 9011 );
+		var character = ApplicationServiceTestEnvironment.Character( account, 0 ) with
+		{
+			SchemaState = new TypedPayload
+			{
+				TypeId = new PersistedTypeId( ApplicationServiceTestEnvironment.StateTypeId ),
+				TypeVersion = 1,
+				Data = System.Text.Json.JsonDocument.Parse( "{\"name\":\"A\\u002BB\"}" ).RootElement.Clone()
+			}
+		};
+		var inventory = ApplicationServiceTestEnvironment.Inventory( InventoryOwner.Character( character.Id ) );
+		await environment.SeedAsync( unit =>
+		{
+			unit.Create( environment.Repositories.Characters, DomainKeys.Character( character.Id ), character );
+			unit.Create( environment.Repositories.CharacterSlots, DomainKeys.CharacterSlot( account, 0 ),
+				new CharacterSlotRecord { AccountId = account, Slot = 0, CharacterId = character.Id } );
+			unit.Create( environment.Repositories.CharacterLifecycleGuards, DomainKeys.CharacterLifecycleGuard( character.Id ),
+				new CharacterLifecycleGuardRecord { CharacterId = character.Id, ReferenceRevision = 0 } );
+			unit.Create( environment.Repositories.Inventories, DomainKeys.Inventory( inventory.Id ), inventory );
+			unit.Create( environment.Repositories.OwnerInventories, DomainKeys.OwnerInventory( inventory.Owner, "main" ),
+				new OwnerInventoryRecord { Owner = inventory.Owner, Role = "main", InventoryId = inventory.Id } );
+		} );
+
+		var report = new DomainInvariantValidator(
+			environment.Repositories,
+			environment.Schema,
+			new SchemaItemShapeCatalog( environment.Schema, environment.Repositories ),
+			environment.PersistenceProfile ).Validate();
+
+		Assert.IsTrue( report.IsValid, string.Join( Environment.NewLine, report.Issues.Select( issue => issue.Message ) ) );
+	}
+
+	[TestMethod]
+	public async Task RecoveryRejectsIntegerExtremeInventoryGeometryBeforeReady()
+	{
+		var storage = new InMemoryPersistenceStorage();
+		var schemaResult = SchemaCompiler.Compile(new RecoverySchema());
+		Assert.IsTrue(schemaResult.Succeeded, schemaResult.Error?.Message);
+		var schema = schemaResult.Value;
+		var characterId = CharacterId.New();
+		var account = new AccountId(9010);
+		var character = ApplicationServiceTestEnvironment.Character(account, 0, characterId);
+		var item = ApplicationServiceTestEnvironment.Item();
+		var inventory = ApplicationServiceTestEnvironment.Inventory(
+			InventoryOwner.Character(characterId),
+			new[] { new InventoryPlacement(item.Id, int.MaxValue, int.MaxValue) });
+		await using (var writer = RecoveryProvider(storage, RecoveryRegistry()))
+		{
+			await writer.InitializeAsync();
+			var repositories = new DomainRepositories(writer);
+			await using var unit = writer.BeginUnitOfWork();
+			unit.Create(repositories.Characters, DomainKeys.Character(characterId), character);
+			unit.Create(repositories.CharacterSlots, DomainKeys.CharacterSlot(account, 0),
+				new CharacterSlotRecord { AccountId = account, Slot = 0, CharacterId = characterId });
+			unit.Create(repositories.CharacterLifecycleGuards, DomainKeys.CharacterLifecycleGuard(characterId),
+				new CharacterLifecycleGuardRecord { CharacterId = characterId, ReferenceRevision = 0 });
+			unit.Create(repositories.Items, DomainKeys.Item(item.Id), item);
+			unit.Create(repositories.Inventories, DomainKeys.Inventory(inventory.Id), inventory);
+			unit.Create(repositories.OwnerInventories, DomainKeys.OwnerInventory(inventory.Owner, "main"),
+				new OwnerInventoryRecord { Owner = inventory.Owner, Role = "main", InventoryId = inventory.Id });
+			Assert.IsTrue((await unit.CommitAsync()).Succeeded);
+			Assert.IsTrue((await writer.ShutdownAsync()).IsClean);
+		}
+
+		var readerTypes = RecoveryRegistry();
+		var profile = new SchemaPersistenceInvariantProfile(
+			new PersistedTypeId(ApplicationServiceTestEnvironment.StateTypeId),
+			new[] { ItemPersistenceContract.WithoutTraits(ApplicationServiceTestEnvironment.ItemDefinitionId) },
+			Array.Empty<KeyValuePair<string, PersistedTypeId>>(),
+			Array.Empty<KeyValuePair<string, PersistedTypeId>>());
+		var invariants = new DomainInvariantValidator(
+			readerTypes, schema, new SchemaItemShapeCatalog(schema), profile);
+		await using var recovered = new FileSystemPersistenceProvider(
+			storage,
+			new FileSystemPersistenceOptions("outer-envelope-test") { CheckpointEveryCommits = 0 },
+			readerTypes,
+			invariants);
+
+		await Assert.ThrowsAsync<PersistenceCorruptionException>(async () => await recovered.InitializeAsync());
+		Assert.AreEqual(PersistenceProviderState.Faulted, recovered.State);
 	}
 
 	[TestMethod]
@@ -428,6 +558,146 @@ public sealed class DomainInvariantValidatorTests
 		Assert.IsTrue(report.Issues.Any(issue => issue.Path == "character-reference/strict-reference/scene-entity"));
 		Assert.IsFalse(report.Issues.Any(issue => issue.Path.StartsWith("character-reference/external-reference/", StringComparison.Ordinal) &&
 			!issue.Path.EndsWith("/state", StringComparison.Ordinal)));
+	}
+
+	[TestMethod]
+	[Timeout(30_000, CooperativeCancellation = true)]
+	public async Task TenThousandPlacementsUseBoundedOverlapValidation()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		const int itemCount = 10_000;
+		var documents = new Dictionary<DocumentAddress, PersistenceCandidateDocument>();
+		var itemCodec = environment.Provider.Types.Resolve<ItemRecord>();
+		var inventoryCodec = environment.Provider.Types.Resolve<InventoryRecord>();
+		var placements = new InventoryPlacement[itemCount];
+		for ( var index = 0; index < itemCount; index++ )
+		{
+			var item = ApplicationServiceTestEnvironment.Item(
+				id: new ItemId( IndexedGuid( index, 1 ) ) );
+			var address = new DocumentAddress( DomainCollections.Items, DomainKeys.Item( item.Id ) );
+			documents.Add( address, new PersistenceCandidateDocument(
+				address, new DocumentRevision( 1 ), itemCodec.Key, itemCodec.CurrentVersion, item ) );
+			placements[index] = new InventoryPlacement(
+				item.Id,
+				index == itemCount - 1 ? itemCount - 2 : index,
+				0 );
+		}
+		var inventory = ApplicationServiceTestEnvironment.Inventory(
+			InventoryOwner.SceneEntity( new SceneEntityId( IndexedGuid( 1, 2 ) ) ),
+			placements,
+			width: itemCount,
+			height: 1,
+			id: new InventoryId( IndexedGuid( 1, 3 ) ) );
+		var inventoryAddress = new DocumentAddress(
+			DomainCollections.Inventories, DomainKeys.Inventory( inventory.Id ) );
+		documents.Add( inventoryAddress, new PersistenceCandidateDocument(
+			inventoryAddress,
+			new DocumentRevision( 1 ),
+			inventoryCodec.Key,
+			inventoryCodec.CurrentVersion,
+			inventory ) );
+
+		var issues = new DomainInvariantValidator(
+			environment.Provider.Types,
+			environment.Schema,
+			new SchemaItemShapeCatalog( environment.Schema ),
+			environment.PersistenceProfile ).Validate(
+				new PersistenceInvariantContext( 1, 0, documents, isRecovery: true ) );
+
+		Assert.IsTrue( issues.Any( issue => issue.Message.Contains( "overlap", StringComparison.Ordinal ) ) );
+	}
+
+	[TestMethod]
+	[Timeout(30_000, CooperativeCancellation = true)]
+	public async Task TenThousandInventoryOwnershipChainUsesLinearCycleValidation()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		const int inventoryCount = 10_000;
+		var documents = new Dictionary<DocumentAddress, PersistenceCandidateDocument>();
+		var inventoryCodec = environment.Provider.Types.Resolve<InventoryRecord>();
+		var parentItems = Enumerable.Range( 0, inventoryCount )
+			.Select( index => new ItemId( IndexedGuid( index, 4 ) ) )
+			.ToArray();
+		for ( var index = 0; index < inventoryCount; index++ )
+		{
+			var inventory = ApplicationServiceTestEnvironment.Inventory(
+				InventoryOwner.ParentItem( parentItems[index] ),
+				index == 0
+					? Array.Empty<InventoryPlacement>()
+					: new[] { new InventoryPlacement( parentItems[index - 1], 0, 0 ) },
+				width: 1,
+				height: 1,
+				id: new InventoryId( IndexedGuid( index, 5 ) ) );
+			var address = new DocumentAddress(
+				DomainCollections.Inventories, DomainKeys.Inventory( inventory.Id ) );
+			documents.Add( address, new PersistenceCandidateDocument(
+				address,
+				new DocumentRevision( 1 ),
+				inventoryCodec.Key,
+				inventoryCodec.CurrentVersion,
+				inventory ) );
+		}
+
+		var issues = new DomainInvariantValidator(
+			environment.Provider.Types,
+			environment.Schema,
+			new SchemaItemShapeCatalog( environment.Schema ),
+			environment.PersistenceProfile ).Validate(
+				new PersistenceInvariantContext( 1, 0, documents, isRecovery: true ) );
+
+		Assert.IsFalse( issues.Any( issue => issue.Message.Contains( "cycle", StringComparison.Ordinal ) ) );
+	}
+
+	[TestMethod]
+	public async Task CommitValidationRoundTripsOnlyChangedPayloadsWhileRecoveryChecksAllPayloads()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var unchanged = ApplicationServiceTestEnvironment.Character( new AccountId( 9101 ), 0 );
+		unchanged = unchanged with
+		{
+			SchemaState = unchanged.SchemaState with
+			{
+				Data = JsonSerializer.SerializeToElement( new { name = 42 } )
+			}
+		};
+		var changed = ApplicationServiceTestEnvironment.Character( new AccountId( 9102 ), 0 );
+		var codec = environment.Provider.Types.Resolve<CharacterRecord>();
+		var unchangedAddress = new DocumentAddress(
+			DomainCollections.Characters, DomainKeys.Character( unchanged.Id ) );
+		var changedAddress = new DocumentAddress(
+			DomainCollections.Characters, DomainKeys.Character( changed.Id ) );
+		var documents = new Dictionary<DocumentAddress, PersistenceCandidateDocument>
+		{
+			[unchangedAddress] = new(
+				unchangedAddress, new DocumentRevision( 1 ), codec.Key, codec.CurrentVersion, unchanged ),
+			[changedAddress] = new(
+				changedAddress, new DocumentRevision( 1 ), codec.Key, codec.CurrentVersion, changed )
+		};
+		var validator = new DomainInvariantValidator(
+			environment.Provider.Types,
+			environment.Schema,
+			new SchemaItemShapeCatalog( environment.Schema ),
+			environment.PersistenceProfile );
+
+		var commitIssues = validator.Validate( new PersistenceInvariantContext(
+			2,
+			0,
+			documents,
+			previousDocuments: documents,
+			changedAddresses: new HashSet<DocumentAddress> { changedAddress } ) );
+		var recoveryIssues = validator.Validate( new PersistenceInvariantContext(
+			2, 0, documents, isRecovery: true ) );
+
+		Assert.IsFalse( commitIssues.Any( issue => issue.Path == $"character/{unchangedAddress.Key}/schema-state" ) );
+		Assert.IsTrue( recoveryIssues.Any( issue => issue.Path == $"character/{unchangedAddress.Key}/schema-state" ) );
+	}
+
+	private static Guid IndexedGuid( int index, byte discriminator )
+	{
+		var bytes = new byte[16];
+		BitConverter.GetBytes( index + 1 ).CopyTo( bytes, 0 );
+		bytes[15] = discriminator;
+		return new Guid( bytes );
 	}
 
 	private static PersistedTypeRegistry RecoveryRegistry() => new PersistedTypeRegistry()

@@ -11,80 +11,98 @@ namespace Hexagon.V2.Persistence;
 
 /// <summary>
 /// Shared transactional engine for volatile and WAL-backed providers. The committed view is changed
-/// only after the complete durability operation succeeds.
+/// only after the transaction acknowledgement is durable. Recoverable metadata written after that
+/// commit point may degrade health, but cannot make the acknowledged transaction fail or republish it.
 /// </summary>
 public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 {
 	private readonly SemaphoreSlim _commitGate = new( 1, 1 );
 	private readonly object _stateLock = new();
-	private readonly Dictionary<DocumentAddress, CommittedState> _documents = new();
-	private readonly Dictionary<string, HashSet<DocumentAddress>> _liveCollectionIndex = new( StringComparer.Ordinal );
-	private readonly Dictionary<string, Type> _collectionTypes = new( StringComparer.Ordinal );
+	private Dictionary<DocumentAddress, CommittedState> _documents = new();
+	private Dictionary<string, HashSet<DocumentAddress>> _liveCollectionIndex = new( StringComparer.Ordinal );
+	private Dictionary<string, Type> _collectionTypes = new( StringComparer.Ordinal );
 	private readonly Dictionary<string, object> _repositories = new( StringComparer.Ordinal );
+	private readonly IPersistenceInvariantSet _invariants;
 	private PersistenceHealth _health;
-	private bool _initialized;
 	private bool _accepting;
-	private bool _disposed;
+	private PersistenceProviderState _providerState;
+	private PersistenceShutdownResult? _shutdownResult;
+	private bool _shutdownCleanBeforeDisposal;
+	private bool _shutdownRecoverableBeforeDisposal;
+	private Guid _storeId;
+	private Guid _writerEpoch;
 	private long _sequence;
 	private long _checkpointSequence;
+	private long _compactionGeneration;
 
-	protected TransactionalPersistenceProvider( PersistedTypeRegistry? types = null )
+	protected TransactionalPersistenceProvider(
+		PersistedTypeRegistry? types = null,
+		IPersistenceInvariantSet? invariants = null )
 	{
 		Types = types ?? new PersistedTypeRegistry();
+		_invariants = invariants ?? EmptyPersistenceInvariantSet.Instance;
+		_providerState = PersistenceProviderState.Created;
 		_health = NewHealth( PersistenceHealthStatus.Uninitialized, detail: null );
 	}
 
 	public PersistedTypeRegistry Types { get; }
 	public PersistenceHealth Health => _health;
-	public bool IsInitialized => _initialized && !_disposed;
+	public bool IsInitialized => State == PersistenceProviderState.Ready;
+	public PersistenceProviderState State
+	{
+		get
+		{
+			lock ( _stateLock ) return _providerState;
+		}
+	}
+	public Guid StoreId => _storeId;
+	public Guid WriterEpoch => _writerEpoch;
+	public long CompactionGeneration => Interlocked.Read( ref _compactionGeneration );
 
 	protected virtual int AutomaticCheckpointCommitInterval => 0;
+	protected virtual bool ShouldCheckpointForStoragePressure => false;
 
 	public async ValueTask InitializeAsync( CancellationToken cancellationToken = default )
 	{
-		ThrowIfDisposed();
-		if ( _initialized )
-		{
-			throw new InvalidOperationException( "Persistence provider is already initialized." );
-		}
+		if ( State != PersistenceProviderState.Created )
+			throw new InvalidOperationException( $"Persistence provider cannot initialize from state '{State}'." );
 
 		await _commitGate.WaitAsync( cancellationToken );
-		if ( _initialized )
+		try
+		{
+			if ( State != PersistenceProviderState.Created )
+				throw new InvalidOperationException( $"Persistence provider cannot initialize from state '{State}'." );
+			SetProviderState( PersistenceProviderState.Initializing );
+
+			Types.Freeze();
+			var recovery = await AsyncOperation.Capture( () => RecoverCoreAsync( cancellationToken ) );
+			if ( !recovery.Succeeded )
+			{
+				var original = recovery.Exception!;
+				var exception = await FaultInitializationAsync( original );
+				if ( original is PersistenceLeaseUnavailableException && ReferenceEquals( original, exception ) )
+					throw original;
+				ThrowInitializationFailure( exception, cancellationToken );
+				return;
+			}
+
+			var apply = CaptureSynchronous( () => CompleteInitialization( recovery.Value! ) );
+			if ( !apply.Succeeded )
+			{
+				var exception = await FaultInitializationAsync( apply.Exception! );
+				ThrowInitializationFailure( exception, cancellationToken );
+			}
+		}
+		finally
 		{
 			_commitGate.Release();
-			throw new InvalidOperationException( "Persistence provider is already initialized." );
 		}
-
-		Types.Freeze();
-		var recovery = await AsyncOperation.Capture( () => RecoverCoreAsync( cancellationToken ) );
-		if ( !recovery.Succeeded )
-		{
-			var exception = recovery.Exception!;
-			_accepting = false;
-			_health = NewHealth( PersistenceHealthStatus.Fatal, exception.Message );
-			_commitGate.Release();
-			ThrowInitializationFailure( exception, cancellationToken );
-			return;
-		}
-
-		var apply = CaptureSynchronous( () => CompleteInitialization( recovery.Value! ) );
-		if ( !apply.Succeeded )
-		{
-			var exception = apply.Exception!;
-			_accepting = false;
-			_health = NewHealth( PersistenceHealthStatus.Fatal, exception.Message );
-			_commitGate.Release();
-			ThrowInitializationFailure( exception, cancellationToken );
-			return;
-		}
-
-		_commitGate.Release();
 	}
 
 	public IPersistenceRepository<T> Repository<T>( string collection ) where T : class
 	{
-		ThrowIfDisposed();
-		var normalizedCollection = PersistenceName.Validate( collection, nameof(collection) );
+		EnsureReady();
+		var normalizedCollection = PersistenceName.Validate( collection, nameof( collection ) );
 		var codec = Types.Resolve<T>();
 
 		lock ( _stateLock )
@@ -100,15 +118,15 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 				return typed;
 			}
 
-			if ( _collectionTypes.TryGetValue( normalizedCollection, out var recoveredType ) && recoveredType != typeof(T) )
+			if ( _collectionTypes.TryGetValue( normalizedCollection, out var recoveredType ) && recoveredType != typeof( T ) )
 			{
 				throw new InvalidOperationException(
-					$"Collection '{normalizedCollection}' contains '{recoveredType.FullName}', not '{typeof(T).FullName}'." );
+					$"Collection '{normalizedCollection}' contains '{recoveredType.FullName}', not '{typeof( T ).FullName}'." );
 			}
 
 			var repository = new PersistenceRepository<T>( this, normalizedCollection, codec );
 			_repositories.Add( normalizedCollection, repository );
-			_collectionTypes.TryAdd( normalizedCollection, typeof(T) );
+			_collectionTypes.TryAdd( normalizedCollection, typeof( T ) );
 			return repository;
 		}
 	}
@@ -121,7 +139,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 
 	public async ValueTask<PersistenceResult<long>> CheckpointAsync( CancellationToken cancellationToken = default )
 	{
-		if ( !IsInitialized )
+		if ( State != PersistenceProviderState.Ready )
 		{
 			return PersistenceResult<long>.Failure(
 				new PersistenceError( PersistenceErrorCode.NotInitialized, "Persistence provider is not initialized." ) );
@@ -134,6 +152,22 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 				new PersistenceError( PersistenceErrorCode.DurabilityFailed, _health.Detail ?? "Persistence provider is fatal." ) );
 			_commitGate.Release();
 			return error;
+		}
+		if ( _health.CommitMetadataRepairPending )
+		{
+			var repair = await AsyncOperation.Capture(
+				() => RepairCommitMetadataCoreAsync( CancellationToken.None ) );
+			if ( !repair.Succeeded )
+			{
+				var exception = repair.Exception!;
+				_health = CreateCommitMetadataRepairFailureHealth( exception );
+				_commitGate.Release();
+				return PersistenceResult<long>.Failure( new PersistenceError(
+					PersistenceErrorCode.DurabilityFailed,
+					_health.Detail!,
+					Exception: exception ) );
+			}
+			ApplySuccessfulCommitMetadataRepair();
 		}
 
 		var snapshotCapture = CaptureSynchronous( CaptureCheckpointSnapshot );
@@ -163,86 +197,196 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		}
 
 		_checkpointSequence = snapshot.Sequence;
+		ApplySuccessfulCheckpoint( snapshot );
+		var checkpointOutcome = persistence.Value!;
 		_health = new PersistenceHealth(
-			PersistenceHealthStatus.Healthy,
+			checkpointOutcome.CleanupSucceeded
+				? PersistenceHealthStatus.Healthy
+				: PersistenceHealthStatus.Degraded,
 			_sequence,
 			_checkpointSequence,
-			false,
+			!checkpointOutcome.CleanupSucceeded,
 			_health.RepairedPartialWalTail,
 			_health.RecoveredFromCheckpointFallback,
-			null,
+			checkpointOutcome.Detail,
 			DateTimeOffset.UtcNow );
 		_commitGate.Release();
 		return PersistenceResult<long>.Success( snapshot.Sequence );
 	}
 
-	public async ValueTask DrainAsync( CancellationToken cancellationToken = default )
+	public async ValueTask<PersistenceShutdownResult> ShutdownAsync( CancellationToken cancellationToken = default )
 	{
-		ThrowIfDisposed();
+		if ( _shutdownResult is { LeaseReleased: true } ) return _shutdownResult;
 		await _commitGate.WaitAsync( cancellationToken );
-		_commitGate.Release();
-	}
-
-	public async ValueTask DisposeAsync()
-	{
-		if ( _disposed )
+		try
 		{
-			return;
-		}
-
-		_accepting = false;
-		await _commitGate.WaitAsync();
-		if ( _initialized && _health.Status != PersistenceHealthStatus.Fatal )
-		{
-			var snapshotCapture = CaptureSynchronous( CaptureCheckpointSnapshot );
-			if ( !snapshotCapture.Succeeded )
+			if ( _shutdownResult is { LeaseReleased: true } ) return _shutdownResult;
+			if ( _shutdownResult is not null )
 			{
-				_health = CreateCheckpointFailureHealth( snapshotCapture.Exception!, final: true );
-			}
-			else
-			{
-				var snapshot = snapshotCapture.Value!;
-				var checkpoint = await AsyncOperation.Capture(
-					() => PersistCheckpointCoreAsync( snapshot, CancellationToken.None ) );
-				if ( checkpoint.Succeeded )
+				var pending = _shutdownResult;
+				var disposalRetry = await AsyncOperation.Capture( DisposeCoreAsync );
+				var retriedLeaseReleased = LeaseIsReleased;
+				var retriedClean = _shutdownCleanBeforeDisposal && disposalRetry.Succeeded && retriedLeaseReleased;
+				var retriedRecoverable = _shutdownRecoverableBeforeDisposal && disposalRetry.Succeeded && retriedLeaseReleased;
+				var retriedDetail = retriedClean
+					? null
+					: disposalRetry.Succeeded
+						? pending.Detail
+						: $"Provider disposal failed: {disposalRetry.Exception!.Message}";
+				_shutdownResult = pending with
 				{
-					_checkpointSequence = snapshot.Sequence;
+					IsClean = retriedClean,
+					IsRecoverable = retriedRecoverable,
+					LeaseReleased = retriedLeaseReleased,
+					Detail = retriedDetail
+				};
+				_health = new PersistenceHealth(
+					State == PersistenceProviderState.Faulted
+						? PersistenceHealthStatus.Fatal
+						: PersistenceHealthStatus.Disposed,
+					_sequence,
+					_checkpointSequence,
+					!pending.Checkpoint.Succeeded,
+					_health.RepairedPartialWalTail,
+					_health.RecoveredFromCheckpointFallback,
+					retriedDetail,
+					DateTimeOffset.UtcNow );
+				return _shutdownResult;
+			}
+			_accepting = false;
+			var priorState = State;
+			if ( priorState == PersistenceProviderState.Ready )
+				SetProviderState( PersistenceProviderState.Draining );
+
+			Exception? metadataRepairFailure = null;
+			if ( priorState == PersistenceProviderState.Ready && _health.CommitMetadataRepairPending )
+			{
+				var repair = await AsyncOperation.Capture(
+					() => RepairCommitMetadataCoreAsync( CancellationToken.None ) );
+				if ( repair.Succeeded ) ApplySuccessfulCommitMetadataRepair();
+				else
+				{
+					metadataRepairFailure = repair.Exception!;
+					_health = CreateCommitMetadataRepairFailureHealth( metadataRepairFailure );
+				}
+			}
+
+			PersistenceResult<long> checkpoint;
+			var checkpointCleanup = CheckpointPersistenceOutcome.Clean;
+			if ( priorState == PersistenceProviderState.Ready && _health.Status != PersistenceHealthStatus.Fatal &&
+				metadataRepairFailure is null )
+			{
+				var snapshotCapture = CaptureSynchronous( CaptureCheckpointSnapshot );
+				if ( !snapshotCapture.Succeeded )
+				{
+					var exception = snapshotCapture.Exception!;
+					_health = CreateCheckpointFailureHealth( exception, final: true );
+					checkpoint = PersistenceResult<long>.Failure(
+						new PersistenceError( PersistenceErrorCode.SerializationFailed, _health.Detail!, Exception: exception ) );
 				}
 				else
 				{
-					_health = CreateCheckpointFailureHealth( checkpoint.Exception!, final: true );
+					var snapshot = snapshotCapture.Value!;
+					var persisted = await AsyncOperation.Capture(
+						() => PersistCheckpointCoreAsync( snapshot, CancellationToken.None ) );
+					if ( persisted.Succeeded )
+					{
+						checkpointCleanup = persisted.Value!;
+						_checkpointSequence = snapshot.Sequence;
+						ApplySuccessfulCheckpoint( snapshot );
+						if ( !checkpointCleanup.CleanupSucceeded )
+						{
+							_health = new PersistenceHealth(
+								PersistenceHealthStatus.Degraded,
+								_sequence,
+								_checkpointSequence,
+								true,
+								_health.RepairedPartialWalTail,
+								_health.RecoveredFromCheckpointFallback,
+								checkpointCleanup.Detail,
+								DateTimeOffset.UtcNow );
+						}
+						checkpoint = PersistenceResult<long>.Success( snapshot.Sequence );
+					}
+					else
+					{
+						var exception = persisted.Exception!;
+						_health = CreateCheckpointFailureHealth( exception, final: true );
+						checkpoint = PersistenceResult<long>.Failure(
+							new PersistenceError( PersistenceErrorCode.DurabilityFailed, _health.Detail!, Exception: exception ) );
+					}
 				}
 			}
+			else
+			{
+				checkpoint = PersistenceResult<long>.Failure( new PersistenceError(
+					PersistenceErrorCode.DurabilityFailed,
+					metadataRepairFailure is null
+						? _health.Detail ?? "Final checkpoint was unavailable because the provider was not ready."
+						: "Final checkpoint was skipped because acknowledged commit metadata repair failed.",
+					Exception: metadataRepairFailure ) );
+			}
+
+			var disposal = await AsyncOperation.Capture( DisposeCoreAsync );
+			var leaseReleased = LeaseIsReleased;
+			var knownDurable = priorState == PersistenceProviderState.Ready &&
+				_health.Status != PersistenceHealthStatus.Fatal;
+			_shutdownCleanBeforeDisposal = knownDurable && checkpoint.Succeeded && checkpointCleanup.CleanupSucceeded;
+			_shutdownRecoverableBeforeDisposal = knownDurable && _sequence >= _checkpointSequence;
+			var clean = _shutdownCleanBeforeDisposal &&
+				disposal.Succeeded && leaseReleased;
+			var recoverable = _shutdownRecoverableBeforeDisposal && disposal.Succeeded && leaseReleased;
+			var detail = clean ? null : disposal.Succeeded
+				? checkpoint.Error?.Message ?? checkpointCleanup.Detail
+				: $"Provider disposal failed: {disposal.Exception!.Message}";
+			_shutdownResult = new PersistenceShutdownResult(
+				_sequence,
+				_checkpointSequence,
+				clean,
+				recoverable,
+				checkpoint,
+				leaseReleased,
+				detail );
+			_health = new PersistenceHealth(
+				priorState == PersistenceProviderState.Faulted
+					? PersistenceHealthStatus.Fatal
+					: PersistenceHealthStatus.Disposed,
+				_sequence,
+				_checkpointSequence,
+				!checkpoint.Succeeded,
+				_health.RepairedPartialWalTail,
+				_health.RecoveredFromCheckpointFallback,
+				detail,
+				DateTimeOffset.UtcNow );
+			SetProviderState( priorState == PersistenceProviderState.Faulted
+				? PersistenceProviderState.Faulted
+				: PersistenceProviderState.Disposed );
+			return _shutdownResult;
 		}
-
-		var disposal = await AsyncOperation.Capture( DisposeCoreAsync );
-		_disposed = true;
-		_initialized = false;
-		_health = new PersistenceHealth(
-			PersistenceHealthStatus.Disposed,
-			_sequence,
-			_checkpointSequence,
-			_health.CheckpointRetryPending,
-			_health.RepairedPartialWalTail,
-			_health.RecoveredFromCheckpointFallback,
-			disposal.Succeeded ? _health.Detail : $"Provider disposal failed: {disposal.Exception!.Message}",
-			DateTimeOffset.UtcNow );
-		_commitGate.Release();
-		_commitGate.Dispose();
-
-		if ( !disposal.Succeeded )
+		finally
 		{
-			throw new InvalidOperationException( "Persistence provider disposal failed.", disposal.Exception );
+			_commitGate.Release();
 		}
 	}
 
+	public async ValueTask DisposeAsync() => _ = await ShutdownAsync( CancellationToken.None );
+
 	private protected abstract ValueTask<RecoveryState> RecoverCoreAsync( CancellationToken cancellationToken );
-	private protected abstract ValueTask PersistCommitCoreAsync( WalCommitBatch batch, CancellationToken cancellationToken );
-	private protected abstract ValueTask PersistCheckpointCoreAsync( CheckpointSnapshot snapshot, CancellationToken cancellationToken );
+	private protected abstract ValueTask<CommitPersistenceOutcome> PersistCommitCoreAsync(
+		WalCommitBatch batch,
+		CancellationToken cancellationToken );
+	private protected abstract ValueTask<CheckpointPersistenceOutcome> PersistCheckpointCoreAsync(
+		CheckpointSnapshot snapshot,
+		CancellationToken cancellationToken );
+	private protected virtual ValueTask RepairCommitMetadataCoreAsync( CancellationToken cancellationToken ) =>
+		ValueTask.CompletedTask;
 	protected virtual ValueTask DisposeCoreAsync() => ValueTask.CompletedTask;
+	protected virtual bool LeaseIsReleased => true;
+	protected virtual string DurableAckHash => string.Empty;
 
 	internal DocumentSnapshot<T>? Find<T>( PersistenceRepository<T> repository, string key ) where T : class
 	{
+		EnsureReady();
 		EnsureRepository( repository );
 		var address = new DocumentAddress( repository.Collection, key );
 
@@ -259,6 +403,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 
 	internal IReadOnlyList<DocumentSnapshot<T>> All<T>( PersistenceRepository<T> repository ) where T : class
 	{
+		EnsureReady();
 		EnsureRepository( repository );
 		lock ( _stateLock )
 		{
@@ -278,6 +423,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 
 	internal CapturedDocument<T> Capture<T>( PersistenceRepository<T> repository, string key, bool clone ) where T : class
 	{
+		EnsureReady();
 		EnsureRepository( repository );
 		var address = new DocumentAddress( repository.Collection, key );
 		lock ( _stateLock )
@@ -305,6 +451,8 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 	internal async ValueTask<PersistenceResult<CommitReceipt>> CommitAsync(
 		IReadOnlyCollection<StagedChange> stagedChanges,
 		IReadOnlyCollection<RevisionDependency> dependencies,
+		IReadOnlyCollection<ICommitPrecondition> preconditions,
+		long openedCompactionGeneration,
 		CancellationToken cancellationToken )
 	{
 		if ( !_accepting || !IsInitialized )
@@ -324,6 +472,30 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			return error;
 		}
 
+		if ( _health.CommitMetadataRepairPending )
+		{
+			var repair = await AsyncOperation.Capture(
+				() => RepairCommitMetadataCoreAsync( CancellationToken.None ) );
+			if ( !repair.Succeeded )
+			{
+				var exception = repair.Exception!;
+				_health = CreateCommitMetadataRepairFailureHealth( exception );
+				_commitGate.Release();
+				return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
+					PersistenceErrorCode.DurabilityFailed,
+					_health.Detail!,
+					Exception: exception ) );
+			}
+			ApplySuccessfulCommitMetadataRepair();
+		}
+		if ( openedCompactionGeneration != _compactionGeneration )
+		{
+			_commitGate.Release();
+			return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
+				PersistenceErrorCode.StaleTransaction,
+				$"Unit of work opened under compaction generation {openedCompactionGeneration}; current generation is {_compactionGeneration}." ) );
+		}
+
 		var validationError = ValidateExpectedRevisions( stagedChanges, dependencies );
 		if ( validationError is not null )
 		{
@@ -331,15 +503,17 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			return PersistenceResult<CommitReceipt>.Failure( validationError );
 		}
 
-		if ( stagedChanges.Count == 0 )
-		{
-			var empty = PersistenceResult<CommitReceipt>.Success(
-				new CommitReceipt( _sequence, Array.Empty<CommittedDocumentVersion>() ) );
-			_commitGate.Release();
-			return empty;
-		}
-
-		var preparation = CaptureSynchronous( () => PrepareCommit( stagedChanges, checked(_sequence + 1) ) );
+		var preparation = CaptureSynchronous( () => stagedChanges.Count == 0
+			? new PreparedCommit(
+				new WalCommitBatch
+				{
+					FormatVersion = WalCommitBatch.CurrentFormatVersion,
+					Sequence = _sequence,
+					CommittedAtUtc = DateTimeOffset.UtcNow,
+					Mutations = Array.Empty<PersistedMutation>()
+				},
+				Array.Empty<CommittedState>() )
+			: PrepareCommit( stagedChanges, checked(_sequence + 1) ) );
 		if ( !preparation.Succeeded )
 		{
 			var exception = preparation.Exception!;
@@ -349,33 +523,124 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		}
 
 		var prepared = preparation.Value!;
+		var candidateCapture = CaptureSynchronous( () => BuildInvariantContext(
+			prepared.States,
+			prepared.Batch.Sequence,
+			_compactionGeneration ) );
+		if ( !candidateCapture.Succeeded )
+		{
+			_commitGate.Release();
+			return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
+				PersistenceErrorCode.InvariantViolation,
+				$"Candidate state could not be validated: {candidateCapture.Exception!.Message}",
+				Exception: candidateCapture.Exception ) );
+		}
+		var candidate = candidateCapture.Value!;
+		foreach ( var precondition in preconditions )
+		{
+			PersistenceInvariantIssue? issue;
+			try
+			{
+				issue = precondition.Validate( new CommitPreconditionContext(
+					_sequence, _compactionGeneration, candidate ) );
+			}
+			catch ( Exception exception )
+			{
+				_commitGate.Release();
+				return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
+					PersistenceErrorCode.InvariantViolation,
+					$"Commit precondition '{precondition.GetType().Name}' failed closed: {exception.Message}",
+					Exception: exception ) );
+			}
+			if ( issue is not null )
+			{
+				_commitGate.Release();
+				return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
+					PersistenceErrorCode.RevisionConflict,
+					$"Commit precondition failed at '{issue.Path}': {issue.Message}" ) );
+			}
+		}
+
+		if ( stagedChanges.Count == 0 )
+		{
+			var empty = PersistenceResult<CommitReceipt>.Success(
+				new CommitReceipt( _sequence, Array.Empty<CommittedDocumentVersion>() )
+				{
+					CompactionGeneration = _compactionGeneration
+				} );
+			_commitGate.Release();
+			return empty;
+		}
+
+		IReadOnlyList<PersistenceInvariantIssue> invariantIssues;
+		try
+		{
+			invariantIssues = _invariants.Validate( candidate );
+		}
+		catch ( Exception exception )
+		{
+			_commitGate.Release();
+			return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
+				PersistenceErrorCode.InvariantViolation,
+				$"Persistence invariant set failed closed: {exception.Message}",
+				Exception: exception ) );
+		}
+		if ( invariantIssues.Count > 0 )
+		{
+			var issue = invariantIssues[0];
+			_commitGate.Release();
+			return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
+				PersistenceErrorCode.InvariantViolation,
+				$"Persistence invariant '{issue.Code}' failed at '{issue.Path}': {issue.Message}" ) );
+		}
+
 		// Once the durability call starts, caller cancellation cannot make commit state ambiguous.
 		var durability = await AsyncOperation.Capture(
 			() => PersistCommitCoreAsync( prepared.Batch, CancellationToken.None ) );
 		if ( !durability.Succeeded )
 		{
 			var exception = durability.Exception!;
+			if ( exception is PersistenceStorageLimitException )
+			{
+				_commitGate.Release();
+				return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
+					PersistenceErrorCode.StorageLimitExceeded, exception.Message, Exception: exception ) );
+			}
 			_accepting = false;
 			_health = CreateFatalCommitHealth( exception );
+			SetProviderState( PersistenceProviderState.Faulted );
 			_commitGate.Release();
 			return PersistenceResult<CommitReceipt>.Failure(
 				new PersistenceError( PersistenceErrorCode.DurabilityFailed, _health.Detail!, Exception: exception ) );
 		}
 
+		var durabilityOutcome = durability.Value!;
 		var publication = CaptureSynchronous( () => PublishCommit( prepared ) );
 		if ( !publication.Succeeded )
 		{
 			var exception = publication.Exception!;
 			_accepting = false;
 			_health = CreateFatalCommitHealth( exception );
+			SetProviderState( PersistenceProviderState.Faulted );
 			_commitGate.Release();
 			return PersistenceResult<CommitReceipt>.Failure(
 				new PersistenceError( PersistenceErrorCode.DurabilityFailed, _health.Detail!, Exception: exception ) );
 		}
 
 		var receipt = publication.Value!;
-		var shouldCheckpoint = AutomaticCheckpointCommitInterval > 0
-			&& _sequence - _checkpointSequence >= AutomaticCheckpointCommitInterval;
+		if ( durabilityOutcome.MetadataRepairPending )
+		{
+			_health = _health with
+			{
+				Status = PersistenceHealthStatus.Degraded,
+				CommitMetadataRepairPending = true,
+				Detail = durabilityOutcome.Detail,
+				ObservedAtUtc = DateTimeOffset.UtcNow
+			};
+		}
+		var shouldCheckpoint = !durabilityOutcome.MetadataRepairPending && (ShouldCheckpointForStoragePressure ||
+			(AutomaticCheckpointCommitInterval > 0
+			&& _sequence - _checkpointSequence >= AutomaticCheckpointCommitInterval));
 		_commitGate.Release();
 
 		if ( shouldCheckpoint )
@@ -393,19 +658,46 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			throw new PersistenceCorruptionException( "Recovered sequence metadata is invalid." );
 		}
 
+		if ( recovered.StoreId == Guid.Empty || recovered.WriterEpoch == Guid.Empty || recovered.CompactionGeneration < 0 )
+			throw new PersistenceCorruptionException( "Recovered store identity metadata is invalid." );
+
+		var documents = new Dictionary<DocumentAddress, CommittedState>();
+		var collectionTypes = new Dictionary<string, Type>( StringComparer.Ordinal );
+		var liveIndex = new Dictionary<string, HashSet<DocumentAddress>>( StringComparer.Ordinal );
+		foreach ( var mutation in recovered.Documents )
+		{
+			var state = DecodeRecoveredMutation( mutation, collectionTypes );
+			documents.Add( state.Address, state );
+			if ( !liveIndex.TryGetValue( state.Address.Collection, out var index ) )
+			{
+				index = new HashSet<DocumentAddress>();
+				liveIndex.Add( state.Address.Collection, index );
+			}
+			if ( !state.IsDeleted ) index.Add( state.Address );
+		}
+
+		var candidate = BuildInvariantContext(
+			documents.Values, recovered.Sequence, recovered.CompactionGeneration, isRecovery: true );
+		var issues = _invariants.Validate( candidate );
+		if ( issues.Count > 0 )
+		{
+			var issue = issues[0];
+			throw new PersistenceCorruptionException(
+				$"Recovered persistence invariant '{issue.Code}' failed at '{issue.Path}': {issue.Message}" );
+		}
+
 		lock ( _stateLock )
 		{
-			foreach ( var mutation in recovered.Documents )
-			{
-				ApplyRecoveredMutation( mutation );
-			}
-
+			_documents = documents;
+			_liveCollectionIndex = liveIndex;
+			_collectionTypes = collectionTypes;
+			_storeId = recovered.StoreId;
+			_writerEpoch = recovered.WriterEpoch;
+			_compactionGeneration = recovered.CompactionGeneration;
 			_sequence = recovered.Sequence;
 			_checkpointSequence = recovered.CheckpointSequence;
 		}
 
-		_initialized = true;
-		_accepting = true;
 		var recoveredWithRepair = recovered.RepairedPartialWalTail || recovered.RecoveredFromCheckpointFallback;
 		_health = new PersistenceHealth(
 			recoveredWithRepair ? PersistenceHealthStatus.Degraded : PersistenceHealthStatus.Healthy,
@@ -416,6 +708,8 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			recovered.RecoveredFromCheckpointFallback,
 			recovered.Detail,
 			DateTimeOffset.UtcNow );
+		_accepting = true;
+		SetProviderState( PersistenceProviderState.Ready );
 	}
 
 	private static void ThrowInitializationFailure( Exception exception, CancellationToken cancellationToken )
@@ -426,6 +720,22 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		}
 
 		throw new PersistenceCorruptionException( $"Persistence initialization failed: {exception.Message}", exception );
+	}
+
+	private async ValueTask<Exception> FaultInitializationAsync( Exception exception )
+	{
+		_accepting = false;
+		SetProviderState( PersistenceProviderState.Faulted );
+		var disposal = await AsyncOperation.Capture( DisposeCoreAsync );
+		if ( !disposal.Succeeded )
+		{
+			exception = new AggregateException(
+				"Persistence initialization failed and its acquired resources could not be released.",
+				exception,
+				disposal.Exception! );
+		}
+		_health = NewHealth( PersistenceHealthStatus.Fatal, exception.Message );
+		return exception;
 	}
 
 	private PersistenceHealth CreateCheckpointFailureHealth( Exception exception, bool final ) => new(
@@ -447,6 +757,28 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		_health.RecoveredFromCheckpointFallback,
 		$"Commit durability or publication failed; restart is required before more writes: {exception.Message}",
 		DateTimeOffset.UtcNow );
+
+	private PersistenceHealth CreateCommitMetadataRepairFailureHealth( Exception exception ) => _health with
+	{
+		Status = PersistenceHealthStatus.Degraded,
+		CommitMetadataRepairPending = true,
+		Detail = $"Acknowledged commit metadata repair failed and must be retried before another write: " +
+			$"{exception.GetType().Name}: {exception.Message}",
+		ObservedAtUtc = DateTimeOffset.UtcNow
+	};
+
+	private void ApplySuccessfulCommitMetadataRepair()
+	{
+		var remainsDegraded = _health.CheckpointRetryPending ||
+			_health.RepairedPartialWalTail || _health.RecoveredFromCheckpointFallback;
+		_health = _health with
+		{
+			Status = remainsDegraded ? PersistenceHealthStatus.Degraded : PersistenceHealthStatus.Healthy,
+			CommitMetadataRepairPending = false,
+			Detail = remainsDegraded ? _health.Detail : null,
+			ObservedAtUtc = DateTimeOffset.UtcNow
+		};
+	}
 
 	private CommitReceipt PublishCommit( PreparedCommit prepared )
 	{
@@ -470,7 +802,10 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			_sequence,
 			prepared.States
 				.Select( state => new CommittedDocumentVersion( state.Address, state.Revision, state.IsDeleted ) )
-				.ToArray() );
+				.ToArray() )
+		{
+			CompactionGeneration = _compactionGeneration
+		};
 	}
 
 	private static OperationOutcome CaptureSynchronous( Action operation )
@@ -576,9 +911,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 				continue;
 			}
 
-			var payload = change.Codec.Serialize( change.Value! ).Clone();
-			var canonicalValue = change.Codec.PrepareForPublication(
-				change.Codec.Deserialize( payload, change.Codec.CurrentVersion ) );
+			var canonical = PersistedCodecCanonicalization.FromValue( change.Codec, change.Value! );
 			var mutation = new PersistedMutation
 			{
 				EnvelopeVersion = PersistedDocumentEnvelope.CurrentEnvelopeVersion,
@@ -588,10 +921,16 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 				PersistedType = change.Codec.Key.Value,
 				TypeVersion = change.Codec.CurrentVersion,
 				IsDeleted = false,
-				Payload = payload
+				Payload = canonical.Payload
 			};
 			mutations.Add( mutation );
-			states.Add( new CommittedState( change.Address, nextRevision, change.Codec, false, canonicalValue, payload ) );
+			states.Add( new CommittedState(
+				change.Address,
+				nextRevision,
+				change.Codec,
+				false,
+				canonical.Value,
+				canonical.Payload ) );
 		}
 
 		return new PreparedCommit(
@@ -609,11 +948,18 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 	{
 		lock ( _stateLock )
 		{
+			var reclaimsTombstones = _documents.Values.Any( state => state.IsDeleted );
 			return new CheckpointSnapshot
 			{
 				FormatVersion = CheckpointSnapshot.CurrentFormatVersion,
 				Sequence = _sequence,
+				StoreId = _storeId,
+				CompactionGeneration = reclaimsTombstones
+					? checked(_compactionGeneration + 1)
+					: _compactionGeneration,
+				LastAckHash = DurableAckHash,
 				Documents = _documents.Values
+					.Where( state => !state.IsDeleted )
 					.OrderBy( state => state.Address.Collection, StringComparer.Ordinal )
 					.ThenBy( state => state.Address.Key, StringComparer.Ordinal )
 					.Select( ToMutation )
@@ -622,7 +968,25 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		}
 	}
 
-	private void ApplyRecoveredMutation( PersistedMutation mutation )
+	private void ApplySuccessfulCheckpoint( CheckpointSnapshot snapshot )
+	{
+		if ( snapshot.CompactionGeneration > _compactionGeneration )
+		{
+			lock ( _stateLock )
+			{
+				foreach ( var address in _documents
+					.Where( pair => pair.Value.IsDeleted )
+					.Select( pair => pair.Key )
+					.ToArray() )
+					_documents.Remove( address );
+			}
+		}
+		_compactionGeneration = snapshot.CompactionGeneration;
+	}
+
+	private CommittedState DecodeRecoveredMutation(
+		PersistedMutation mutation,
+		IDictionary<string, Type> collectionTypes )
 	{
 		if ( mutation.EnvelopeVersion != PersistedDocumentEnvelope.CurrentEnvelopeVersion )
 		{
@@ -648,12 +1012,14 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 				exception );
 		}
 
-		BindCollectionType( address.Collection, codec.ClrType );
+		BindCollectionType( collectionTypes, address.Collection, codec.ClrType );
+		if ( mutation.TypeVersion != codec.CurrentVersion )
+			throw new PersistenceCorruptionException(
+				$"Document '{address}' uses persisted type version {mutation.TypeVersion}; exact current version {codec.CurrentVersion} is required." );
 
 		if ( mutation.IsDeleted )
 		{
-			Publish( new CommittedState( address, new DocumentRevision( mutation.Revision ), codec, true, null, null ) );
-			return;
+			return new CommittedState( address, new DocumentRevision( mutation.Revision ), codec, true, null, null );
 		}
 
 		if ( mutation.Payload is not { } payload )
@@ -663,21 +1029,49 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 
 		try
 		{
-			var value = codec.PrepareForPublication( codec.Deserialize( payload, mutation.TypeVersion ) );
-			var currentPayload = codec.Serialize( value ).Clone();
-			Publish( new CommittedState(
+			var canonical = PersistedCodecCanonicalization.FromPayload(
+				codec, payload, mutation.TypeVersion, requireCanonicalPayload: true );
+			return new CommittedState(
 				address,
 				new DocumentRevision( mutation.Revision ),
 				codec,
 				false,
-				value,
-				currentPayload ) );
+				canonical.Value,
+				canonical.Payload );
 		}
 		catch ( Exception exception ) when ( exception is JsonException or InvalidOperationException or NotSupportedException )
 		{
 			throw new PersistenceCorruptionException( $"Document '{address}' could not be decoded.", exception );
 		}
 	}
+
+	private PersistenceInvariantContext BuildInvariantContext(
+		IEnumerable<CommittedState> replacements,
+		long sequence,
+		long compactionGeneration,
+		bool isRecovery = false )
+	{
+		var previous = _documents.Values
+			.Where( state => !state.IsDeleted )
+			.ToDictionary( state => state.Address, ToCandidate );
+		var values = new Dictionary<DocumentAddress, PersistenceCandidateDocument>( previous );
+		var changed = new HashSet<DocumentAddress>();
+		foreach ( var state in replacements )
+		{
+			changed.Add( state.Address );
+			if ( state.IsDeleted ) values.Remove( state.Address );
+			else values[state.Address] = ToCandidate( state );
+		}
+		return new PersistenceInvariantContext(
+			sequence, compactionGeneration, values, previous, changed, isRecovery );
+	}
+
+	private static PersistenceCandidateDocument ToCandidate( CommittedState state ) => new(
+		state.Address,
+		state.Revision,
+		state.Codec.Key,
+		state.Codec.CurrentVersion,
+		state.Value! );
 
 	private void Publish( CommittedState state )
 	{
@@ -702,13 +1096,18 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 
 	private void BindCollectionType( string collection, Type type )
 	{
-		if ( _collectionTypes.TryGetValue( collection, out var existing ) && existing != type )
+		BindCollectionType( _collectionTypes, collection, type );
+	}
+
+	private static void BindCollectionType( IDictionary<string, Type> collectionTypes, string collection, Type type )
+	{
+		if ( collectionTypes.TryGetValue( collection, out var existing ) && existing != type )
 		{
 			throw new PersistenceCorruptionException(
 				$"Collection '{collection}' mixes persisted CLR types '{existing.FullName}' and '{type.FullName}'." );
 		}
 
-		_collectionTypes[collection] = type;
+		collectionTypes[collection] = type;
 	}
 
 	private static PersistedMutation ToMutation( CommittedState state ) => new()
@@ -733,8 +1132,8 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 
 	private void EnsureAccepting()
 	{
-		ThrowIfDisposed();
-		if ( !_initialized || !_accepting )
+		EnsureReady();
+		if ( !_accepting )
 		{
 			throw new InvalidOperationException( _health.Detail ?? "Persistence provider is not accepting work." );
 		}
@@ -744,16 +1143,21 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 	{
 		if ( !ReferenceEquals( repository.Provider, this ) )
 		{
-			throw new ArgumentException( "Repository belongs to a different persistence provider.", nameof(repository) );
+			throw new ArgumentException( "Repository belongs to a different persistence provider.", nameof( repository ) );
 		}
 	}
 
-	private void ThrowIfDisposed()
+	private void EnsureReady()
 	{
-		if ( _disposed )
-		{
-			throw new ObjectDisposedException( GetType().Name );
-		}
+		var state = State;
+		if ( state == PersistenceProviderState.Disposed ) throw new ObjectDisposedException( GetType().Name );
+		if ( state != PersistenceProviderState.Ready )
+			throw new InvalidOperationException( $"Persistence provider is not ready (state: {state})." );
+	}
+
+	private void SetProviderState( PersistenceProviderState state )
+	{
+		lock ( _stateLock ) _providerState = state;
 	}
 
 	private PersistenceHealth NewHealth( PersistenceHealthStatus status, string? detail ) => new(
@@ -827,9 +1231,15 @@ internal sealed class PersistenceUnitOfWork : IUnitOfWork
 	private readonly TransactionalPersistenceProvider _provider;
 	private readonly Dictionary<DocumentAddress, TransactionalPersistenceProvider.StagedChange> _changes = new();
 	private readonly Dictionary<DocumentAddress, TransactionalPersistenceProvider.RevisionDependency> _dependencies = new();
+	private readonly List<ICommitPrecondition> _preconditions = new();
+	private readonly long _openedCompactionGeneration;
 	private bool _completed;
 
-	public PersistenceUnitOfWork( TransactionalPersistenceProvider provider ) => _provider = provider;
+	public PersistenceUnitOfWork( TransactionalPersistenceProvider provider )
+	{
+		_provider = provider;
+		_openedCompactionGeneration = provider.CompactionGeneration;
+	}
 
 	public DocumentEditor<T>? Edit<T>(
 		IPersistenceRepository<T> repository,
@@ -900,7 +1310,7 @@ internal sealed class PersistenceUnitOfWork : IUnitOfWork
 		EnsureOpen();
 		if ( !editor.BelongsTo( this ) )
 		{
-			throw new ArgumentException( "Editor belongs to a different unit of work.", nameof(editor) );
+			throw new ArgumentException( "Editor belongs to a different unit of work.", nameof( editor ) );
 		}
 
 		var concrete = Resolve( editor.Repository );
@@ -929,11 +1339,23 @@ internal sealed class PersistenceUnitOfWork : IUnitOfWork
 			true ) );
 	}
 
+	public void Require( ICommitPrecondition precondition )
+	{
+		ArgumentNullException.ThrowIfNull( precondition );
+		EnsureOpen();
+		_preconditions.Add( precondition );
+	}
+
 	public async ValueTask<PersistenceResult<CommitReceipt>> CommitAsync( CancellationToken cancellationToken = default )
 	{
 		EnsureOpen();
 		_completed = true;
-		return await _provider.CommitAsync( _changes.Values, _dependencies.Values, cancellationToken );
+		return await _provider.CommitAsync(
+			_changes.Values,
+			_dependencies.Values,
+			_preconditions,
+			_openedCompactionGeneration,
+			cancellationToken );
 	}
 
 	public ValueTask DisposeAsync()
@@ -946,7 +1368,7 @@ internal sealed class PersistenceUnitOfWork : IUnitOfWork
 
 	private static PersistenceRepository<T> Resolve<T>( IPersistenceRepository<T> repository ) where T : class =>
 		repository as PersistenceRepository<T>
-		?? throw new ArgumentException( "Repository is not a Hexagon persistence repository.", nameof(repository) );
+		?? throw new ArgumentException( "Repository is not a Hexagon persistence repository.", nameof( repository ) );
 
 	private void Stage( TransactionalPersistenceProvider.StagedChange change )
 	{
@@ -963,7 +1385,7 @@ internal sealed class PersistenceUnitOfWork : IUnitOfWork
 	{
 		if ( _completed )
 		{
-			throw new ObjectDisposedException( nameof(PersistenceUnitOfWork), "Unit of work is already completed." );
+			throw new ObjectDisposedException( nameof( PersistenceUnitOfWork ), "Unit of work is already completed." );
 		}
 	}
 }

@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -110,7 +111,11 @@ public enum PersistenceErrorCode
 	SerializationFailed,
 	DurabilityFailed,
 	CorruptStore,
-	InvalidOperation
+	InvalidOperation,
+	LeaseUnavailable,
+	InvariantViolation,
+	StorageLimitExceeded,
+	StaleTransaction
 }
 
 public sealed record PersistenceError(
@@ -129,7 +134,137 @@ public readonly record struct PersistenceResult<T>( T? Value, PersistenceError? 
 
 public sealed record CommittedDocumentVersion( DocumentAddress Address, DocumentRevision Revision, bool IsDeleted );
 
-public sealed record CommitReceipt( long Sequence, IReadOnlyList<CommittedDocumentVersion> Documents );
+public sealed record CommitReceipt( long Sequence, IReadOnlyList<CommittedDocumentVersion> Documents )
+{
+	public long CompactionGeneration { get; init; }
+}
+
+public enum PersistenceProviderState
+{
+	Created = 0,
+	Initializing,
+	Ready,
+	Draining,
+	Disposed,
+	Faulted
+}
+
+public sealed record PersistenceInvariantIssue( string Code, string Path, string Message );
+
+public sealed record PersistenceCandidateDocument(
+	DocumentAddress Address,
+	DocumentRevision Revision,
+	PersistedTypeKey PersistedType,
+	int TypeVersion,
+	object Value );
+
+/// <summary>Read-only candidate view used identically before commit publication and during recovery.</summary>
+public sealed class PersistenceInvariantContext
+{
+	private readonly IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument> _documents;
+	private readonly IReadOnlyCollection<PersistenceCandidateDocument> _documentValues;
+	private readonly IReadOnlyDictionary<string, IReadOnlyList<PersistenceCandidateDocument>> _collections;
+
+	internal PersistenceInvariantContext(
+		long sequence,
+		long compactionGeneration,
+		IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument> documents,
+		IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument>? previousDocuments = null,
+		IReadOnlySet<DocumentAddress>? changedAddresses = null,
+		bool isRecovery = false )
+	{
+		Sequence = sequence;
+		CompactionGeneration = compactionGeneration;
+		_documents = documents;
+		_documentValues = documents.Values.ToArray();
+		_collections = _documentValues
+			.GroupBy( document => document.Address.Collection, StringComparer.Ordinal )
+			.ToDictionary(
+				group => group.Key,
+				group => (IReadOnlyList<PersistenceCandidateDocument>)group
+					.OrderBy( document => document.Address.Key, StringComparer.Ordinal )
+					.ToArray(),
+				StringComparer.Ordinal );
+		PreviousDocuments = previousDocuments ?? new Dictionary<DocumentAddress, PersistenceCandidateDocument>();
+		ChangedAddresses = changedAddresses ?? new HashSet<DocumentAddress>();
+		IsRecovery = isRecovery;
+	}
+
+	public long Sequence { get; }
+	public long CompactionGeneration { get; }
+	public bool IsRecovery { get; }
+	public IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument> PreviousDocuments { get; }
+	public IReadOnlySet<DocumentAddress> ChangedAddresses { get; }
+	public IReadOnlyCollection<PersistenceCandidateDocument> Documents => _documentValues;
+
+	public IReadOnlyList<PersistenceCandidateDocument> Collection( string collection ) =>
+		_collections.TryGetValue( collection, out var documents )
+			? documents
+			: Array.Empty<PersistenceCandidateDocument>();
+
+	public bool TryGet( DocumentAddress address, out PersistenceCandidateDocument? document ) =>
+		_documents.TryGetValue( address, out document );
+}
+
+public interface IPersistenceInvariantSet
+{
+	IReadOnlyList<PersistenceInvariantIssue> Validate( PersistenceInvariantContext context );
+}
+
+public sealed class EmptyPersistenceInvariantSet : IPersistenceInvariantSet
+{
+	public static EmptyPersistenceInvariantSet Instance { get; } = new();
+	private EmptyPersistenceInvariantSet() { }
+	public IReadOnlyList<PersistenceInvariantIssue> Validate( PersistenceInvariantContext context ) =>
+		Array.Empty<PersistenceInvariantIssue>();
+}
+
+public sealed record CommitPreconditionContext(
+	long Sequence,
+	long CompactionGeneration,
+	PersistenceInvariantContext Candidate );
+
+public interface ICommitPrecondition
+{
+	PersistenceInvariantIssue? Validate( CommitPreconditionContext context );
+}
+
+public sealed record PersistenceShutdownResult(
+	long DurableSequence,
+	long CheckpointSequence,
+	bool IsClean,
+	bool IsRecoverable,
+	PersistenceResult<long> Checkpoint,
+	bool LeaseReleased,
+	string? Detail );
+
+internal readonly record struct CheckpointPersistenceOutcome(
+	bool CleanupSucceeded,
+	string? Detail )
+{
+	public static CheckpointPersistenceOutcome Clean { get; } = new( true, null );
+
+	public static CheckpointPersistenceOutcome Degraded( Exception exception ) => new(
+		false,
+		$"Verified checkpoint was published, but immutable-history cleanup remains pending: " +
+		$"{exception.GetType().Name}: {exception.Message}" );
+}
+
+/// <summary>
+/// Result of publishing one immutable WAL acknowledgement. The acknowledgement is the
+/// transaction commit point; metadata written after it is recoverable bookkeeping only.
+/// </summary>
+internal readonly record struct CommitPersistenceOutcome(
+	bool MetadataRepairPending,
+	string? Detail )
+{
+	public static CommitPersistenceOutcome Clean { get; } = new( false, null );
+
+	public static CommitPersistenceOutcome Degraded( Exception exception ) => new(
+		true,
+		$"The transaction acknowledgement is durable, but redundant commit-head repair is pending: " +
+		$"{exception.GetType().Name}: {exception.Message}" );
+}
 
 public enum PersistenceHealthStatus
 {
@@ -141,8 +276,9 @@ public enum PersistenceHealthStatus
 }
 
 /// <summary>
-/// Observable persistence status. A checkpoint failure is degraded and retryable; a commit
-/// durability failure is fatal because the caller cannot safely know how much of a frame reached storage.
+/// Observable persistence status. A checkpoint or redundant commit-head failure is degraded and
+/// retryable. A failure before a verified acknowledgement is fatal because the caller cannot safely
+/// infer a durable transaction from a frame alone.
 /// </summary>
 public sealed record PersistenceHealth(
 	PersistenceHealthStatus Status,
@@ -152,7 +288,14 @@ public sealed record PersistenceHealth(
 	bool RepairedPartialWalTail,
 	bool RecoveredFromCheckpointFallback,
 	string? Detail,
-	DateTimeOffset ObservedAtUtc );
+	DateTimeOffset ObservedAtUtc )
+{
+	/// <summary>
+	/// True when an acknowledged transaction is durable and visible but its redundant
+	/// commit-head file must be repaired before another write or clean shutdown.
+	/// </summary>
+	public bool CommitMetadataRepairPending { get; init; }
+}
 
 public sealed class PersistenceCorruptionException : Exception
 {
@@ -179,6 +322,7 @@ public interface IUnitOfWork : IAsyncDisposable
 	void Put<T>( IPersistenceRepository<T> repository, string key, T value ) where T : class;
 	void Save<T>( DocumentEditor<T> editor ) where T : class;
 	void Delete<T>( IPersistenceRepository<T> repository, DocumentSnapshot<T> observed ) where T : class;
+	void Require( ICommitPrecondition precondition );
 	ValueTask<PersistenceResult<CommitReceipt>> CommitAsync( CancellationToken cancellationToken = default );
 }
 
@@ -187,12 +331,16 @@ public interface IPersistenceProvider : IAsyncDisposable
 	PersistedTypeRegistry Types { get; }
 	PersistenceHealth Health { get; }
 	bool IsInitialized { get; }
+	PersistenceProviderState State { get; }
+	Guid StoreId { get; }
+	Guid WriterEpoch { get; }
+	long CompactionGeneration { get; }
 
 	ValueTask InitializeAsync( CancellationToken cancellationToken = default );
 	IPersistenceRepository<T> Repository<T>( string collection ) where T : class;
 	IUnitOfWork BeginUnitOfWork();
 	ValueTask<PersistenceResult<long>> CheckpointAsync( CancellationToken cancellationToken = default );
-	ValueTask DrainAsync( CancellationToken cancellationToken = default );
+	ValueTask<PersistenceShutdownResult> ShutdownAsync( CancellationToken cancellationToken = default );
 }
 
 /// <summary>

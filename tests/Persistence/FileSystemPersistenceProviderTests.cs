@@ -7,10 +7,11 @@ namespace Hexagon.V2.Tests.Persistence;
 [TestClass]
 public sealed class FileSystemPersistenceProviderTests
 {
-	private const string WalPath = "hexagon/v2/test-schema/wal/commits.wal";
-	private const string CompletionPrefix = "hexagon/v2/test-schema/checkpoints/complete";
-	private const string ManifestPrefix = "hexagon/v2/test-schema/checkpoints/manifests";
-	private const string BlobPrefix = "hexagon/v2/test-schema/checkpoints/blobs";
+	private const string Root = "hexagon/persistence/v3/test-schema";
+	private const string FramePrefix = Root + "/wal/frames";
+	private const string CompletionPrefix = Root + "/checkpoints/complete";
+	private const string ManifestPrefix = Root + "/checkpoints/manifests";
+	private const string BlobPrefix = Root + "/checkpoints/blobs";
 
 	[TestMethod]
 	public async Task StorageAdapterRetainsImmutableContent()
@@ -30,6 +31,7 @@ public sealed class FileSystemPersistenceProviderTests
 			Format = PersistenceFormatManifest.ExpectedFormat,
 			Version = PersistenceFormatManifest.CurrentVersion,
 			SchemaId = "test-schema",
+			StoreId = Guid.NewGuid(),
 			CreatedAtUtc = DateTimeOffset.UtcNow
 		}, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase } );
 
@@ -42,7 +44,7 @@ public sealed class FileSystemPersistenceProviderTests
 		var storage = new FaultInjectingStorage();
 		await using var provider = PersistenceTestSupport.CreateFileProvider( storage );
 		await provider.InitializeAsync();
-		var content = await storage.ReadAsync( "hexagon/v2/test-schema/format.json" );
+		var content = await storage.ReadAsync( Root + "/format.json" );
 		Assert.IsNotNull( content );
 		Assert.IsGreaterThan( 0, content.Value.Length );
 	}
@@ -66,7 +68,7 @@ public sealed class FileSystemPersistenceProviderTests
 			update.Save( editor );
 			Assert.IsTrue( (await update.CommitAsync()).Succeeded );
 		}
-		await first.DrainAsync();
+		Assert.IsTrue( (await first.ShutdownAsync()).IsClean );
 
 		await using var recovered = PersistenceTestSupport.CreateFileProvider( storage );
 		await recovered.InitializeAsync();
@@ -95,7 +97,7 @@ public sealed class FileSystemPersistenceProviderTests
 		var exposedTags = (System.Collections.Generic.IList<string>)canonical.Value.Tags;
 		Assert.IsTrue( exposedTags.IsReadOnly );
 		Assert.Throws<NotSupportedException>( () => exposedTags.Add( "forged" ) );
-		await first.DrainAsync();
+		Assert.IsTrue( (await first.ShutdownAsync()).IsClean );
 
 		await using var recovered = PersistenceTestSupport.CreateFileProvider( storage );
 		await recovered.InitializeAsync();
@@ -117,17 +119,20 @@ public sealed class FileSystemPersistenceProviderTests
 			create.Create( repository, "alyx", new TestDocument( "Alyx", 1 ) );
 			Assert.IsTrue( (await create.CommitAsync()).Succeeded );
 		}
-		await storage.AppendAsync( WalPath, new byte[] { (byte)'H', (byte)'X', (byte)'W' } );
+		var orphan = FramePrefix + "/00000000000000000002-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.frame";
+		await storage.SeedAsync( orphan, new byte[] { (byte)'H', (byte)'X', (byte)'W' } );
+		Assert.IsTrue( (await first.ShutdownAsync()).IsClean );
 
 		await using var repaired = PersistenceTestSupport.CreateFileProvider( storage );
 		await repaired.InitializeAsync();
-		Assert.IsTrue( repaired.Health.RepairedPartialWalTail );
+		Assert.IsFalse( await storage.ExistsAsync( orphan ) );
 		var repairedRepository = repaired.Repository<TestDocument>( "characters" );
 		await using ( var create = repaired.BeginUnitOfWork() )
 		{
 			create.Create( repairedRepository, "barney", new TestDocument( "Barney", 1 ) );
 			Assert.IsTrue( (await create.CommitAsync()).Succeeded );
 		}
+		Assert.IsTrue( (await repaired.ShutdownAsync()).IsClean );
 
 		await using var verified = PersistenceTestSupport.CreateFileProvider( storage );
 		await verified.InitializeAsync();
@@ -151,8 +156,9 @@ public sealed class FileSystemPersistenceProviderTests
 			create.Create( repository, "barney", new TestDocument( "Barney", 1 ) );
 			Assert.IsTrue( (await create.CommitAsync()).Succeeded );
 		}
-		// Offset ten is inside the checksum of the first complete frame, with a second frame after it.
-		await storage.CorruptByteAsync( WalPath, 10 );
+		Assert.IsTrue( (await first.ShutdownAsync()).IsClean );
+		var firstFrame = (await storage.ListAsync( FramePrefix )).OrderBy( value => value, StringComparer.Ordinal ).First();
+		await storage.CorruptByteAsync( firstFrame, 10 );
 
 		await using var corrupted = PersistenceTestSupport.CreateFileProvider( storage );
 		await Assert.ThrowsAsync<PersistenceCorruptionException>( async () => await corrupted.InitializeAsync() );
@@ -219,6 +225,10 @@ public sealed class FileSystemPersistenceProviderTests
 			update.Save( editor );
 			Assert.IsTrue( (await update.CommitAsync()).Succeeded );
 		}
+		storage.FailNextImmutableWrite = path => path.Contains( "/checkpoints/complete/", StringComparison.Ordinal );
+		var shutdown = await first.ShutdownAsync();
+		Assert.IsFalse( shutdown.IsClean );
+		Assert.IsTrue( shutdown.IsRecoverable );
 
 		await using var recovered = PersistenceTestSupport.CreateFileProvider( storage );
 		await recovered.InitializeAsync();
@@ -248,14 +258,14 @@ public sealed class FileSystemPersistenceProviderTests
 		Assert.IsTrue( (await provider.CheckpointAsync()).Succeeded );
 		Assert.AreEqual( PersistenceHealthStatus.Healthy, provider.Health.Status );
 
-		storage.FailNextAppend = true;
+		storage.FailNextImmutableWrite = path => path.Contains( "/wal/frames/", StringComparison.Ordinal );
 		await using var failedCommit = provider.BeginUnitOfWork();
 		failedCommit.Create( repository, "barney", new TestDocument( "Barney", 1 ) );
 		var result = await failedCommit.CommitAsync();
 
 		Assert.IsFalse( result.Succeeded );
 		Assert.AreEqual( PersistenceErrorCode.DurabilityFailed, result.Error!.Code );
-		Assert.IsNull( repository.Find( "barney" ) );
+		Assert.AreEqual( 1L, provider.Health.Sequence );
 		Assert.AreEqual( PersistenceHealthStatus.Fatal, provider.Health.Status );
 	}
 
@@ -307,21 +317,21 @@ public sealed class FileSystemPersistenceProviderTests
 	}
 
 	[TestMethod]
-	public async Task DisposeWaitsForAnInFlightDurableAppend()
+	public async Task DisposeWaitsForAnInFlightDurableFrameWrite()
 	{
 		var storage = new FaultInjectingStorage();
 		var provider = PersistenceTestSupport.CreateFileProvider( storage );
 		await provider.InitializeAsync();
 		var repository = provider.Repository<TestDocument>( "characters" );
-		var appendStarted = storage.BlockNextAppend();
+		var immutableStarted = storage.BlockNextImmutableWrite();
 		var unit = provider.BeginUnitOfWork();
 		unit.Create( repository, "alyx", new TestDocument( "Alyx", 1 ) );
 		var commitTask = unit.CommitAsync().AsTask();
-		await appendStarted;
+		await immutableStarted;
 
 		var disposeTask = provider.DisposeAsync().AsTask();
 		Assert.IsFalse( disposeTask.IsCompleted );
-		storage.ReleaseBlockedAppend();
+		storage.ReleaseBlockedImmutableWrite();
 		var result = await commitTask;
 		await disposeTask;
 		await unit.DisposeAsync();

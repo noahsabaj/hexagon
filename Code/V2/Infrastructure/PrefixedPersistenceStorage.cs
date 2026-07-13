@@ -26,6 +26,11 @@ public sealed class PrefixedPersistenceStorage : IPersistenceStorage
 
 	public string Prefix { get; }
 
+	public ValueTask<IPersistenceLease> AcquireExclusiveLeaseAsync(
+		string path,
+		CancellationToken cancellationToken = default ) =>
+		_inner.AcquireExclusiveLeaseAsync( Map( path ), cancellationToken );
+
 	public ValueTask<bool> ExistsAsync( string path, CancellationToken cancellationToken = default ) =>
 		_inner.ExistsAsync( Map( path ), cancellationToken );
 
@@ -49,18 +54,6 @@ public sealed class PrefixedPersistenceStorage : IPersistenceStorage
 		ReadOnlyMemory<byte> content,
 		CancellationToken cancellationToken = default ) =>
 		_inner.TryWriteImmutableAsync( Map( path ), content, cancellationToken );
-
-	public ValueTask AppendAsync(
-		string path,
-		ReadOnlyMemory<byte> content,
-		CancellationToken cancellationToken = default ) =>
-		_inner.AppendAsync( Map( path ), content, cancellationToken );
-
-	public ValueTask TruncateAsync(
-		string path,
-		long length,
-		CancellationToken cancellationToken = default ) =>
-		_inner.TruncateAsync( Map( path ), length, cancellationToken );
 
 	public ValueTask DeleteAsync( string path, CancellationToken cancellationToken = default ) =>
 		_inner.DeleteAsync( Map( path ), cancellationToken );

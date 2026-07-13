@@ -23,9 +23,10 @@ public sealed class DomainInvariantReport
 /// Neutral startup/test validator for cross-document invariants that cannot be
 /// represented by a single aggregate revision.
 /// </summary>
-public sealed class DomainInvariantValidator
+public sealed class DomainInvariantValidator : IPersistenceInvariantSet
 {
-	private readonly DomainRepositories _repositories;
+	private readonly DomainRepositories? _repositories;
+	private readonly PersistedTypeRegistry _types;
 	private readonly CompiledSchema _schema;
 	private readonly IItemShapeCatalog _shapes;
 	private readonly SchemaPersistenceInvariantProfile _persistenceProfile;
@@ -37,6 +38,19 @@ public sealed class DomainInvariantValidator
 		SchemaPersistenceInvariantProfile persistenceProfile )
 	{
 		_repositories = repositories ?? throw new ArgumentNullException( nameof(repositories) );
+		_types = repositories.Provider.Types;
+		_schema = schema ?? throw new ArgumentNullException( nameof(schema) );
+		_shapes = shapes ?? throw new ArgumentNullException( nameof(shapes) );
+		_persistenceProfile = persistenceProfile ?? throw new ArgumentNullException( nameof(persistenceProfile) );
+	}
+
+	public DomainInvariantValidator(
+		PersistedTypeRegistry types,
+		CompiledSchema schema,
+		IItemShapeCatalog shapes,
+		SchemaPersistenceInvariantProfile persistenceProfile )
+	{
+		_types = types ?? throw new ArgumentNullException( nameof(types) );
 		_schema = schema ?? throw new ArgumentNullException( nameof(schema) );
 		_shapes = shapes ?? throw new ArgumentNullException( nameof(shapes) );
 		_persistenceProfile = persistenceProfile ?? throw new ArgumentNullException( nameof(persistenceProfile) );
@@ -44,17 +58,62 @@ public sealed class DomainInvariantValidator
 
 	public DomainInvariantReport Validate()
 	{
+		if ( _repositories is null )
+			throw new InvalidOperationException( "Repository-backed validation requires the DomainRepositories constructor." );
+		return ValidateDocuments(
+			_repositories.Characters.All(),
+			_repositories.CharacterSlots.All(),
+			_repositories.CharacterLifecycleGuards.All(),
+			_repositories.Inventories.All(),
+			_repositories.OwnerInventories.All(),
+			_repositories.Items.All(),
+			_repositories.WorldItems.All(),
+			_repositories.UniqueReservations.All(),
+			_repositories.CharacterReferences.All(),
+			_repositories.SceneEntities.All() );
+	}
+
+	public IReadOnlyList<PersistenceInvariantIssue> Validate( PersistenceInvariantContext context )
+	{
+		ArgumentNullException.ThrowIfNull( context );
+		var issues = new List<DomainInvariantIssue>();
+		var characters = CandidateDocuments<CharacterRecord>( context, DomainCollections.Characters, issues );
+		var slots = CandidateDocuments<CharacterSlotRecord>( context, DomainCollections.CharacterSlots, issues );
+		var guards = CandidateDocuments<CharacterLifecycleGuardRecord>(
+			context, DomainCollections.CharacterLifecycleGuards, issues );
+		var inventories = CandidateDocuments<InventoryRecord>( context, DomainCollections.Inventories, issues );
+		var ownerInventories = CandidateDocuments<OwnerInventoryRecord>( context, DomainCollections.OwnerInventories, issues );
+		var items = CandidateDocuments<ItemRecord>( context, DomainCollections.Items, issues );
+		var worldItems = CandidateDocuments<WorldItemRecord>( context, DomainCollections.WorldItems, issues );
+		var reservations = CandidateDocuments<UniqueReservationRecord>( context, DomainCollections.UniqueReservations, issues );
+		var references = CandidateDocuments<CharacterReferenceRecord>( context, DomainCollections.CharacterReferences, issues );
+		var sceneEntities = CandidateDocuments<PersistentSceneEntityRecord>( context, DomainCollections.SceneEntities, issues );
+		ValidateReferenceGuardMutation( context, issues );
+		Func<string, string, bool>? shouldValidatePayload = context.IsRecovery
+			? null
+			: (collection, key) => context.ChangedAddresses.Contains( new DocumentAddress( collection, key ) );
+		issues.AddRange( ValidateDocuments(
+			characters, slots, guards, inventories, ownerInventories, items, worldItems,
+			reservations, references, sceneEntities, shouldValidatePayload ).Issues );
+		return issues.Select( issue => new PersistenceInvariantIssue(
+			issue.Code.ToString(), issue.Path, issue.Message ) ).ToArray();
+	}
+
+	private DomainInvariantReport ValidateDocuments(
+		IReadOnlyList<DocumentSnapshot<CharacterRecord>> characterDocuments,
+		IReadOnlyList<DocumentSnapshot<CharacterSlotRecord>> slotDocuments,
+		IReadOnlyList<DocumentSnapshot<CharacterLifecycleGuardRecord>> guardDocuments,
+		IReadOnlyList<DocumentSnapshot<InventoryRecord>> inventoryDocuments,
+		IReadOnlyList<DocumentSnapshot<OwnerInventoryRecord>> ownerInventoryDocuments,
+		IReadOnlyList<DocumentSnapshot<ItemRecord>> itemDocuments,
+		IReadOnlyList<DocumentSnapshot<WorldItemRecord>> worldItemDocuments,
+		IReadOnlyList<DocumentSnapshot<UniqueReservationRecord>> reservationDocuments,
+		IReadOnlyList<DocumentSnapshot<CharacterReferenceRecord>> referenceDocuments,
+		IReadOnlyList<DocumentSnapshot<PersistentSceneEntityRecord>> sceneEntityDocuments,
+		Func<string, string, bool>? shouldValidatePayload = null )
+	{
 		var issues = new List<DomainInvariantIssue>();
 		ValidateProfile( issues );
-		var characterDocuments = _repositories.Characters.All();
-		var slotDocuments = _repositories.CharacterSlots.All();
-		var inventoryDocuments = _repositories.Inventories.All();
-		var ownerInventoryDocuments = _repositories.OwnerInventories.All();
-		var itemDocuments = _repositories.Items.All();
-		var worldItemDocuments = _repositories.WorldItems.All();
-		var reservationDocuments = _repositories.UniqueReservations.All();
-		var referenceDocuments = _repositories.CharacterReferences.All();
-		var sceneEntityDocuments = _repositories.SceneEntities.All();
 		var characters = characterDocuments.Select( value => value.Value ).ToArray();
 		var inventories = inventoryDocuments.Select( value => value.Value ).ToArray();
 		var items = itemDocuments
@@ -68,16 +127,127 @@ public sealed class DomainInvariantValidator
 			characterDocuments, slotDocuments, inventoryDocuments, itemDocuments,
 			worldItemDocuments, sceneEntityDocuments, issues );
 		ValidateCharacters( characters, slotDocuments, issues );
+		ValidateLifecycleGuards( characters, guardDocuments, issues );
 		ValidateReservations( characters, reservationDocuments, issues );
 		ValidateOwnerInventories(
 			characters, inventories, items, sceneEntities, ownerInventoryDocuments, issues );
 		ValidateNestedPayloads(
-			characterDocuments, itemDocuments, referenceDocuments, sceneEntityDocuments, issues );
+			characterDocuments, itemDocuments, referenceDocuments, sceneEntityDocuments,
+			shouldValidatePayload, issues );
 		ValidateReferenceTargets( characters, sceneEntities, referenceDocuments, issues );
 		ValidateInventories( inventories, items, issues );
 		ValidateLocations( inventories, items, worldItemDocuments.Select( value => value.Value ), issues );
 		ValidateBagGraph( inventories, issues );
 		return new DomainInvariantReport( issues );
+	}
+
+	private static void ValidateLifecycleGuards(
+		IReadOnlyCollection<CharacterRecord> characters,
+		IEnumerable<DocumentSnapshot<CharacterLifecycleGuardRecord>> guardDocuments,
+		ICollection<DomainInvariantIssue> issues )
+	{
+		var guards = guardDocuments.ToArray();
+		var characterCounts = characters
+			.GroupBy( character => character.Id )
+			.ToDictionary( group => group.Key, group => group.Count() );
+		var guardCounts = guards
+			.GroupBy( document => document.Value.CharacterId )
+			.ToDictionary( group => group.Key, group => group.Count() );
+		foreach ( var document in guards )
+		{
+			var guard = document.Value;
+			ValidateKey( document.Key, DomainKeys.CharacterLifecycleGuard( guard.CharacterId ),
+				"character-lifecycle-guard", issues );
+			if ( guard.ReferenceRevision < 0 )
+				issues.Add( new DomainInvariantIssue(
+					ErrorCode.Conflict, $"character-lifecycle-guard/{document.Key}", "Reference revision cannot be negative." ) );
+			if ( characterCounts.GetValueOrDefault( guard.CharacterId ) != 1 )
+				issues.Add( new DomainInvariantIssue(
+					ErrorCode.NotFound, $"character-lifecycle-guard/{document.Key}", "Lifecycle guard has no character." ) );
+		}
+		foreach ( var character in characters )
+			if ( guardCounts.GetValueOrDefault( character.Id ) != 1 )
+				issues.Add( new DomainInvariantIssue(
+					ErrorCode.Conflict, $"character/{character.Id}/lifecycle-guard", "Character requires exactly one lifecycle guard." ) );
+	}
+
+	private static void ValidateReferenceGuardMutation(
+		PersistenceInvariantContext context,
+		ICollection<DomainInvariantIssue> issues )
+	{
+		if ( context.IsRecovery ) return;
+		var targets = new HashSet<CharacterId>();
+		var candidateReferenceTargets = new HashSet<CharacterId>();
+		foreach ( var candidate in context.Collection( DomainCollections.CharacterReferences ) )
+			if ( candidate.Value is CharacterReferenceRecord reference )
+				AddTargets( reference, candidateReferenceTargets );
+		foreach ( var address in context.ChangedAddresses.Where(
+			address => address.Collection == DomainCollections.CharacterReferences ) )
+		{
+			if ( context.PreviousDocuments.TryGetValue( address, out var previous ) &&
+				previous.Value is CharacterReferenceRecord oldReference ) AddTargets( oldReference, targets );
+			if ( context.TryGet( address, out var candidate ) &&
+				candidate?.Value is CharacterReferenceRecord newReference ) AddTargets( newReference, targets );
+		}
+		foreach ( var target in targets )
+		{
+			var characterAddress = new DocumentAddress(
+				DomainCollections.Characters, DomainKeys.Character( target ) );
+			var existed = context.PreviousDocuments.ContainsKey( characterAddress );
+			var exists = context.TryGet( characterAddress, out _ );
+			if ( !existed && !exists ) continue;
+			var guardAddress = new DocumentAddress(
+				DomainCollections.CharacterLifecycleGuards, DomainKeys.CharacterLifecycleGuard( target ) );
+			if ( existed && !exists && context.ChangedAddresses.Contains( guardAddress ) &&
+				!context.TryGet( guardAddress, out _) )
+			{
+				var dangling = candidateReferenceTargets.Contains( target );
+				if ( dangling )
+					issues.Add( new DomainInvariantIssue(
+						ErrorCode.Conflict, $"character/{target}/references",
+						"Character deletion left a matching character reference." ) );
+				continue;
+			}
+			if ( !context.ChangedAddresses.Contains( guardAddress ) ||
+				!context.PreviousDocuments.TryGetValue( guardAddress, out var previous ) ||
+				previous.Value is not CharacterLifecycleGuardRecord oldGuard ||
+				!context.TryGet( guardAddress, out var current ) ||
+				current?.Value is not CharacterLifecycleGuardRecord newGuard ||
+				newGuard.ReferenceRevision != checked(oldGuard.ReferenceRevision + 1) )
+				issues.Add( new DomainInvariantIssue(
+					ErrorCode.Conflict,
+					$"character/{target}/lifecycle-guard",
+					"Character-reference mutation did not advance its target lifecycle guard exactly once." ) );
+		}
+
+		static void AddTargets( CharacterReferenceRecord reference, ISet<CharacterId> destination )
+		{
+			destination.Add( reference.CharacterId );
+			if ( reference.RelatedCharacterId is { } related ) destination.Add( related );
+		}
+	}
+
+	private IReadOnlyList<DocumentSnapshot<T>> CandidateDocuments<T>(
+		PersistenceInvariantContext context,
+		string collection,
+		ICollection<DomainInvariantIssue> issues ) where T : class
+	{
+		var documents = new List<DocumentSnapshot<T>>();
+		var expected = _types.Resolve<T>();
+		foreach ( var candidate in context.Collection( collection ) )
+		{
+			if ( candidate.PersistedType != expected.Key || candidate.TypeVersion != expected.CurrentVersion ||
+				candidate.Value is not T value )
+			{
+				issues.Add( new DomainInvariantIssue(
+					ErrorCode.PersistedTypeInvalid,
+					candidate.Address.ToString(),
+					$"Outer document type/version is not the exact current '{expected.Key}' v{expected.CurrentVersion}." ) );
+				continue;
+			}
+			documents.Add( new DocumentSnapshot<T>( candidate.Address.Key, candidate.Revision, value ) );
+		}
+		return documents;
 	}
 
 	private static void ValidateLogicalAggregateIds(
@@ -155,7 +325,7 @@ public sealed class DomainInvariantValidator
 		}
 		try
 		{
-			var codec = _repositories.Provider.Types.Resolve( new PersistedTypeKey( expectedType.Value ) );
+			var codec = _types.Resolve( new PersistedTypeKey( expectedType.Value ) );
 			if ( codec.CurrentVersion != registration!.Version || codec.ClrType != registration.ClrType )
 				issues.Add( new DomainInvariantIssue(
 					ErrorCode.PersistedTypeInvalid,
@@ -175,6 +345,15 @@ public sealed class DomainInvariantValidator
 		ICollection<DomainInvariantIssue> issues )
 	{
 		var slots = slotDocuments.ToArray();
+		var charactersById = characters
+			.GroupBy( character => character.Id )
+			.ToDictionary( group => group.Key, group => group.ToArray() );
+		var slotMatchCounts = slots
+			.GroupBy( document => (
+				document.Value.AccountId,
+				document.Value.Slot,
+				document.Value.CharacterId ) )
+			.ToDictionary( group => group.Key, group => group.Count() );
 		var logicalSlots = new HashSet<(AccountId AccountId, int Slot)>();
 		foreach ( var document in slots )
 		{
@@ -184,7 +363,7 @@ public sealed class DomainInvariantValidator
 					ErrorCode.Conflict,
 					$"character-slot/{document.Key}",
 					"Logical owner-slot guard is duplicated." ) );
-			var referenced = characters.Where( value => value.Id == slot.CharacterId ).ToArray();
+			var referenced = charactersById.GetValueOrDefault( slot.CharacterId ) ?? Array.Empty<CharacterRecord>();
 			if ( referenced.Length != 1 )
 			{
 				issues.Add( new DomainInvariantIssue(
@@ -202,10 +381,8 @@ public sealed class DomainInvariantValidator
 
 		foreach ( var character in characters )
 		{
-			var matching = slots.Count( document =>
-				document.Value.AccountId == character.AccountId &&
-				document.Value.Slot == character.Slot &&
-				document.Value.CharacterId == character.Id );
+			var matching = slotMatchCounts.GetValueOrDefault(
+				(character.AccountId, character.Slot, character.Id) );
 			if ( matching != 1 )
 				issues.Add( new DomainInvariantIssue(
 					ErrorCode.Conflict,
@@ -220,6 +397,9 @@ public sealed class DomainInvariantValidator
 		ICollection<DomainInvariantIssue> issues )
 	{
 		var logicalReservations = new HashSet<(string Namespace, string Value)>();
+		var characterCounts = characters
+			.GroupBy( character => character.Id )
+			.ToDictionary( group => group.Key, group => group.Count() );
 		foreach ( var document in reservationDocuments )
 		{
 			var reservation = document.Value;
@@ -241,7 +421,7 @@ public sealed class DomainInvariantValidator
 					ErrorCode.Conflict,
 					$"unique-reservation/{document.Key}",
 					"Logical unique reservation is duplicated." ) );
-			if ( characters.Count( character => character.Id == reservation.CharacterId ) != 1 )
+			if ( characterCounts.GetValueOrDefault( reservation.CharacterId ) != 1 )
 				issues.Add( new DomainInvariantIssue(
 					ErrorCode.NotFound,
 					$"unique-reservation/{document.Key}",
@@ -300,6 +480,12 @@ public sealed class DomainInvariantValidator
 		var inventoriesById = inventories
 			.GroupBy( inventory => inventory.Id )
 			.ToDictionary( group => group.Key, group => group.First() );
+		var characterIds = characters.Select( character => character.Id.Value ).ToHashSet();
+		var sceneEntityIds = sceneEntities.Select( entity => entity.Id.Value ).ToHashSet();
+		var characterInventoryCounts = inventories
+			.Where( inventory => inventory.Owner.Kind == InventoryOwnerKind.Character )
+			.GroupBy( inventory => inventory.Owner.OwnerId )
+			.ToDictionary( group => group.Key, group => group.Count() );
 		var indexesByInventory = new Dictionary<InventoryId, int>();
 		var logicalIndexes = new HashSet<string>( StringComparer.Ordinal );
 		foreach ( var document in ownerIndexes )
@@ -348,9 +534,9 @@ public sealed class DomainInvariantValidator
 					$"Expected exactly one canonical owner index, found {count}." ) );
 			var ownerExists = inventory.Owner.Kind switch
 			{
-				InventoryOwnerKind.Character => characters.Any( value => value.Id.Value == inventory.Owner.OwnerId ),
+				InventoryOwnerKind.Character => characterIds.Contains( inventory.Owner.OwnerId ),
 				InventoryOwnerKind.ParentItem => items.ContainsKey( new ItemId( inventory.Owner.OwnerId ) ),
-				InventoryOwnerKind.SceneEntity => sceneEntities.Any( value => value.Id.Value == inventory.Owner.OwnerId ),
+				InventoryOwnerKind.SceneEntity => sceneEntityIds.Contains( inventory.Owner.OwnerId ),
 				_ => false
 			};
 			if ( !ownerExists )
@@ -360,8 +546,7 @@ public sealed class DomainInvariantValidator
 
 		foreach ( var character in characters )
 		{
-			var mainInventories = inventories.Count( inventory =>
-				inventory.Owner == InventoryOwner.Character( character.Id ) );
+			var mainInventories = characterInventoryCounts.GetValueOrDefault( character.Id.Value );
 			var mainIndexes = logicalIndexes.Contains(
 				DomainKeys.OwnerInventory( InventoryOwner.Character( character.Id ), "main" ) ) ? 1 : 0;
 			if ( mainInventories != 1 || mainIndexes != 1 )
@@ -377,17 +562,24 @@ public sealed class DomainInvariantValidator
 		IEnumerable<DocumentSnapshot<ItemRecord>> items,
 		IEnumerable<DocumentSnapshot<CharacterReferenceRecord>> references,
 		IEnumerable<DocumentSnapshot<PersistentSceneEntityRecord>> sceneEntities,
+		Func<string, string, bool>? shouldValidatePayload,
 		ICollection<DomainInvariantIssue> issues )
 	{
 		foreach ( var character in characters )
+		{
+			if ( shouldValidatePayload is not null &&
+				!shouldValidatePayload( DomainCollections.Characters, character.Key ) ) continue;
 			ValidatePayload(
 				character.Value.SchemaState,
 				_persistenceProfile.CharacterState,
 				$"character/{character.Key}/schema-state",
 				issues );
+		}
 
 		foreach ( var item in items )
 		{
+			if ( shouldValidatePayload is not null &&
+				!shouldValidatePayload( DomainCollections.Items, item.Key ) ) continue;
 			if ( !_persistenceProfile.Items.TryGetValue( item.Value.Definition, out var contract ) )
 			{
 				issues.Add( new DomainInvariantIssue(
@@ -417,6 +609,8 @@ public sealed class DomainInvariantValidator
 
 		foreach ( var reference in references )
 		{
+			if ( shouldValidatePayload is not null &&
+				!shouldValidatePayload( DomainCollections.CharacterReferences, reference.Key ) ) continue;
 			if ( !_persistenceProfile.CharacterReferences.TryGetValue( reference.Value.Category, out var contract ) )
 			{
 				issues.Add( new DomainInvariantIssue(
@@ -430,6 +624,8 @@ public sealed class DomainInvariantValidator
 
 		foreach ( var entity in sceneEntities )
 		{
+			if ( shouldValidatePayload is not null &&
+				!shouldValidatePayload( DomainCollections.SceneEntities, entity.Key ) ) continue;
 			if ( !_persistenceProfile.SceneEntities.TryGetValue( entity.Value.Kind, out var expected ) )
 			{
 				issues.Add( new DomainInvariantIssue(
@@ -448,27 +644,33 @@ public sealed class DomainInvariantValidator
 		IEnumerable<DocumentSnapshot<CharacterReferenceRecord>> referenceDocuments,
 		ICollection<DomainInvariantIssue> issues )
 	{
+		var characterCounts = characters
+			.GroupBy( character => character.Id )
+			.ToDictionary( group => group.Key, group => group.Count() );
+		var sceneEntityCounts = sceneEntities
+			.GroupBy( entity => entity.Id )
+			.ToDictionary( group => group.Key, group => group.Count() );
 		foreach ( var document in referenceDocuments )
 		{
 			var reference = document.Value;
 			if ( !_persistenceProfile.CharacterReferences.TryGetValue( reference.Category, out var contract ) )
 				continue;
 			if ( !contract.AllowMissingCharacter &&
-				characters.Count( character => character.Id == reference.CharacterId ) != 1 )
+				characterCounts.GetValueOrDefault( reference.CharacterId ) != 1 )
 				issues.Add( new DomainInvariantIssue(
 					ErrorCode.NotFound,
 					$"character-reference/{document.Key}/character",
 					"Character reference points to a missing character." ) );
 			if ( reference.RelatedCharacterId is CharacterId related &&
 				!contract.AllowMissingRelatedCharacter &&
-				characters.Count( character => character.Id == related ) != 1 )
+				characterCounts.GetValueOrDefault( related ) != 1 )
 				issues.Add( new DomainInvariantIssue(
 					ErrorCode.NotFound,
 					$"character-reference/{document.Key}/related-character",
 					"Character reference points to a missing related character." ) );
 			if ( reference.SceneEntityId is SceneEntityId sceneEntityId &&
 				!contract.AllowMissingSceneEntity &&
-				sceneEntities.Count( entity => entity.Id == sceneEntityId ) != 1 )
+				sceneEntityCounts.GetValueOrDefault( sceneEntityId ) != 1 )
 				issues.Add( new DomainInvariantIssue(
 					ErrorCode.NotFound,
 					$"character-reference/{document.Key}/scene-entity",
@@ -501,7 +703,7 @@ public sealed class DomainInvariantValidator
 		IPersistedTypeCodec codec;
 		try
 		{
-			codec = _repositories.Provider.Types.Resolve( new PersistedTypeKey( payload.TypeId.Value ) );
+			codec = _types.Resolve( new PersistedTypeKey( payload.TypeId.Value ) );
 		}
 		catch ( Exception exception ) when ( exception is KeyNotFoundException or ArgumentException )
 		{
@@ -523,8 +725,8 @@ public sealed class DomainInvariantValidator
 
 		try
 		{
-			var decoded = codec.Deserialize( payload.Data, payload.TypeVersion );
-			_ = codec.Serialize( codec.PrepareForPublication( decoded ) );
+			_ = PersistedCodecCanonicalization.FromPayload(
+				codec, payload.Data, payload.TypeVersion, requireCanonicalPayload: true );
 		}
 		catch ( Exception exception ) when (
 			exception is System.Text.Json.JsonException or InvalidOperationException or NotSupportedException or ArgumentException )
@@ -552,18 +754,22 @@ public sealed class DomainInvariantValidator
 		foreach ( var inventory in inventories )
 		{
 			if ( inventory.Width <= 0 || inventory.Height <= 0 )
+			{
 				issues.Add( new DomainInvariantIssue(
 					ErrorCode.InvalidArgument, $"inventory/{inventory.Id}", "Inventory dimensions must be positive." ) );
-			var occupied = new HashSet<(int X, int Y)>();
+				continue;
+			}
+			var bounds = new InventoryGridSize( inventory.Width, inventory.Height );
+			var rectangles = new List<InventoryRectangle>( inventory.Placements.Count );
 			foreach ( var placement in inventory.Placements )
 			{
 				if ( !items.TryGetValue( placement.ItemId, out var item ) )
 				{
 					// Fail closed on the one coordinate we can prove even when the
 					// missing item's registered dimensions are unavailable.
-					if ( !occupied.Add( (placement.X, placement.Y) ) )
-						issues.Add( new DomainInvariantIssue(
-							ErrorCode.Conflict, $"inventory/{inventory.Id}", "Item placements overlap." ) );
+					var unknownRectangle = new InventoryRectangle(
+						placement.Position, new InventoryGridSize( 1, 1 ) );
+					rectangles.Add( unknownRectangle );
 					issues.Add( new DomainInvariantIssue(
 						ErrorCode.NotFound, $"inventory/{inventory.Id}/item/{placement.ItemId}", "Placement references a missing item." ) );
 					continue;
@@ -574,16 +780,55 @@ public sealed class DomainInvariantValidator
 						ErrorCode.UnknownDefinition, $"item/{item.Id}", "Item definition or shape is not registered." ) );
 					continue;
 				}
-				if ( placement.X + shape.Width > inventory.Width || placement.Y + shape.Height > inventory.Height )
+				var rectangle = new InventoryRectangle( placement.Position, shape.GridSize );
+				if ( !rectangle.FitsWithin( bounds ) )
 					issues.Add( new DomainInvariantIssue(
 						ErrorCode.Conflict, $"inventory/{inventory.Id}/item/{item.Id}", "Item exceeds inventory bounds." ) );
-				for ( var y = placement.Y; y < placement.Y + shape.Height; y++ )
-				for ( var x = placement.X; x < placement.X + shape.Width; x++ )
-					if ( !occupied.Add( (x, y) ) )
-						issues.Add( new DomainInvariantIssue(
-							ErrorCode.Conflict, $"inventory/{inventory.Id}", "Item placements overlap." ) );
+				rectangles.Add( rectangle );
+			}
+			if ( HasRectangleOverlap( rectangles ) )
+				issues.Add( new DomainInvariantIssue(
+					ErrorCode.Conflict, $"inventory/{inventory.Id}", "Item placements overlap." ) );
+		}
+	}
+
+	private static bool HasRectangleOverlap( IReadOnlyList<InventoryRectangle> rectangles )
+	{
+		if ( rectangles.Count < 2 ) return false;
+		var coordinates = rectangles
+			.SelectMany( rectangle => new[] { rectangle.Top, rectangle.Bottom } )
+			.Distinct()
+			.OrderBy( coordinate => coordinate )
+			.ToArray();
+		var coordinateIndexes = coordinates
+			.Select( (coordinate, index) => (coordinate, index) )
+			.ToDictionary( pair => pair.coordinate, pair => pair.index );
+		var events = rectangles
+			.SelectMany( rectangle => new[]
+			{
+				new RectangleSweepEvent( rectangle.Left, true, rectangle ),
+				new RectangleSweepEvent( rectangle.Right, false, rectangle )
+			} )
+			.OrderBy( item => item.X )
+			// Half-open rectangles that merely touch at an edge do not overlap.
+			.ThenBy( item => item.IsStart ? 1 : 0 )
+			.ToArray();
+		var active = new RangeMaximumTree( coordinates.Length - 1 );
+		foreach ( var item in events )
+		{
+			var start = coordinateIndexes[item.Rectangle.Top];
+			var end = coordinateIndexes[item.Rectangle.Bottom] - 1;
+			if ( item.IsStart )
+			{
+				if ( active.Query( start, end ) > 0 ) return true;
+				active.Add( start, end, 1 );
+			}
+			else
+			{
+				active.Add( start, end, -1 );
 			}
 		}
+		return false;
 	}
 
 	private static void ValidateLocations(
@@ -616,25 +861,94 @@ public sealed class DomainInvariantValidator
 			.SelectMany( inventory => inventory.Placements.Select( placement => (placement.ItemId, inventory.Id) ) )
 			.GroupBy( pair => pair.ItemId )
 			.ToDictionary( group => group.Key, group => group.First().Id );
-		var byId = inventories
-			.GroupBy( inventory => inventory.Id )
-			.ToDictionary( group => group.Key, group => group.First() );
+		var parentByInventory = new Dictionary<InventoryId, InventoryId>();
 		foreach ( var inventory in inventories.Where( value => value.Owner.Kind == InventoryOwnerKind.ParentItem ) )
 		{
-			var seen = new HashSet<InventoryId> { inventory.Id };
 			var parentItem = new ItemId( inventory.Owner.OwnerId );
-			while ( containingInventory.TryGetValue( parentItem, out var parentInventoryId ) &&
-				byId.TryGetValue( parentInventoryId, out var parentInventory ) )
+			if ( containingInventory.TryGetValue( parentItem, out var parentInventoryId ) )
+				parentByInventory[inventory.Id] = parentInventoryId;
+		}
+
+		var states = new Dictionary<InventoryId, byte>();
+		foreach ( var start in parentByInventory.Keys )
+		{
+			if ( states.GetValueOrDefault( start ) == 2 ) continue;
+			var path = new List<InventoryId>();
+			var positions = new Dictionary<InventoryId, int>();
+			var current = start;
+			while ( true )
 			{
-				if ( !seen.Add( parentInventoryId ) )
+				var state = states.GetValueOrDefault( current );
+				if ( state == 2 || !parentByInventory.TryGetValue( current, out var parent ) ) break;
+				if ( state == 1 )
 				{
-					issues.Add( new DomainInvariantIssue(
-						ErrorCode.Conflict, $"inventory/{inventory.Id}/owner", "Nested bag ownership contains a cycle." ) );
+					if ( positions.ContainsKey( current ) )
+						issues.Add( new DomainInvariantIssue(
+							ErrorCode.Conflict,
+							$"inventory/{current}/owner",
+							"Nested bag ownership contains a cycle." ) );
 					break;
 				}
-				if ( parentInventory.Owner.Kind != InventoryOwnerKind.ParentItem ) break;
-				parentItem = new ItemId( parentInventory.Owner.OwnerId );
+				states[current] = 1;
+				positions[current] = path.Count;
+				path.Add( current );
+				current = parent;
 			}
+			foreach ( var inventoryId in path ) states[inventoryId] = 2;
+		}
+	}
+
+	private readonly record struct RectangleSweepEvent(
+		long X,
+		bool IsStart,
+		InventoryRectangle Rectangle );
+
+	private sealed class RangeMaximumTree
+	{
+		private readonly int _count;
+		private readonly int[] _maximum;
+		private readonly int[] _lazy;
+
+		public RangeMaximumTree( int count )
+		{
+			_count = count;
+			_maximum = new int[Math.Max( 1, count * 4 )];
+			_lazy = new int[_maximum.Length];
+		}
+
+		public void Add( int start, int end, int value )
+		{
+			if ( start > end || _count == 0 ) return;
+			Add( 1, 0, _count - 1, start, end, value );
+		}
+
+		public int Query( int start, int end ) =>
+			start > end || _count == 0 ? 0 : Query( 1, 0, _count - 1, start, end );
+
+		private void Add( int node, int left, int right, int start, int end, int value )
+		{
+			if ( start <= left && right <= end )
+			{
+				_maximum[node] += value;
+				_lazy[node] += value;
+				return;
+			}
+			var middle = left + ((right - left) / 2);
+			if ( start <= middle ) Add( node * 2, left, middle, start, end, value );
+			if ( end > middle ) Add( node * 2 + 1, middle + 1, right, start, end, value );
+			_maximum[node] = _lazy[node] + Math.Max( _maximum[node * 2], _maximum[node * 2 + 1] );
+		}
+
+		private int Query( int node, int left, int right, int start, int end )
+		{
+			if ( start <= left && right <= end ) return _maximum[node];
+			var middle = left + ((right - left) / 2);
+			var maximum = 0;
+			if ( start <= middle ) maximum = Query( node * 2, left, middle, start, end );
+			if ( end > middle ) maximum = Math.Max(
+				maximum,
+				Query( node * 2 + 1, middle + 1, right, start, end ) );
+			return _lazy[node] + maximum;
 		}
 	}
 }
