@@ -41,7 +41,8 @@ if (($auditJson -join "`n") -match '"severity"\s*:') {
 }
 
 Invoke-CheckedCommand -Description 'Running Hexagon neutral tests' -FilePath 'dotnet' -Arguments @(
-    'test', $project, '--configuration', 'Release', '--no-restore', '--nologo', '--warnaserror'
+    'test', $project, '--configuration', 'Release', '--no-restore', '--nologo', '--warnaserror',
+    '--filter', 'TestCategory!=CrossRepository'
 )
 
 Write-Host '==> Running portable framework/project validation' -ForegroundColor Cyan

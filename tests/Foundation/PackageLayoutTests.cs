@@ -14,8 +14,8 @@ public sealed class PackageLayoutTests
 	[TestMethod]
 	public void LibraryDoesNotOwnASceneOrStartupScene()
 	{
-		var roots = RepositoryRoots.Find();
-		using var manifest = JsonDocument.Parse( File.ReadAllText( Path.Combine( roots.Hexagon, "hexagon.sbproj" ) ) );
+		var hexagon = RepositoryRoots.FindHexagon();
+		using var manifest = JsonDocument.Parse( File.ReadAllText( Path.Combine( hexagon, "hexagon.sbproj" ) ) );
 
 		Assert.AreEqual( "library", manifest.RootElement.GetProperty( "Type" ).GetString() );
 		Assert.IsFalse( manifest.RootElement.GetProperty( "IsStandaloneOnly" ).GetBoolean() );
@@ -30,16 +30,17 @@ public sealed class PackageLayoutTests
 			manifest.RootElement.GetProperty( "Metadata" ).TryGetProperty( "StartupScene", out _ ),
 			"Library packages must not select a startup scene." );
 
-		var scenes = Directory.Exists( Path.Combine( roots.Hexagon, "Assets" ) )
-			? Directory.GetFiles( Path.Combine( roots.Hexagon, "Assets" ), "*.scene", SearchOption.AllDirectories )
+		var scenes = Directory.Exists( Path.Combine( hexagon, "Assets" ) )
+			? Directory.GetFiles( Path.Combine( hexagon, "Assets" ), "*.scene", SearchOption.AllDirectories )
 			: [];
 		Assert.HasCount( 0, scenes, "Library packages must not contribute game-owned scenes." );
 	}
 
 	[TestMethod]
+	[TestCategory( "CrossRepository" )]
 	public void GameOwnsAResolvableStartupScene()
 	{
-		var roots = RepositoryRoots.Find();
+		var roots = RepositoryRoots.FindPair();
 		using var manifest = JsonDocument.Parse( File.ReadAllText( Path.Combine( roots.Hl2Rp, "hl2rp.sbproj" ) ) );
 
 		Assert.AreEqual( "game", manifest.RootElement.GetProperty( "Type" ).GetString() );
@@ -69,9 +70,10 @@ public sealed class PackageLayoutTests
 	}
 
 	[TestMethod]
+	[TestCategory( "CrossRepository" )]
 	public void MountedAssetPathsDoNotCollide()
 	{
-		var roots = RepositoryRoots.Find();
+		var roots = RepositoryRoots.FindPair();
 		var libraryAssets = EnumerateAssets( roots.Hexagon );
 		var gameAssets = EnumerateAssets( roots.Hl2Rp );
 		var collisions = libraryAssets.Keys.Intersect( gameAssets.Keys, PathComparer ).Order().ToArray();
@@ -83,9 +85,10 @@ public sealed class PackageLayoutTests
 	}
 
 	[TestMethod]
+	[TestCategory( "CrossRepository" )]
 	public void SceneAndObjectGuidsAreUnique()
 	{
-		var roots = RepositoryRoots.Find();
+		var roots = RepositoryRoots.FindPair();
 		var rootSceneIds = new HashSet<string>( StringComparer.OrdinalIgnoreCase );
 
 		foreach ( var scenePath in Directory.GetFiles( Path.Combine( roots.Hl2Rp, "Assets" ), "*.scene", SearchOption.AllDirectories ) )
@@ -103,11 +106,11 @@ public sealed class PackageLayoutTests
 	[TestMethod]
 	public void RemoteAcceptanceGateIsExplicitlyManualAndArtifactBound()
 	{
-		var roots = RepositoryRoots.Find();
+		var hexagon = RepositoryRoots.FindHexagon();
 		var verifier = File.ReadAllText( Path.Combine(
-			roots.Hexagon, "tools", "verify-remote-acceptance.ps1" ) );
+			hexagon, "tools", "verify-remote-acceptance.ps1" ) );
 		var runbook = File.ReadAllText( Path.Combine(
-			roots.Hexagon, "docs", "testing.md" ) );
+			hexagon, "docs", "testing.md" ) );
 
 		foreach ( var marker in new[]
 		{
@@ -167,17 +170,23 @@ public sealed class PackageLayoutTests
 
 	private sealed record RepositoryRoots( string Hexagon, string Hl2Rp )
 	{
-		public static RepositoryRoots Find()
+		public static string FindHexagon()
 		{
 			var directory = new DirectoryInfo( AppContext.BaseDirectory );
 			while ( directory is not null && !File.Exists( Path.Combine( directory.FullName, "hexagon.sbproj" ) ) )
 				directory = directory.Parent;
 
 			Assert.IsNotNull( directory, "Could not locate the Hexagon repository root." );
-			var hl2rp = Path.GetFullPath( Path.Combine( directory.FullName, "..", "hl2rp-hexagon" ) );
+			return directory.FullName;
+		}
+
+		public static RepositoryRoots FindPair()
+		{
+			var hexagon = FindHexagon();
+			var hl2rp = Path.GetFullPath( Path.Combine( hexagon, "..", "hl2rp-hexagon" ) );
 			Assert.IsTrue( File.Exists( Path.Combine( hl2rp, "hl2rp.sbproj" ) ), "Could not locate the sibling HL2RP repository." );
 
-			return new RepositoryRoots( directory.FullName, hl2rp );
+			return new RepositoryRoots( hexagon, hl2rp );
 		}
 	}
 }
