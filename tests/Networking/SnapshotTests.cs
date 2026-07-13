@@ -48,6 +48,25 @@ public sealed class SnapshotTests
 	}
 
 	[TestMethod]
+	public void RosterRevisionCanAdvanceWithoutRecopyingImmutableRows()
+	{
+		var source = new List<PlayerRosterRowSnapshot>
+		{
+			new( ConnectionId.New(), CharacterId.New() )
+		};
+		var snapshot = new PlayerRosterSnapshot( 1, source );
+		source.Clear();
+
+		var advanced = snapshot.WithRevision( 2 );
+
+		Assert.AreEqual( 2L, advanced.Revision );
+		Assert.HasCount( 1, advanced.Rows );
+		Assert.AreSame( snapshot.Rows, advanced.Rows );
+		Assert.AreSame( advanced, advanced.WithRevision( 2 ) );
+		Assert.ThrowsExactly<ArgumentOutOfRangeException>( () => snapshot.WithRevision( -1 ) );
+	}
+
+	[TestMethod]
 	public void InventorySnapshotsCopyNestedActionsAndItems()
 	{
 		var actions = new List<ItemActionSnapshot>

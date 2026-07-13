@@ -48,7 +48,7 @@ public sealed class TypedConfigurationStoreTests
 			Assert.AreEqual( "int32", snapshot[0].ValueTypeId );
 			Assert.AreEqual( 2L, snapshot[0].Revision.Value );
 			Assert.AreEqual( "\"41\"", snapshot[0].CanonicalEncodedValue );
-			await first.DrainAsync();
+			Assert.IsTrue( (await first.ShutdownAsync()).IsClean );
 		}
 
 		var recoveredBindings = Bind( compiled, new PersistedTypeRegistry().RegisterHexagonDomainTypes() );

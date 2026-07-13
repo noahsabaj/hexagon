@@ -31,7 +31,7 @@ public static class SceneIdentityValidator
 		ArgumentNullException.ThrowIfNull( createId );
 		var used = new HashSet<SceneEntityId>();
 		var result = new List<SceneIdentityResolution>();
-		foreach ( var candidate in candidates.OrderBy( value => value.StablePath, StringComparer.Ordinal ) )
+		foreach ( var candidate in candidates )
 		{
 			var effective = candidate.Id;
 			var repaired = effective is null || !used.Add( effective.Value );

@@ -9,6 +9,7 @@ using Hexagon.V2.Domain;
 using Hexagon.V2.Kernel;
 using Hexagon.V2.Kernel.Events;
 using Hexagon.V2.Kernel.Policies;
+using Hexagon.V2.Persistence;
 
 namespace Hexagon.V2.Application;
 
@@ -52,13 +53,47 @@ public sealed class InventoryMutationService
 		_events = events ?? new PostCommitEventBus<ItemMovedEvent>();
 	}
 
-	public async ValueTask<OperationResult> MoveAsync(
+	public ValueTask<OperationResult> MoveAsync(
 		InventoryActor actor,
 		InventoryId sourceId,
 		InventoryId targetId,
 		ItemId itemId,
 		int x,
 		int y,
+		CancellationToken cancellationToken = default ) =>
+		MoveUntypedAsync( actor, sourceId, targetId, itemId, new InventoryGridPosition( x, y ), cancellationToken );
+
+	public ValueTask<OperationResult> MoveAsync(
+		InventoryActor actor,
+		InventoryId sourceId,
+		InventoryId targetId,
+		ItemId itemId,
+		InventoryGridPosition position,
+		CancellationToken cancellationToken = default ) =>
+		MoveUntypedAsync( actor, sourceId, targetId, itemId, position, cancellationToken );
+
+	/// <summary>
+	/// Performs the move and returns the provider-issued receipt verbatim. Runtime
+	/// projection layers use this boundary so they never reconstruct commit metadata
+	/// from command arguments or post-commit repository state.
+	/// </summary>
+	public ValueTask<OperationResult<CommitReceipt>> MoveCommittedAsync(
+		InventoryActor actor,
+		InventoryId sourceId,
+		InventoryId targetId,
+		ItemId itemId,
+		int x,
+		int y,
+		CancellationToken cancellationToken = default ) =>
+		MoveCommittedAsync( actor, sourceId, targetId, itemId,
+			new InventoryGridPosition( x, y ), cancellationToken );
+
+	public async ValueTask<OperationResult<CommitReceipt>> MoveCommittedAsync(
+		InventoryActor actor,
+		InventoryId sourceId,
+		InventoryId targetId,
+		ItemId itemId,
+		InventoryGridPosition position,
 		CancellationToken cancellationToken = default )
 	{
 		var sourceDocument = _repositories.Inventories.Find( DomainKeys.Inventory( sourceId ) );
@@ -67,38 +102,47 @@ public sealed class InventoryMutationService
 				: _repositories.Inventories.Find( DomainKeys.Inventory( targetId ) );
 			var itemDocument = _repositories.Items.Find( DomainKeys.Item( itemId ) );
 			if ( sourceDocument is null || targetDocument is null || itemDocument is null )
-				return OperationResult.Failure( ErrorCode.NotFound, "Inventory or item was not found." );
+				return Failure( ErrorCode.NotFound, "Inventory or item was not found." );
 
 			var source = sourceDocument.Value;
 			var target = targetDocument.Value;
 			var item = itemDocument.Value;
 			if ( source.Find( item.Id ) is null )
-				return OperationResult.Failure( ErrorCode.NotFound, "Item is not a member of the claimed source inventory." );
+				return Failure( ErrorCode.NotFound, "Item is not a member of the claimed source inventory." );
 
 			var sourceCapability = source.Id == target.Id
 				? InventoryCapability.Move
 				: InventoryCapability.Move | InventoryCapability.TransferOut;
-			if ( !_access.Has( actor.ConnectionId, actor.CharacterId, source.Id, sourceCapability ) )
-				return OperationResult.Failure( ErrorCode.Unauthorized, "Source inventory capability is missing." );
-			if ( source.Id != target.Id &&
-				!_access.Has( actor.ConnectionId, actor.CharacterId, target.Id, InventoryCapability.TransferIn ) )
-				return OperationResult.Failure( ErrorCode.Unauthorized, "Destination inventory capability is missing." );
+			var sourceAccess = _access.Prove(
+				actor.ConnectionId, actor.CharacterId, source.Id, sourceCapability );
+			if ( sourceAccess is null )
+				return Failure( ErrorCode.Unauthorized, "Source inventory capability is missing." );
+			InventoryAccessProof? targetAccess = null;
+			if ( source.Id != target.Id )
+			{
+				targetAccess = _access.Prove(
+					actor.ConnectionId, actor.CharacterId, target.Id, InventoryCapability.TransferIn );
+				if ( targetAccess is null )
+					return Failure( ErrorCode.Unauthorized, "Destination inventory capability is missing." );
+			}
 
 			if ( source.Id != target.Id && WouldCreateBagCycle( item.Id, target ) )
-				return OperationResult.Failure( ErrorCode.InvalidArgument, "A bag cannot be placed inside itself or one of its descendants." );
+				return Failure( ErrorCode.InvalidArgument, "A bag cannot be placed inside itself or one of its descendants." );
 
 			var policy = _policy.Evaluate( new InventoryTransferContext( actor, source, target, item ) );
-			if ( policy.Failed ) return policy;
+			if ( policy.Failed ) return Failure( policy.Error!.Code, policy.Error.Message );
 
-			var changed = _layout.Transfer( source, target, item, x, y );
-			if ( changed.Failed ) return OperationResult.Failure( changed.Error!.Code, changed.Error.Message );
+			var changed = _layout.Transfer( source, target, item, position );
+			if ( changed.Failed ) return Failure( changed.Error!.Code, changed.Error.Message );
 
 			var unitOfWork = _repositories.Provider.BeginUnitOfWork();
+			unitOfWork.Require( sourceAccess );
+			if ( targetAccess is not null ) unitOfWork.Require( targetAccess );
 			var sourceEditor = unitOfWork.Edit( _repositories.Inventories, sourceDocument );
 			if ( sourceEditor is null )
 			{
 				await unitOfWork.DisposeAsync();
-				return OperationResult.Failure( ErrorCode.Conflict, "Source inventory changed." );
+				return Failure( ErrorCode.Conflict, "Source inventory changed." );
 			}
 			sourceEditor.Replace( changed.Value.Source );
 			unitOfWork.Save( sourceEditor );
@@ -109,7 +153,7 @@ public sealed class InventoryMutationService
 				if ( targetEditor is null )
 				{
 					await unitOfWork.DisposeAsync();
-					return OperationResult.Failure( ErrorCode.Conflict, "Destination inventory changed." );
+					return Failure( ErrorCode.Conflict, "Destination inventory changed." );
 				}
 				targetEditor.Replace( changed.Value.Target );
 				unitOfWork.Save( targetEditor );
@@ -117,23 +161,49 @@ public sealed class InventoryMutationService
 
 			var committed = await unitOfWork.CommitAsync( cancellationToken );
 			await unitOfWork.DisposeAsync();
-			if ( !committed.Succeeded ) return PersistenceResultMapping.Failure( committed.Error! );
+			if ( !committed.Succeeded )
+				return Failure( PersistenceResultMapping.Failure( committed.Error! ).Error! );
 			_events.Publish( new ItemMovedEvent( item.Id, source.Id, target.Id, committed.Value!.Sequence ) );
-			return OperationResult.Success();
+			return OperationResult<CommitReceipt>.Success( committed.Value );
 	}
+
+	private async ValueTask<OperationResult> MoveUntypedAsync(
+		InventoryActor actor,
+		InventoryId sourceId,
+		InventoryId targetId,
+		ItemId itemId,
+		InventoryGridPosition position,
+		CancellationToken cancellationToken )
+	{
+		var result = await MoveCommittedAsync(
+			actor, sourceId, targetId, itemId, position, cancellationToken );
+		return result.Succeeded
+			? OperationResult.Success()
+			: OperationResult.Failure( result.Error!.Code, result.Error.Message );
+	}
+
+	private static OperationResult<CommitReceipt> Failure( ErrorCode code, string message ) =>
+		OperationResult<CommitReceipt>.Failure( code, message );
+
+	private static OperationResult<CommitReceipt> Failure( OperationError error ) =>
+		Failure( error.Code, error.Message );
 
 	private bool WouldCreateBagCycle( ItemId movingItem, InventoryRecord destination )
 	{
+		var containingInventoryByItem = new Dictionary<ItemId, InventoryRecord>();
+		foreach ( var inventory in _repositories.Inventories.All().Select( document => document.Value ) )
+		{
+			foreach ( var placement in inventory.Placements )
+				containingInventoryByItem.TryAdd( placement.ItemId, inventory );
+		}
+
 		var current = destination;
 		var visited = new HashSet<InventoryId>();
 		while ( visited.Add( current.Id ) && current.Owner.Kind == InventoryOwnerKind.ParentItem )
 		{
 			var parentItem = new ItemId( current.Owner.OwnerId );
 			if ( parentItem == movingItem ) return true;
-			var parentInventory = _repositories.Inventories.All()
-				.Select( document => document.Value )
-				.FirstOrDefault( inventory => inventory.Find( parentItem ) is not null );
-			if ( parentInventory is null ) break;
+			if ( !containingInventoryByItem.TryGetValue( parentItem, out var parentInventory ) ) break;
 			current = parentInventory;
 		}
 

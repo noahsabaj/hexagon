@@ -25,6 +25,12 @@ public interface IHexClientController
 	ValueTask<OperationResult> UnloadCharacterAsync(CancellationToken cancellationToken = default);
 	ValueTask<OperationResult> MoveItemAsync(InventoryId sourceId, InventoryId targetId, ItemId itemId, int x, int y,
 		CancellationToken cancellationToken = default);
+	ValueTask<OperationResult> MoveItemAsync(
+		InventoryId sourceId,
+		InventoryId targetId,
+		ItemId itemId,
+		InventoryGridPosition position,
+		CancellationToken cancellationToken = default);
 	ValueTask<OperationResult> RunItemActionAsync(InventoryId inventoryId, ItemId itemId, ActionId actionId,
 		CancellationToken cancellationToken = default);
 	ValueTask<OperationResult> RunItemActionAsync(InventoryId inventoryId, ItemId itemId, ActionId actionId,
@@ -79,7 +85,15 @@ public sealed class HexClientController : IHexClientController, IDisposable
 		int x,
 		int y,
 		CancellationToken cancellationToken = default) =>
-		Send(new MoveInventoryItemCommand(sourceId, targetId, itemId, x, y), cancellationToken);
+		MoveItemAsync( sourceId, targetId, itemId, new InventoryGridPosition( x, y ), cancellationToken );
+
+	public ValueTask<OperationResult> MoveItemAsync(
+		InventoryId sourceId,
+		InventoryId targetId,
+		ItemId itemId,
+		InventoryGridPosition position,
+		CancellationToken cancellationToken = default) =>
+		Send(new MoveInventoryItemCommand(sourceId, targetId, itemId, position), cancellationToken);
 
 	public ValueTask<OperationResult> RunItemActionAsync(
 		InventoryId inventoryId,

@@ -48,10 +48,8 @@ public sealed record InventoryItemSnapshot
 		bool canDrop = false,
 		string? dropDisabledReason = null)
 	{
-		if (x < 0) throw new ArgumentOutOfRangeException(nameof(x));
-		if (y < 0) throw new ArgumentOutOfRangeException(nameof(y));
-		if (width <= 0) throw new ArgumentOutOfRangeException(nameof(width));
-		if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height));
+		if ( !InventoryGeometry.TryCreateRectangle( x, y, width, height, out var rectangle ) )
+			throw new ArgumentOutOfRangeException( nameof(x), "Inventory item geometry is invalid." );
 		if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity));
 
 		ItemId = itemId;
@@ -59,10 +57,8 @@ public sealed record InventoryItemSnapshot
 		DisplayName = displayName ?? string.Empty;
 		Description = description ?? string.Empty;
 		Category = category ?? string.Empty;
-		X = x;
-		Y = y;
-		Width = width;
-		Height = height;
+		Position = rectangle.Position;
+		Size = rectangle.Size;
 		Quantity = quantity;
 		Actions = Array.AsReadOnly((actions ?? Array.Empty<ItemActionSnapshot>()).ToArray());
 		State = PresentationSnapshotMap.Copy(state);
@@ -75,10 +71,12 @@ public sealed record InventoryItemSnapshot
 	public string DisplayName { get; }
 	public string Description { get; }
 	public string Category { get; }
-	public int X { get; }
-	public int Y { get; }
-	public int Width { get; }
-	public int Height { get; }
+	public InventoryGridPosition Position { get; }
+	public InventoryGridSize Size { get; }
+	public int X => Position.X;
+	public int Y => Position.Y;
+	public int Width => Size.Width;
+	public int Height => Size.Height;
 	public long Quantity { get; }
 	public IReadOnlyList<ItemActionSnapshot> Actions { get; }
 	public IReadOnlyDictionary<string, SnapshotValue> State { get; }
@@ -98,16 +96,28 @@ public sealed record InventorySnapshot
 		IEnumerable<InventoryItemSnapshot> items)
 	{
 		if (revision < 0) throw new ArgumentOutOfRangeException(nameof(revision));
-		if (width <= 0) throw new ArgumentOutOfRangeException(nameof(width));
-		if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height));
+		var gridSize = new InventoryGridSize( width, height );
+		var copiedItems = (items ?? throw new ArgumentNullException(nameof(items))).ToArray();
+		for ( var index = 0; index < copiedItems.Length; index++ )
+		{
+			var item = copiedItems[index];
+			if ( !new InventoryRectangle( item.Position, item.Size ).FitsWithin( gridSize ) )
+				throw new ArgumentException( "Inventory item lies outside the inventory bounds.", nameof(items) );
+			var rectangle = new InventoryRectangle( item.Position, item.Size );
+			for ( var otherIndex = 0; otherIndex < index; otherIndex++ )
+			{
+				var other = copiedItems[otherIndex];
+				if ( rectangle.Overlaps( new InventoryRectangle( other.Position, other.Size ) ) )
+					throw new ArgumentException( "Inventory items overlap.", nameof(items) );
+			}
+		}
 
 		InventoryId = inventoryId;
 		Revision = revision;
 		Kind = kind;
 		Title = title ?? string.Empty;
-		Width = width;
-		Height = height;
-		Items = Array.AsReadOnly((items ?? throw new ArgumentNullException(nameof(items)))
+		Size = gridSize;
+		Items = Array.AsReadOnly(copiedItems
 			.OrderBy(item => item.Y)
 			.ThenBy(item => item.X)
 			.ThenBy(item => item.ItemId.Value)
@@ -118,7 +128,8 @@ public sealed record InventorySnapshot
 	public long Revision { get; }
 	public InventoryViewKind Kind { get; }
 	public string Title { get; }
-	public int Width { get; }
-	public int Height { get; }
+	public InventoryGridSize Size { get; }
+	public int Width => Size.Width;
+	public int Height => Size.Height;
 	public IReadOnlyList<InventoryItemSnapshot> Items { get; }
 }

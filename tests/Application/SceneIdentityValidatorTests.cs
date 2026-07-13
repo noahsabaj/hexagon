@@ -41,4 +41,50 @@ public sealed class SceneIdentityValidatorTests
 
 		Assert.IsTrue( result.All( value => !value.Enabled && value.FatalDiagnostic is not null ) );
 	}
+
+	[TestMethod]
+	public void PersistentIndexEnumeratesTenThousandCandidatesOnceAndProvidesConstantTimeLookups()
+	{
+		var ids = Enumerable.Range( 0, 10_000 ).Select( _ => SceneEntityId.New() ).ToArray();
+		var enumerated = 0;
+		IEnumerable<SceneIdentityCandidate> Candidates()
+		{
+			for ( var index = 0; index < ids.Length; index++ )
+			{
+				enumerated++;
+				yield return new SceneIdentityCandidate( $"entity/{index}", ids[index] );
+			}
+		}
+
+		var index = PersistentSceneIdentityIndex.Build( Candidates() );
+
+		Assert.AreEqual( 10_000, enumerated );
+		Assert.AreEqual( 10_000, index.Count );
+		for ( var candidate = 0; candidate < ids.Length; candidate++ )
+		{
+			Assert.IsTrue( index.TryResolveId( ids[candidate], out var byId ) );
+			Assert.IsTrue( index.TryResolvePath( $"entity/{candidate}", out var byPath ) );
+			Assert.AreSame( byId, byPath );
+		}
+	}
+
+	[TestMethod]
+	public void RebuildAfterDynamicDuplicateFailsClosedForBothIdentities()
+	{
+		var duplicate = SceneEntityId.New();
+		var initial = PersistentSceneIdentityIndex.Build( new[]
+		{
+			new SceneIdentityCandidate( "first", duplicate )
+		} );
+		Assert.IsTrue( initial.TryResolveId( duplicate, out _ ) );
+
+		var rebuilt = PersistentSceneIdentityIndex.Build( new[]
+		{
+			new SceneIdentityCandidate( "first", duplicate ),
+			new SceneIdentityCandidate( "dynamic", duplicate )
+		} );
+
+		Assert.IsFalse( rebuilt.TryResolveId( duplicate, out _ ) );
+		Assert.IsTrue( rebuilt.Resolutions.All( resolution => !resolution.Enabled ) );
+	}
 }

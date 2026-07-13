@@ -23,10 +23,13 @@ public sealed class InventoryMutationServiceTests
 		await SeedAsync(environment, item, source, target);
 		GrantTransfer(environment, actor, source.Id, target.Id);
 
-		var result = await environment.CreateInventoryMutationService().MoveAsync(
+		var result = await environment.CreateInventoryMutationService().MoveCommittedAsync(
 			actor, source.Id, target.Id, item.Id, 2, 1);
 
 		Assert.IsTrue(result.Succeeded, result.Error?.Message);
+		CollectionAssert.AreEquivalent(
+			new[] { DomainKeys.Inventory( source.Id ), DomainKeys.Inventory( target.Id ) },
+			result.Value!.Documents.Select( value => value.Address.Key ).ToArray() );
 		Assert.IsNull(Find(environment, source.Id).Find(item.Id));
 		Assert.AreEqual(
 			new InventoryPlacement(item.Id, 2, 1),
@@ -177,6 +180,40 @@ public sealed class InventoryMutationServiceTests
 		Assert.IsEmpty(Find(environment, target.Id).Placements);
 	}
 
+	[TestMethod]
+	public async Task ConcurrentSourceOrDestinationCapabilityRevocationConflictsBeforeMoveCommit()
+	{
+		await AssertRevokedTransferConflictsAsync(revokeSource: true);
+		await AssertRevokedTransferConflictsAsync(revokeSource: false);
+	}
+
+	private static async Task AssertRevokedTransferConflictsAsync(bool revokeSource)
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var actor = ApplicationServiceTestEnvironment.Actor();
+		var item = ApplicationServiceTestEnvironment.Item();
+		var source = ApplicationServiceTestEnvironment.Inventory(
+			InventoryOwner.Character(actor.CharacterId),
+			new[] { new InventoryPlacement(item.Id, 0, 0) });
+		var target = ApplicationServiceTestEnvironment.Inventory(
+			InventoryOwner.Character(CharacterId.New()));
+		await SeedAsync(environment, item, source, target);
+		var sourceSession = GrantSession(
+			environment, actor, source.Id,
+			InventoryCapability.Move | InventoryCapability.TransferOut);
+		var targetSession = GrantSession(
+			environment, actor, target.Id, InventoryCapability.TransferIn);
+		environment.Provider.BeforeNextCommit(() =>
+			environment.Access.RevokeSession(revokeSource ? sourceSession : targetSession));
+
+		var result = await environment.CreateInventoryMutationService().MoveCommittedAsync(
+			actor, source.Id, target.Id, item.Id, 1, 1);
+
+		Assert.AreEqual(ErrorCode.Conflict, result.Error!.Code);
+		Assert.IsNotNull(Find(environment, source.Id).Find(item.Id));
+		Assert.IsEmpty(Find(environment, target.Id).Placements);
+	}
+
 	private static async Task SeedAsync(
 		ApplicationServiceTestEnvironment environment,
 		ItemRecord item,
@@ -199,6 +236,25 @@ public sealed class InventoryMutationServiceTests
 	{
 		environment.Grant(actor, source, InventoryCapability.Move | InventoryCapability.TransferOut);
 		environment.Grant(actor, target, InventoryCapability.TransferIn);
+	}
+
+	private static InteractionSessionId GrantSession(
+		ApplicationServiceTestEnvironment environment,
+		InventoryActor actor,
+		InventoryId inventoryId,
+		InventoryCapability capabilities)
+	{
+		var sessionId = InteractionSessionId.New();
+		environment.Access.Grant(new InventoryGrant
+		{
+			ConnectionId = actor.ConnectionId,
+			CharacterId = actor.CharacterId,
+			InventoryId = inventoryId,
+			Capabilities = capabilities,
+			Kind = InventoryGrantKind.InteractionSession,
+			SessionId = sessionId
+		});
+		return sessionId;
 	}
 
 	private static InventoryRecord Find(

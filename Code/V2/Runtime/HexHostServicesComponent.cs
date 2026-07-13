@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,77 +25,146 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 	internal HexagonRuntimeSystem? Runtime { get; set; }
 
 	[Rpc.Host]
-	public void RequestCharacterList( Guid requestId ) => Dispatch( requestId, new RequestCharacterListCommand() );
+	public void RequestEstablishSession( ClientSessionNonce nonce )
+	{
+		var runtime = Runtime;
+		var caller = Rpc.Caller;
+		if ( runtime is null || caller is null || caller.SteamId.ValueUnsigned == 0 ) return;
+		var bound = runtime.BindClientSession( caller, nonce );
+		if ( bound.Failed )
+		{
+			if ( bound.Error!.Code != ErrorCode.Conflict )
+				Log.Warning( $"Hexagon rejected client session handshake: {bound.Error.Message}" );
+			return;
+		}
+		using ( Rpc.FilterInclude( caller ) ) ReceiveSessionHello( new ClientSessionHello( bound.Value ) );
+		var completed = runtime.CompleteClientSessionHello( caller, bound.Value );
+		if ( completed.Failed )
+		{
+			using ( Rpc.FilterInclude( caller ) ) ReceiveSessionRevoked( bound.Value );
+			Log.Warning( $"Hexagon client session hello could not complete: {completed.Error!.Message}" );
+		}
+	}
 
 	[Rpc.Host]
-	public void RequestCreateCharacter( Guid requestId, CharacterCreationInput input ) =>
-		Dispatch( requestId, new CreateCharacterCommand( input ) );
+	public void RequestCharacterList( ClientCommandHeader header ) =>
+		Dispatch( header, 1, static () => new RequestCharacterListCommand() );
 
 	[Rpc.Host]
-	public void RequestLoadCharacter( Guid requestId, CharacterId characterId ) =>
-		Dispatch( requestId, new LoadCharacterCommand( characterId ) );
+	public void RequestCreateCharacter(
+		ClientCommandHeader header,
+		string name,
+		string description,
+		DefinitionId model,
+		FactionId faction,
+		ClassId? characterClass,
+		Dictionary<string, SnapshotValue> fields ) =>
+		Dispatch( header, 4, () => new CreateCharacterCommand(
+			new CharacterCreationInput( name, description, model, faction, characterClass, fields ) ) );
 
 	[Rpc.Host]
-	public void RequestDeleteCharacter( Guid requestId, CharacterId characterId ) =>
-		Dispatch( requestId, new DeleteCharacterCommand( characterId ) );
+	public void RequestLoadCharacter( ClientCommandHeader header, CharacterId characterId ) =>
+		Dispatch( header, 4, () => new LoadCharacterCommand( characterId ) );
 
 	[Rpc.Host]
-	public void RequestUnloadCharacter( Guid requestId ) => Dispatch( requestId, new UnloadCharacterCommand() );
+	public void RequestDeleteCharacter( ClientCommandHeader header, CharacterId characterId ) =>
+		Dispatch( header, 4, () => new DeleteCharacterCommand( characterId ) );
 
 	[Rpc.Host]
-	public void RequestMoveItem( Guid requestId, InventoryId sourceId, InventoryId targetId, ItemId itemId, int x, int y ) =>
-		Dispatch( requestId, new MoveInventoryItemCommand( sourceId, targetId, itemId, x, y ) );
+	public void RequestUnloadCharacter( ClientCommandHeader header ) =>
+		Dispatch( header, 1, static () => new UnloadCharacterCommand() );
+
+	[Rpc.Host]
+	public void RequestMoveItem(
+		ClientCommandHeader header,
+		InventoryId sourceId,
+		InventoryId targetId,
+		ItemId itemId,
+		InventoryGridPosition position ) =>
+		Dispatch( header, 4, () => new MoveInventoryItemCommand( sourceId, targetId, itemId, position ) );
 
 	[Rpc.Host]
 	public void RequestItemAction(
-		Guid requestId,
+		ClientCommandHeader header,
 		InventoryId inventoryId,
 		ItemId itemId,
 		ActionId actionId,
 		Dictionary<string, SnapshotValue> arguments ) =>
-		Dispatch( requestId, new RunItemActionCommand( inventoryId, itemId, actionId, arguments ) );
+		Dispatch( header, 4, () => new RunItemActionCommand( inventoryId, itemId, actionId, arguments ) );
 
 	[Rpc.Host]
-	public void RequestDropItem( Guid requestId, InventoryId sourceId, ItemId itemId ) =>
-		Dispatch( requestId, new DropItemCommand( sourceId, itemId ) );
+	public void RequestDropItem( ClientCommandHeader header, InventoryId sourceId, ItemId itemId ) =>
+		Dispatch( header, 4, () => new DropItemCommand( sourceId, itemId ) );
 
 	[Rpc.Host]
-	public void RequestPickupItem( Guid requestId, ItemId itemId, InventoryId destinationId ) =>
-		Dispatch( requestId, new PickUpItemCommand( itemId, destinationId ) );
+	public void RequestPickupItem( ClientCommandHeader header, ItemId itemId, InventoryId destinationId ) =>
+		Dispatch( header, 4, () => new PickUpItemCommand( itemId, destinationId ) );
 
 	[Rpc.Host]
-	public void RequestChat( Guid requestId, string channelId, string text ) =>
-		Dispatch( requestId, new SendChatCommand( channelId, text ) );
+	public void RequestChat( ClientCommandHeader header, string channelId, string text ) =>
+		Dispatch( header, 2, () => new SendChatCommand( channelId, text ) );
 
 	[Rpc.Host]
-	public void RequestCancelAction( Guid requestId, Guid instanceId ) =>
-		Dispatch( requestId, new CancelActionCommand( instanceId ) );
+	public void RequestCancelAction( ClientCommandHeader header, Guid instanceId ) =>
+		Dispatch( header, 1, () => new CancelActionCommand( instanceId ) );
 
 	[Rpc.Host]
-	public void RequestBeginInteraction( Guid requestId, InteractionTargetInput target ) =>
-		Dispatch( requestId, new BeginInteractionCommand( target ) );
+	public void RequestBeginInteraction(
+		ClientCommandHeader header,
+		InteractionTargetInputKind targetKind,
+		Guid targetId ) =>
+		Dispatch( header, 2, () => new BeginInteractionCommand(
+			new InteractionTargetInput( targetKind, targetId ) ) );
 
 	[Rpc.Host]
-	public void RequestContinueInteraction( Guid requestId, InteractionSessionId sessionId, InteractionTargetInput target ) =>
-		Dispatch( requestId, new ContinueInteractionCommand( sessionId, target ) );
+	public void RequestContinueInteraction(
+		ClientCommandHeader header,
+		InteractionSessionId sessionId,
+		InteractionTargetInputKind targetKind,
+		Guid targetId ) =>
+		Dispatch( header, 1, () => new ContinueInteractionCommand(
+			sessionId,
+			new InteractionTargetInput( targetKind, targetId ) ) );
 
 	[Rpc.Host]
-	public void RequestCloseInteraction( Guid requestId, InteractionSessionId sessionId ) =>
-		Dispatch( requestId, new CloseInteractionCommand( sessionId ) );
+	public void RequestCloseInteraction( ClientCommandHeader header, InteractionSessionId sessionId ) =>
+		Dispatch( header, 1, () => new CloseInteractionCommand( sessionId ) );
 
 	[Rpc.Host]
-	public void RequestSchemaCommand( Guid requestId, string commandId, Dictionary<string, SnapshotValue> arguments ) =>
-		Dispatch( requestId, new RunSchemaCommandCommand( commandId, arguments ) );
-
-	public void SendOperationResult( Connection recipient, CommandRequestId requestId, OperationResult result )
+	public void RequestSchemaCommand( ClientCommandHeader header, string commandId, Dictionary<string, SnapshotValue> arguments )
 	{
+		var cost = Runtime?.GetSchemaCommandCost( commandId ) ?? 8;
+		Dispatch( header, cost, () => new RunSchemaCommandCommand( commandId, arguments ) );
+	}
+
+	public void SendOperationResult(
+		Connection recipient,
+		ClientSessionScope scope,
+		CommandRequestId requestId,
+		OperationResult result )
+	{
+		var retryAfterMilliseconds = OperationResultWireContract.EncodeRetryAfterMilliseconds( result );
 		using ( Rpc.FilterInclude( recipient ) )
-			ReceiveOperationResult( requestId.Value, result.Succeeded, (int)(result.Error?.Code ?? ErrorCode.None), result.Error?.Message ?? string.Empty );
+			ReceiveOperationResult(
+				scope,
+				requestId.Value,
+				result.Succeeded,
+				(int)(result.Error?.Code ?? ErrorCode.None),
+				result.Error?.Message ?? string.Empty,
+				retryAfterMilliseconds );
 	}
 
 	public void SendCharacterList( Connection recipient, CharacterListSnapshot snapshot )
 	{
-		using ( Rpc.FilterInclude( recipient ) ) ReceiveCharacterList( snapshot );
+		var scope = Runtime?.CaptureClientScope( recipient );
+		if ( scope is null || scope.Value.Failed ) return;
+		var encoded = SnapshotWireCodec.EncodeCharacterList( snapshot );
+		if ( encoded.Failed )
+		{
+			LogSnapshotWireFailure( "ENCODE", "character-list", encoded.Error! );
+			return;
+		}
+		using ( Rpc.FilterInclude( recipient ) ) ReceiveCharacterList( scope.Value.Value, encoded.Value );
 	}
 
 	public void SendClientState(
@@ -141,7 +211,15 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 			player.HostApplyPublicSnapshot( publicSnapshot );
 			if ( !publicSnapshot.HasCharacter ) player.HostClearCharacter();
 		}
-		using ( Rpc.FilterInclude( recipient ) ) ReceiveClientState( snapshot );
+		var scope = runtime.CaptureClientScope( recipient );
+		if ( scope.Failed ) return;
+		var encoded = SnapshotWireCodec.EncodeClientState( snapshot );
+		if ( encoded.Failed )
+		{
+			LogSnapshotWireFailure( "ENCODE", "client-state", encoded.Error! );
+			return;
+		}
+		using ( Rpc.FilterInclude( recipient ) ) ReceiveClientState( scope.Value, encoded.Value );
 	}
 
 	public void SendChat(
@@ -156,33 +234,100 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 			return;
 		}
 		var snapshot = new ChatSnapshot( epoch.Value.Value, revision, messages );
-		using ( Rpc.FilterInclude( recipient ) ) ReceiveChat( snapshot );
+		var scope = Runtime!.CaptureClientScope( recipient );
+		if ( scope.Failed ) return;
+		var encoded = SnapshotWireCodec.EncodeChat( snapshot );
+		if ( encoded.Failed )
+		{
+			LogSnapshotWireFailure( "ENCODE", "chat", encoded.Error! );
+			return;
+		}
+		using ( Rpc.FilterInclude( recipient ) ) ReceiveChat( scope.Value, encoded.Value );
 	}
 
-	private void Dispatch( Guid rawRequestId, ClientCommand command )
+	private void Dispatch( ClientCommandHeader header, int cost, Func<ClientCommand> commandFactory )
 	{
 		var runtime = Runtime;
 		if ( runtime is null ) return;
-		if ( rawRequestId == Guid.Empty )
+		var requestId = header.RequestId;
+		var caller = Rpc.Caller;
+		var ingress = CommandIngressAdmission.Evaluate(
+			caller is not null && caller.SteamId.ValueUnsigned != 0,
+			() => runtime.TryBeginCommand( caller!, requestId, cost ),
+			() => runtime.ResolveActor( caller!, header.Scope, false ),
+			() => runtime.FinishRejectedCommand( caller!, requestId ) );
+		if ( !ingress.Authenticated )
 		{
-			Log.Warning( "Hexagon rejected a command with an empty request ID." );
+			if ( caller is not null )
+				SendOperationResult( caller, header.Scope, requestId,
+					OperationResult.Failure( ErrorCode.Unauthorized, "RPC caller is not authenticated." ) );
 			return;
 		}
-		var requestId = new CommandRequestId( rawRequestId );
-		var actor = RpcGuard.Resolve( runtime, RequiresStableCharacter( command ) );
-		if ( actor.Failed )
+		var admitted = ingress.Admission;
+		if ( !admitted.Accepted )
 		{
-			if ( Rpc.Caller is not null )
-				SendOperationResult( Rpc.Caller, requestId, OperationResult.Failure( actor.Error!.Code, actor.Error.Message ) );
+			var result = admitted.Failure switch
+			{
+				CommandAdmissionFailure.RateLimited => OperationResultWireContract.RateLimited(
+					"The connection command budget is exhausted.", admitted.RetryAfter ),
+				CommandAdmissionFailure.Duplicate => OperationResult.Failure(
+					ErrorCode.Conflict, "The command request ID is a duplicate." ),
+				_ => OperationResult.Failure(
+					ErrorCode.Unauthorized, "The host connection session is unavailable." )
+			};
+			SendOperationResult( caller!, header.Scope, requestId, result );
 			return;
 		}
-		if ( !runtime.TryBeginCommand( actor.Value, requestId ) )
+		var resolved = ingress.Session!.Value;
+		if ( resolved.Failed )
 		{
-			SendOperationResult( actor.Value.Connection, requestId,
-				OperationResult.Failure( ErrorCode.Conflict, "The command request ID is duplicate or the connection has too many pending commands." ) );
+			SendOperationResult( caller!, header.Scope, requestId,
+				OperationResult.Failure( resolved.Error!.Code, resolved.Error.Message ) );
 			return;
 		}
-		_ = DispatchAsync( runtime, actor.Value, requestId, command );
+		var actor = resolved.Value;
+		if ( requestId.Value == Guid.Empty )
+		{
+			CompleteDispatch( runtime, actor, requestId,
+				RuntimeOperationOutcome<OperationResult>.Success(
+					OperationResult.Failure( ErrorCode.InvalidArgument, "The command request ID is empty." ) ) );
+			return;
+		}
+
+		ClientCommand command;
+		OperationResult payload;
+		try
+		{
+			command = commandFactory();
+			payload = ClientPayloadLimits.Validate( command );
+		}
+		catch ( Exception exception )
+		{
+			Log.Warning( exception, "Hexagon rejected a malformed client command payload." );
+			CompleteDispatch( runtime, actor, requestId,
+				RuntimeOperationOutcome<OperationResult>.Success(
+					OperationResult.Failure( ErrorCode.InvalidArgument, "The command payload is malformed." ) ) );
+			return;
+		}
+		if ( payload.Failed )
+		{
+			CompleteDispatch( runtime, actor, requestId,
+				RuntimeOperationOutcome<OperationResult>.Success( payload ) );
+			return;
+		}
+		if ( RequiresStableCharacter( command ) )
+		{
+			var stableActor = RpcGuard.Resolve( runtime, header.Scope, true );
+			if ( stableActor.Failed )
+			{
+				CompleteDispatch( runtime, actor, requestId,
+					RuntimeOperationOutcome<OperationResult>.Success(
+						OperationResult.Failure( stableActor.Error!.Code, stableActor.Error.Message ) ) );
+				return;
+			}
+			actor = stableActor.Value;
+		}
+		_ = DispatchAsync( runtime, actor, requestId, command );
 	}
 
 	private async Task DispatchAsync(
@@ -191,20 +336,42 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 		CommandRequestId requestId,
 		ClientCommand command )
 	{
+		if ( !runtime.IsCommandLeaseCurrent( actor ) )
+		{
+			CompleteDispatch(
+				runtime,
+				actor,
+				requestId,
+				RuntimeOperationOutcome<OperationResult>.Success(
+					OperationResult.Failure(
+						ErrorCode.Unauthorized,
+						"The connection or active character changed before command execution." ) ) );
+			return;
+		}
+
 		var application = runtime.HostApplication;
-		var outcome = application is null
-			? RuntimeOperationOutcome<OperationResult>.Success(
-				OperationResult.Failure( ErrorCode.InternalError, "Host application is not ready." ) )
-			: await RuntimeAsyncOperation.Capture(
-				() => application.HandleCommandAsync( actor, command, actor.CancellationToken ) );
-		CompleteDispatch( runtime, actor, requestId, outcome );
+		if ( application is null )
+		{
+			CompleteDispatch(
+				runtime,
+				actor,
+				requestId,
+				RuntimeOperationOutcome<OperationResult>.Success(
+					OperationResult.Failure( ErrorCode.InternalError, "Host application is not ready." ) ) );
+			return;
+		}
+
+		var outcome = await RuntimeAsyncOperation.Capture(
+			() => application.HandleCommandAsync( actor, command, actor.CancellationToken ) );
+		CompleteDispatch( runtime, actor, requestId, outcome, executionStarted: true );
 	}
 
 	private void CompleteDispatch(
 		HexagonRuntimeSystem runtime,
 		RpcActor actor,
 		CommandRequestId requestId,
-		RuntimeOperationOutcome<OperationResult> outcome )
+		RuntimeOperationOutcome<OperationResult> outcome,
+		bool executionStarted = false )
 	{
 		try
 		{
@@ -212,7 +379,11 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 			if ( status == CommandCompletionStatus.Disconnected ) return;
 
 			OperationResult result;
-			if ( status == CommandCompletionStatus.Stale )
+			var executionSucceeded = executionStarted && outcome.Succeeded && outcome.Value.Succeeded;
+			if ( CommandCompletionPolicy.ShouldRejectAsStale(
+				status == CommandCompletionStatus.Current,
+				executionStarted,
+				executionSucceeded ) )
 			{
 				result = OperationResult.Failure( ErrorCode.Unauthorized, "The connection or active character changed before the command completed." );
 			}
@@ -228,7 +399,7 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 				result = outcome.Value;
 			}
 
-			SendOperationResult( actor.Connection, requestId, result );
+			SendOperationResult( actor.Connection, actor.ClientScope, requestId, result );
 		}
 		catch ( Exception exception )
 		{
@@ -244,42 +415,144 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 		UnloadCharacterCommand );
 
 	[Rpc.Broadcast( NetFlags.HostOnly )]
-	private void ReceiveOperationResult( Guid rawRequestId, bool succeeded, int errorCode, string message )
+	private void ReceiveSessionHello( ClientSessionHello hello )
 	{
-		if ( rawRequestId == Guid.Empty ) return;
-		var result = succeeded
-			? OperationResult.Success()
-			: OperationResult.Failure(
-				errorCode >= (int)ErrorCode.InvalidArgument && errorCode <= (int)ErrorCode.InternalError
-					? (ErrorCode)errorCode
-					: ErrorCode.InternalError,
-				string.IsNullOrWhiteSpace( message ) ? "The host denied the command." : message );
-		HexagonRuntimeSystem.Current?.ClientTransport?.Complete( new CommandRequestId( rawRequestId ), result );
+		var runtime = HexagonRuntimeSystem.Current;
+		if ( runtime?.ClientStore?.AcceptHello( hello ) != true ) return;
+		var transport = runtime.ClientTransport;
+		if ( transport is null ) return;
+		if ( transport.BindScope( hello.Scope, out var newlyBound ) && newlyBound )
+			Log.Info( $"HEXAGON_SESSION_READY client epoch={hello.Scope.Connection}" );
 	}
 
 	[Rpc.Broadcast( NetFlags.HostOnly )]
-	private void ReceiveCharacterList( CharacterListSnapshot snapshot ) =>
-		HexagonRuntimeSystem.Current?.ClientStore?.ReplaceCharacterList( snapshot );
+	private void ReceiveSessionRevoked( ClientSessionScope scope )
+	{
+		var runtime = HexagonRuntimeSystem.Current;
+		if ( runtime?.ClientStore?.RevokeSession( scope ) != true ) return;
+		runtime.ClientTransport?.RevokeScope( scope );
+	}
 
 	[Rpc.Broadcast( NetFlags.HostOnly )]
-	private void ReceiveClientState( ClientStateSnapshot snapshot ) =>
-		HexagonRuntimeSystem.Current?.ClientStore?.ApplyState( snapshot );
+	private void ReceiveOperationResult(
+		ClientSessionScope scope,
+		Guid rawRequestId,
+		bool succeeded,
+		int errorCode,
+		string message,
+		int retryAfterMilliseconds )
+	{
+		if ( rawRequestId == Guid.Empty ) return;
+		var runtime = HexagonRuntimeSystem.Current;
+		if ( runtime?.ClientStore?.Accepts( scope ) != true ) return;
+		var result = OperationResultWireContract.Decode(
+			succeeded, errorCode, message, retryAfterMilliseconds );
+		runtime.ClientTransport?.Complete( new CommandRequestId( rawRequestId ), result );
+	}
 
 	[Rpc.Broadcast( NetFlags.HostOnly )]
-	private void ReceiveChat( ChatSnapshot snapshot ) =>
-		HexagonRuntimeSystem.Current?.ClientStore?.ReplaceChat( snapshot );
+	private void ReceiveCharacterList( ClientSessionScope scope, byte[] payload )
+	{
+		var store = HexagonRuntimeSystem.Current?.ClientStore;
+		if ( store?.Accepts( scope ) != true ) return;
+		var decoded = SnapshotWireCodec.DecodeCharacterList( payload );
+		if ( decoded.Failed )
+		{
+			LogSnapshotWireFailure( "DECODE", "character-list", decoded.Error! );
+			return;
+		}
+		store.ReplaceCharacterList( scope, decoded.Value );
+	}
+
+	[Rpc.Broadcast( NetFlags.HostOnly )]
+	private void ReceiveClientState( ClientSessionScope scope, byte[] payload )
+	{
+		var store = HexagonRuntimeSystem.Current?.ClientStore;
+		if ( store?.Accepts( scope ) != true ) return;
+		var decoded = SnapshotWireCodec.DecodeClientState( payload );
+		if ( decoded.Failed )
+		{
+			LogSnapshotWireFailure( "DECODE", "client-state", decoded.Error! );
+			return;
+		}
+		store.ApplyState( scope, decoded.Value );
+	}
+
+	[Rpc.Broadcast( NetFlags.HostOnly )]
+	private void ReceiveChat( ClientSessionScope scope, byte[] payload )
+	{
+		var store = HexagonRuntimeSystem.Current?.ClientStore;
+		if ( store?.Accepts( scope ) != true ) return;
+		var decoded = SnapshotWireCodec.DecodeChat( payload );
+		if ( decoded.Failed )
+		{
+			LogSnapshotWireFailure( "DECODE", "chat", decoded.Error! );
+			return;
+		}
+		store.ReplaceChat( scope, decoded.Value );
+	}
+
+	private static void LogSnapshotWireFailure( string direction, string kind, OperationError error ) =>
+		Log.Error(
+			$"HEXAGON_SNAPSHOT_WIRE_{direction}_FAILED kind={kind} code={error.Code} message={error.Message}" );
 
 }
 
 public sealed class SandboxClientCommandTransport : IClientCommandTransport, IDisposable
 {
 	private readonly Scene _scene;
+	private readonly HexClientStore _store;
+	private readonly ClientSessionNonce _nonce;
 	private readonly PendingCommandRegistry _pending;
+	private ClientSessionRetrySchedule? _sessionRetry;
+	private ClientSessionScope? _scope;
+	private ClientSessionRetrySchedule SessionRetry =>
+		_sessionRetry ??= new ClientSessionRetrySchedule( Stopwatch.Frequency );
 
-	public SandboxClientCommandTransport( Scene scene, TimeSpan? timeout = null )
+	public SandboxClientCommandTransport(
+		Scene scene,
+		HexClientStore store,
+		ClientSessionNonce nonce,
+		TimeSpan? timeout = null )
 	{
 		_scene = scene ?? throw new ArgumentNullException( nameof(scene) );
+		_store = store ?? throw new ArgumentNullException( nameof(store) );
+		_nonce = nonce;
 		_pending = new PendingCommandRegistry( timeout );
+		_sessionRetry = new ClientSessionRetrySchedule( Stopwatch.Frequency );
+	}
+
+	internal void PollSession( long timestamp )
+	{
+		if ( !SessionRetry.TryBeginAttempt( timestamp ) ) return;
+		var services = _scene.GetAll<HexHostServicesComponent>().FirstOrDefault();
+		if ( services is null ) return;
+		services.RequestEstablishSession( _nonce );
+	}
+
+	internal bool BindScope( ClientSessionScope scope, out bool newlyBound )
+	{
+		newlyBound = false;
+		if ( scope.Nonce != _nonce || !_store.Accepts( scope ) ) return false;
+		if ( _scope is not null )
+		{
+			if ( _scope.Value != scope ) return false;
+			SessionRetry.Complete();
+			return true;
+		}
+		_scope = scope;
+		SessionRetry.Complete();
+		newlyBound = true;
+		return true;
+	}
+
+	internal bool RevokeScope( ClientSessionScope scope )
+	{
+		if ( _scope is null || _scope.Value != scope ) return false;
+		_scope = null;
+		SessionRetry.Complete();
+		_pending.Dispose();
+		return true;
 	}
 
 	internal bool Complete( CommandRequestId requestId, OperationResult result ) =>
@@ -290,6 +563,9 @@ public sealed class SandboxClientCommandTransport : IClientCommandTransport, IDi
 		System.Threading.CancellationToken cancellationToken = default )
 	{
 		cancellationToken.ThrowIfCancellationRequested();
+		if ( _scope is null || !_store.Accepts( _scope.Value ) )
+			return ValueTask.FromResult( OperationResult.Failure(
+				ErrorCode.Unauthorized, "The client session handshake is not complete." ) );
 		var registered = _pending.Register( cancellationToken );
 		if ( registered.Failed ) return ValueTask.FromResult(
 			OperationResult.Failure( registered.Error!.Code, registered.Error.Message ) );
@@ -305,59 +581,70 @@ public sealed class SandboxClientCommandTransport : IClientCommandTransport, IDi
 
 		try
 		{
-			var requestId = pending.RequestId.Value;
+			var header = new ClientCommandHeader( _scope.Value, pending.RequestId );
 			switch ( command )
 			{
 				case RequestCharacterListCommand:
-					services.RequestCharacterList( requestId );
+					services.RequestCharacterList( header );
 					break;
 				case CreateCharacterCommand create:
-					services.RequestCreateCharacter( requestId, create.Input );
+					services.RequestCreateCharacter(
+						header,
+						create.Input.Name,
+						create.Input.Description,
+						create.Input.Model,
+						create.Input.Faction,
+						create.Input.Class,
+						new Dictionary<string, SnapshotValue>( create.Input.Fields, StringComparer.Ordinal ) );
 					break;
 				case LoadCharacterCommand load:
-					services.RequestLoadCharacter( requestId, load.CharacterId );
+					services.RequestLoadCharacter( header, load.CharacterId );
 					break;
 				case DeleteCharacterCommand delete:
-					services.RequestDeleteCharacter( requestId, delete.CharacterId );
+					services.RequestDeleteCharacter( header, delete.CharacterId );
 					break;
 				case UnloadCharacterCommand:
-					services.RequestUnloadCharacter( requestId );
+					services.RequestUnloadCharacter( header );
 					break;
 				case MoveInventoryItemCommand move:
-					services.RequestMoveItem( requestId, move.SourceId, move.TargetId, move.ItemId, move.X, move.Y );
+					services.RequestMoveItem( header, move.SourceId, move.TargetId, move.ItemId, move.Position );
 					break;
 				case RunItemActionCommand action:
 					services.RequestItemAction(
-						requestId,
+						header,
 						action.InventoryId,
 						action.ItemId,
 						action.ActionId,
 						new Dictionary<string, SnapshotValue>( action.Arguments, StringComparer.Ordinal ) );
 					break;
 				case DropItemCommand drop:
-					services.RequestDropItem( requestId, drop.SourceId, drop.ItemId );
+					services.RequestDropItem( header, drop.SourceId, drop.ItemId );
 					break;
 				case PickUpItemCommand pickup:
-					services.RequestPickupItem( requestId, pickup.ItemId, pickup.DestinationId );
+					services.RequestPickupItem( header, pickup.ItemId, pickup.DestinationId );
 					break;
 				case SendChatCommand chat:
-					services.RequestChat( requestId, chat.ChannelId, chat.Text );
+					services.RequestChat( header, chat.ChannelId, chat.Text );
 					break;
 				case CancelActionCommand cancel:
-					services.RequestCancelAction( requestId, cancel.InstanceId );
+					services.RequestCancelAction( header, cancel.InstanceId );
 					break;
 				case BeginInteractionCommand interaction:
-					services.RequestBeginInteraction( requestId, interaction.Target );
+					services.RequestBeginInteraction( header, interaction.Target.Kind, interaction.Target.Id );
 					break;
 				case ContinueInteractionCommand interaction:
-					services.RequestContinueInteraction( requestId, interaction.SessionId, interaction.Target );
+					services.RequestContinueInteraction(
+						header,
+						interaction.SessionId,
+						interaction.Target.Kind,
+						interaction.Target.Id );
 					break;
 				case CloseInteractionCommand interaction:
-					services.RequestCloseInteraction( requestId, interaction.SessionId );
+					services.RequestCloseInteraction( header, interaction.SessionId );
 					break;
 				case RunSchemaCommandCommand schemaCommand:
 					services.RequestSchemaCommand(
-						requestId,
+						header,
 						schemaCommand.CommandId,
 						new Dictionary<string, SnapshotValue>( schemaCommand.Arguments, StringComparer.Ordinal ) );
 					break;
@@ -377,5 +664,9 @@ public sealed class SandboxClientCommandTransport : IClientCommandTransport, IDi
 		return pending.Completion;
 	}
 
-	public void Dispose() => _pending.Dispose();
+	public void Dispose()
+	{
+		SessionRetry.Complete();
+		_pending.Dispose();
+	}
 }

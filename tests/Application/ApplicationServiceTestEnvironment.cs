@@ -199,7 +199,9 @@ internal sealed class ApplicationServiceTestEnvironment : IAsyncDisposable
 	{
 		TypeId = new PersistedTypeId(typeId),
 		TypeVersion = version,
-		Data = JsonSerializer.SerializeToElement(new TestCharacterState(name))
+		Data = JsonSerializer.SerializeToElement(
+			new TestCharacterState(name),
+			new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
 	};
 
 	public static PolicyPipeline<TContext> AllowPolicy<TContext>() => new(
@@ -302,6 +304,7 @@ internal sealed class FaultInjectingPersistenceProvider : IPersistenceProvider
 {
 	private readonly IPersistenceProvider _inner;
 	private bool _failNextCommit;
+	private Action? _beforeNextCommit;
 
 	public FaultInjectingPersistenceProvider(IPersistenceProvider inner) =>
 		_inner = inner ?? throw new ArgumentNullException(nameof(inner));
@@ -309,8 +312,18 @@ internal sealed class FaultInjectingPersistenceProvider : IPersistenceProvider
 	public PersistedTypeRegistry Types => _inner.Types;
 	public PersistenceHealth Health => _inner.Health;
 	public bool IsInitialized => _inner.IsInitialized;
+	public PersistenceProviderState State => _inner.State;
+	public Guid StoreId => _inner.StoreId;
+	public Guid WriterEpoch => _inner.WriterEpoch;
+	public long CompactionGeneration => _inner.CompactionGeneration;
 
 	public void FailNextCommit() => _failNextCommit = true;
+	public void BeforeNextCommit(Action callback)
+	{
+		ArgumentNullException.ThrowIfNull(callback);
+		if (Interlocked.CompareExchange(ref _beforeNextCommit, callback, null) is not null)
+			throw new InvalidOperationException("A before-commit callback is already pending.");
+	}
 
 	public ValueTask InitializeAsync(CancellationToken cancellationToken = default) =>
 		_inner.InitializeAsync(cancellationToken);
@@ -323,8 +336,8 @@ internal sealed class FaultInjectingPersistenceProvider : IPersistenceProvider
 	public ValueTask<PersistenceResult<long>> CheckpointAsync(CancellationToken cancellationToken = default) =>
 		_inner.CheckpointAsync(cancellationToken);
 
-	public ValueTask DrainAsync(CancellationToken cancellationToken = default) =>
-		_inner.DrainAsync(cancellationToken);
+	public ValueTask<PersistenceShutdownResult> ShutdownAsync(CancellationToken cancellationToken = default) =>
+		_inner.ShutdownAsync(cancellationToken);
 
 	public ValueTask DisposeAsync() => _inner.DisposeAsync();
 
@@ -336,6 +349,8 @@ internal sealed class FaultInjectingPersistenceProvider : IPersistenceProvider
 		_failNextCommit = false;
 		return true;
 	}
+
+	private Action? ConsumeBeforeCommit() => Interlocked.Exchange(ref _beforeNextCommit, null);
 
 	private sealed class FaultInjectingUnitOfWork : IUnitOfWork
 	{
@@ -367,9 +382,12 @@ internal sealed class FaultInjectingPersistenceProvider : IPersistenceProvider
 		public void Delete<T>(IPersistenceRepository<T> repository, DocumentSnapshot<T> observed) where T : class =>
 			_inner.Delete(repository, observed);
 
+		public void Require(ICommitPrecondition precondition) => _inner.Require(precondition);
+
 		public ValueTask<PersistenceResult<CommitReceipt>> CommitAsync(
 			CancellationToken cancellationToken = default)
 		{
+			_provider.ConsumeBeforeCommit()?.Invoke();
 			if (!_provider.ConsumeCommitFailure())
 				return _inner.CommitAsync(cancellationToken);
 

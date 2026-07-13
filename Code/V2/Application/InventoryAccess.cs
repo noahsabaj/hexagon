@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Hexagon.V2.Domain;
+using Hexagon.V2.Persistence;
 
 namespace Hexagon.V2.Application;
 
@@ -38,6 +39,36 @@ public sealed record InventoryGrant
 	public InteractionSessionId? SessionId { get; init; }
 }
 
+public sealed class InventoryAccessProof : ICommitPrecondition
+{
+	private readonly InventoryAccessService _owner;
+
+	internal InventoryAccessProof(
+		InventoryAccessService owner,
+		ConnectionId connectionId,
+		CharacterId characterId,
+		InventoryId inventoryId,
+		InventoryCapability required,
+		long revision )
+	{
+		_owner = owner;
+		ConnectionId = connectionId;
+		CharacterId = characterId;
+		InventoryId = inventoryId;
+		Required = required;
+		CapabilityRevision = revision;
+	}
+
+	public ConnectionId ConnectionId { get; }
+	public CharacterId CharacterId { get; }
+	public InventoryId InventoryId { get; }
+	public InventoryCapability Required { get; }
+	public long CapabilityRevision { get; }
+
+	public PersistenceInvariantIssue? Validate( CommitPreconditionContext context ) =>
+		_owner.ValidateProof( this );
+}
+
 /// <summary>
 /// Transient, connection-scoped inventory authorization. Grants are intentionally
 /// absent from persisted inventory records.
@@ -48,6 +79,7 @@ public sealed class InventoryAccessService
 	private readonly Dictionary<
 		(ConnectionId Connection, InventoryId Inventory, InventoryGrantKind Kind, InteractionSessionId? Session),
 		InventoryGrant> _grants = new();
+	private readonly Dictionary<(ConnectionId Connection, CharacterId Character, InventoryId Inventory), long> _revisions = new();
 
 	public void Grant( InventoryGrant grant )
 	{
@@ -60,20 +92,32 @@ public sealed class InventoryAccessService
 			throw new ArgumentException( "Non-session grants cannot carry a session ID.", nameof(grant) );
 
 		lock ( _sync )
+		{
 			_grants[(grant.ConnectionId, grant.InventoryId, grant.Kind, grant.SessionId)] = grant;
+			Advance( grant.ConnectionId, grant.CharacterId, grant.InventoryId );
+		}
+	}
+
+	public InventoryAccessProof? Prove(
+		ConnectionId connectionId,
+		CharacterId characterId,
+		InventoryId inventoryId,
+		InventoryCapability required )
+	{
+		lock ( _sync )
+		{
+			if ( !HasUnderLock( connectionId, characterId, inventoryId, required ) ) return null;
+			return new InventoryAccessProof(
+				this, connectionId, characterId, inventoryId, required,
+				_revisions.GetValueOrDefault( (connectionId, characterId, inventoryId) ) );
+		}
 	}
 
 	public bool Has( ConnectionId connectionId, CharacterId characterId, InventoryId inventoryId, InventoryCapability required )
 	{
 		lock ( _sync )
 		{
-			var capabilities = InventoryCapability.None;
-			foreach ( var grant in _grants.Values.Where( value =>
-				value.ConnectionId == connectionId &&
-				value.InventoryId == inventoryId &&
-				value.CharacterId == characterId ) )
-				capabilities |= grant.Capabilities;
-			return (capabilities & required) == required;
+			return HasUnderLock( connectionId, characterId, inventoryId, required );
 		}
 	}
 
@@ -104,8 +148,46 @@ public sealed class InventoryAccessService
 		{
 			var removed = _grants.Values.Where( predicate ).ToArray();
 			foreach ( var grant in removed )
+			{
 				_grants.Remove( (grant.ConnectionId, grant.InventoryId, grant.Kind, grant.SessionId) );
+				Advance( grant.ConnectionId, grant.CharacterId, grant.InventoryId );
+			}
 			return removed;
 		}
+	}
+
+	internal PersistenceInvariantIssue? ValidateProof( InventoryAccessProof proof )
+	{
+		lock ( _sync )
+		{
+			var revision = _revisions.GetValueOrDefault( (proof.ConnectionId, proof.CharacterId, proof.InventoryId) );
+			return revision == proof.CapabilityRevision &&
+				HasUnderLock( proof.ConnectionId, proof.CharacterId, proof.InventoryId, proof.Required )
+				? null
+				: new PersistenceInvariantIssue(
+					"inventory.access.stale",
+					$"inventory/{proof.InventoryId}/access",
+					"Inventory capability changed after the action was planned." );
+		}
+	}
+
+	private bool HasUnderLock(
+		ConnectionId connectionId,
+		CharacterId characterId,
+		InventoryId inventoryId,
+		InventoryCapability required )
+	{
+		var capabilities = InventoryCapability.None;
+		foreach ( var grant in _grants.Values.Where( value =>
+			value.ConnectionId == connectionId && value.InventoryId == inventoryId &&
+			value.CharacterId == characterId ) )
+			capabilities |= grant.Capabilities;
+		return (capabilities & required) == required;
+	}
+
+	private void Advance( ConnectionId connectionId, CharacterId characterId, InventoryId inventoryId )
+	{
+		var key = (connectionId, characterId, inventoryId);
+		_revisions[key] = checked(_revisions.GetValueOrDefault( key ) + 1);
 	}
 }

@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -113,8 +114,18 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			return;
 		}
 
-		IPersistenceStorage storage = new SandboxPersistenceStorage();
-		var logicalRoot = $"hexagon/v2/{compiled.Value.Id}";
+		IPersistenceStorage storage;
+		try
+		{
+			storage = descriptorResult.Value.CreatePersistenceStorage()
+				?? throw new InvalidOperationException( "The schema persistence storage factory returned null." );
+		}
+		catch ( Exception exception )
+		{
+			FailHost( $"Persistence storage construction failed: {exception.Message}" );
+			return;
+		}
+		var logicalRoot = $"hexagon/persistence/v3/{compiled.Value.Id}";
 		if ( !string.IsNullOrWhiteSpace( hostOptions.Value.PersistenceRootOverride ) )
 		{
 			storage = new PrefixedPersistenceStorage( storage, hostOptions.Value.PersistenceRootOverride );
@@ -125,10 +136,19 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			_persistenceRoot = logicalRoot;
 		}
 
+		var persistenceInvariants = new DomainInvariantValidator(
+			bindings.Value.Types,
+			compiled.Value,
+			new SchemaItemShapeCatalog( compiled.Value ),
+			descriptorResult.Value.PersistenceInvariants );
 		_persistence = new FileSystemPersistenceProvider(
 			storage,
-			new FileSystemPersistenceOptions( compiled.Value.Id ),
-			bindings.Value.Types );
+			new FileSystemPersistenceOptions( compiled.Value.Id )
+			{
+				Log = message => Log.Info( message )
+			},
+			bindings.Value.Types,
+			persistenceInvariants );
 		_hostSchema = compiled.Value;
 		_hostServices = CreateHostServices();
 		HostReadiness = HexRuntimeReadiness.Initializing;
@@ -167,8 +187,9 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		var clientObject = new GameObject( true, "Hexagon v2 Client" );
 		_clientRoot = clientObject.AddComponent<HexClientRootComponent>();
 		ClientStore = new HexClientStore();
-		ClientStore.BeginSession();
-		ClientTransport = new SandboxClientCommandTransport( Scene );
+		var clientNonce = ClientSessionNonce.New();
+		ClientStore.PrepareSession( clientNonce );
+		ClientTransport = new SandboxClientCommandTransport( Scene, ClientStore, clientNonce );
 		_clientController = new HexClientController( ClientTransport );
 		_clientRoot.Store = ClientStore;
 		_clientRoot.Controller = _clientController;
@@ -187,6 +208,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		}
 
 		ClientReadiness = HexRuntimeReadiness.Ready;
+		ClientTransport.PollSession( Stopwatch.GetTimestamp() );
 		Log.Info( "HEXAGON_READY client" );
 	}
 
@@ -209,18 +231,19 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		var session = new RuntimePlayerSession( player, exception =>
 			Log.Error( exception, $"Hexagon command cancellation callback failed for connection '{connection.Id}'." ) );
 		_sessions.Add( connection.Id, session );
-		if ( HostReadiness == HexRuntimeReadiness.Ready && HostApplication is not null )
-			NotifyConnected( BuildActor( connection, session, false ) );
+		if ( HostReadiness == HexRuntimeReadiness.Ready ) _ = session.ObserveHostReady();
+		// Application-level connection is delayed until the authenticated caller
+		// proves possession of its freshly generated client nonce.
 	}
 
 	void Component.INetworkListener.OnDisconnected( Connection connection )
 	{
 		if ( !_sessions.Remove( connection.Id, out var session ) ) return;
-		var actor = BuildActor( connection, session, false );
+		var actor = session.IsApplicationConnected ? BuildActor( connection, session, false ) : (RpcActor?)null;
 		session.Disconnect();
 		try
 		{
-			HostApplication?.Disconnected( actor );
+			if ( actor is not null ) HostApplication?.Disconnected( actor.Value );
 		}
 		catch ( Exception exception )
 		{
@@ -250,9 +273,13 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		return false;
 	}
 
-	internal OperationResult<RpcActor> ResolveActor( Connection connection, bool requiresStableCharacter )
+	internal OperationResult<RpcActor> ResolveActor(
+		Connection connection,
+		ClientSessionScope scope,
+		bool requiresStableCharacter )
 	{
-		if ( !_sessions.TryGetValue( connection.Id, out var session ) || !session.IsConnected )
+		if ( !_sessions.TryGetValue( connection.Id, out var session ) ||
+			!session.IsApplicationConnected || !session.IsCurrent( scope ) )
 			return OperationResult<RpcActor>.Failure( ErrorCode.Unauthorized, "RPC caller has no active host connection binding." );
 		var character = HostApplication?.FindActiveCharacter( new ConnectionId( connection.Id ) );
 		var lease = session.Boundary.Capture( character?.Id, requiresStableCharacter );
@@ -261,13 +288,60 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			new AccountId( connection.SteamId.ValueUnsigned ),
 			session.Player,
 			character,
+			scope,
 			lease ) );
 	}
 
-	internal bool TryBeginCommand( RpcActor actor, CommandRequestId requestId ) =>
-		_sessions.TryGetValue( actor.Connection.Id, out var session ) &&
-		session.Boundary.ConnectionEpoch == actor.ConnectionEpoch &&
-		session.TryBeginRequest( requestId );
+	internal CommandAdmissionResult TryBeginCommand( Connection connection, CommandRequestId requestId, int cost ) =>
+		_sessions.TryGetValue( connection.Id, out var session )
+			? session.TryBeginRequest( requestId, cost )
+			: CommandAdmissionResult.Reject( CommandAdmissionFailure.Disconnected );
+
+	internal bool FinishRejectedCommand( Connection connection, CommandRequestId requestId ) =>
+		_sessions.TryGetValue( connection.Id, out var session ) && session.FinishRequest( requestId );
+
+	internal OperationResult<ClientSessionScope> BindClientSession(
+		Connection connection,
+		ClientSessionNonce nonce )
+	{
+		if ( !_sessions.TryGetValue( connection.Id, out var session ) )
+			return OperationResult<ClientSessionScope>.Failure(
+				ErrorCode.Conflict, "The host connection session is not ready." );
+		if ( !session.TryBind( nonce, out var scope, out _ ) )
+			return OperationResult<ClientSessionScope>.Failure(
+				ErrorCode.Unauthorized, "The client session nonce cannot be bound to this connection." );
+		return OperationResult<ClientSessionScope>.Success( scope );
+	}
+
+	internal OperationResult CompleteClientSessionHello(
+		Connection connection,
+		ClientSessionScope scope )
+	{
+		if ( !_sessions.TryGetValue( connection.Id, out var session ) || !session.IsCurrent( scope ) )
+			return OperationResult.Failure(
+				ErrorCode.Unauthorized, "The client session changed before its hello was issued." );
+		if ( session.ObserveHelloIssued() && !NotifyConnected( BuildActor( connection, session, false ), session ) )
+			return OperationResult.Failure(
+				ErrorCode.InternalError, "The host application rejected connection initialization." );
+		return OperationResult.Success();
+	}
+
+	internal OperationResult<ClientSessionScope> CaptureClientScope( Connection connection )
+	{
+		if ( !_sessions.TryGetValue( connection.Id, out var session ) || session.Scope is null )
+			return OperationResult<ClientSessionScope>.Failure( ErrorCode.Unauthorized, "Client session is not established." );
+		return OperationResult<ClientSessionScope>.Success( session.Scope.Value );
+	}
+
+	internal bool IsCommandLeaseCurrent( RpcActor actor )
+	{
+		if ( !_sessions.TryGetValue( actor.Connection.Id, out var session ) ||
+			session.Boundary.ConnectionEpoch != actor.ConnectionEpoch )
+			return false;
+		var character = HostApplication?.FindActiveCharacter( new ConnectionId( actor.Connection.Id ) );
+		session.Boundary.ObserveCharacter( character?.Id );
+		return session.Boundary.IsCurrent( actor.Session );
+	}
 
 	internal CommandCompletionStatus CompleteCommand( RpcActor actor, CommandRequestId requestId )
 	{
@@ -303,6 +377,14 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 
 	internal bool IsRegisteredPanel( string panelId ) =>
 		_hostSchema?.Panels.Contains( panelId ) == true;
+
+	internal int GetSchemaCommandCost( string commandId )
+	{
+		return SchemaCommandAdmissionCost.Resolve( commandId, registeredId =>
+			_hostSchema?.Commands.TryGet( registeredId, out var definition ) == true && definition is not null
+				? (int)definition.Cost
+				: null );
+	}
 
 	/// <summary>
 	/// Explicit awaitable barrier for game-owned scene transition code. s&amp;box's
@@ -448,12 +530,12 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			return;
 		}
 
+		HostReadiness = HexRuntimeReadiness.Ready;
 		foreach ( var session in _sessions.Values )
 		{
-			if ( session.Player.HostConnection is not null )
-				NotifyConnected( BuildActor( session.Player.HostConnection, session, false ) );
+			if ( session.ObserveHostReady() && session.Player.HostConnection is not null )
+				_ = NotifyConnected( BuildActor( session.Player.HostConnection, session, false ), session );
 		}
-		HostReadiness = HexRuntimeReadiness.Ready;
 		Log.Info( $"HEXAGON_READY host schema={schema.Id} sequence={persistence.Health.Sequence} root={persistenceRoot}" );
 	}
 
@@ -503,6 +585,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 	private async Task<OperationResult> ShutdownHostAsync()
 	{
 		Exception? firstFailure = null;
+		PersistenceShutdownResult? persistenceShutdown = null;
 		var application = HostApplication;
 		HostApplication = null;
 		if ( application is not null )
@@ -516,8 +599,16 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		_hostSchema = null;
 		if ( persistence is not null )
 		{
-			var drained = await RuntimeAsyncOperation.Capture( () => persistence.DrainAsync() );
+			var drained = await RuntimeAsyncOperation.Capture( () => persistence.ShutdownAsync() );
 			if ( !drained.Succeeded ) firstFailure ??= drained.Exception;
+			else
+			{
+				var shutdown = drained.Value!;
+				persistenceShutdown = shutdown;
+				if ( !shutdown.IsRecoverable )
+					firstFailure ??= new InvalidOperationException(
+						shutdown.Detail ?? "Persistence shutdown is not recoverable." );
+			}
 			var disposedPersistence = await RuntimeAsyncOperation.Capture( persistence.DisposeAsync );
 			if ( !disposedPersistence.Succeeded ) firstFailure ??= disposedPersistence.Exception;
 		}
@@ -532,7 +623,21 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 
 		if ( HostReadiness != HexRuntimeReadiness.Failed ) HostReadiness = HexRuntimeReadiness.Disposed;
 		DisposeHostLifetime();
-		Log.Info( "HEXAGON_DRAINED host" );
+		if ( persistenceShutdown is not null && persistenceShutdown.IsClean )
+		{
+			Log.Info( "HEXAGON_DRAINED host" );
+		}
+		else if ( persistenceShutdown is not null )
+		{
+			Log.Warning(
+				$"HEXAGON_DRAIN_DEGRADED durable_sequence={persistenceShutdown.DurableSequence} " +
+				$"checkpoint_sequence={persistenceShutdown.CheckpointSequence} " +
+				$"lease_released={persistenceShutdown.LeaseReleased} detail={persistenceShutdown.Detail}" );
+		}
+		else
+		{
+			Log.Warning( "HEXAGON_DRAIN_DEGRADED persistence_shutdown=unavailable" );
+		}
 		return OperationResult.Success();
 	}
 
@@ -597,23 +702,37 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			new AccountId( connection.SteamId.ValueUnsigned ),
 			session.Player,
 			character,
+			session.Scope ?? throw new InvalidOperationException( "Client session is not established." ),
 			session.Boundary.Capture( character?.Id, requiresStableCharacter ) );
 	}
 
-	private void NotifyConnected( RpcActor actor )
+	private bool NotifyConnected( RpcActor actor, RuntimePlayerSession session )
 	{
+		var succeeded = false;
 		try
 		{
-			HostApplication?.Connected( actor );
+			var application = HostApplication ??
+				throw new InvalidOperationException( "The host application is not initialized." );
+			application.Connected( actor );
+			succeeded = true;
+			return true;
 		}
 		catch ( Exception exception )
 		{
 			Log.Error( exception, $"Hexagon connection initialization failed for '{actor.Connection.Id}'." );
+			return false;
+		}
+		finally
+		{
+			if ( !session.CompleteApplicationConnection( succeeded ) || !succeeded )
+				session.Disconnect();
 		}
 	}
 
 	private void PollLifecycle()
 	{
+		if ( ClientReadiness == HexRuntimeReadiness.Ready )
+			ClientTransport?.PollSession( Stopwatch.GetTimestamp() );
 		if ( _hostInitialization?.IsFaulted == true && !_hostFailureLogged )
 		{
 			_hostFailureLogged = true;

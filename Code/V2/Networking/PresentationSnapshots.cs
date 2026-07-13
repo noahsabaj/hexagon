@@ -43,9 +43,22 @@ public sealed record PlayerRosterSnapshot
 		Rows = Array.AsReadOnly( copy );
 	}
 
+	private PlayerRosterSnapshot( long revision, IReadOnlyList<PlayerRosterRowSnapshot> rows )
+	{
+		if ( revision < 0 ) throw new ArgumentOutOfRangeException( nameof(revision) );
+		Revision = revision;
+		Rows = rows;
+	}
+
 	public long Revision { get; }
 	public IReadOnlyList<PlayerRosterRowSnapshot> Rows { get; }
 	public static PlayerRosterSnapshot Empty { get; } = new( 0 );
+
+	/// <summary>
+	/// Re-stamps an immutable roster without copying or re-sorting its unchanged rows.
+	/// </summary>
+	public PlayerRosterSnapshot WithRevision( long revision ) =>
+		revision == Revision ? this : new PlayerRosterSnapshot( revision, Rows );
 }
 
 /// <summary>

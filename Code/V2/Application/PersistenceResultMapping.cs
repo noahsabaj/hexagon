@@ -8,12 +8,12 @@ namespace Hexagon.V2.Application;
 internal static class PersistenceResultMapping
 {
 	public static OperationResult<T> Failure<T>( PersistenceError error ) =>
-		OperationResult<T>.Failure( Map( error.Code ), error.Message );
+		OperationResult<T>.Failure( MapCode( error.Code ), error.Message );
 
 	public static OperationResult Failure( PersistenceError error ) =>
-		OperationResult.Failure( Map( error.Code ), error.Message );
+		OperationResult.Failure( MapCode( error.Code ), error.Message );
 
-	private static ErrorCode Map( PersistenceErrorCode code ) => code switch
+	internal static ErrorCode MapCode( PersistenceErrorCode code ) => code switch
 	{
 		PersistenceErrorCode.NotFound => ErrorCode.NotFound,
 		PersistenceErrorCode.AlreadyExists => ErrorCode.Conflict,
@@ -21,6 +21,10 @@ internal static class PersistenceResultMapping
 		PersistenceErrorCode.TypeNotRegistered => ErrorCode.PersistedTypeInvalid,
 		PersistenceErrorCode.CollectionTypeMismatch => ErrorCode.PersistedTypeInvalid,
 		PersistenceErrorCode.InvalidOperation => ErrorCode.InvalidArgument,
+		PersistenceErrorCode.InvariantViolation => ErrorCode.InvariantViolation,
+		PersistenceErrorCode.LeaseUnavailable => ErrorCode.LeaseUnavailable,
+		PersistenceErrorCode.StorageLimitExceeded => ErrorCode.StorageLimitExceeded,
+		PersistenceErrorCode.StaleTransaction => ErrorCode.StaleTransaction,
 		_ => ErrorCode.InternalError
 	};
 }

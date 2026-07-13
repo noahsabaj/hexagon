@@ -9,15 +9,45 @@ using Hexagon.V2.Kernel.Policies;
 
 namespace Hexagon.V2.Application;
 
-public readonly record struct WorldPoint( float X, float Y, float Z )
+public readonly record struct WorldPoint
 {
-	public float DistanceSquared( WorldPoint other )
+	public WorldPoint( float x, float y, float z )
 	{
-		var x = X - other.X;
-		var y = Y - other.Y;
-		var z = Z - other.Z;
+		if ( !float.IsFinite( x ) ) throw new ArgumentOutOfRangeException( nameof(x), "Coordinate must be finite." );
+		if ( !float.IsFinite( y ) ) throw new ArgumentOutOfRangeException( nameof(y), "Coordinate must be finite." );
+		if ( !float.IsFinite( z ) ) throw new ArgumentOutOfRangeException( nameof(z), "Coordinate must be finite." );
+		X = x;
+		Y = y;
+		Z = z;
+	}
+
+	public float X { get; }
+	public float Y { get; }
+	public float Z { get; }
+
+	public double DistanceSquared( WorldPoint other )
+	{
+		var x = (double)X - other.X;
+		var y = (double)Y - other.Y;
+		var z = (double)Z - other.Z;
 		return x * x + y * y + z * z;
 	}
+}
+
+public readonly record struct InteractionRange
+{
+	public InteractionRange( double value )
+	{
+		if ( !double.IsFinite( value ) || value <= 0d )
+			throw new ArgumentOutOfRangeException( nameof(value), "Interaction range must be finite and positive." );
+		Value = value;
+		Squared = value * value;
+		if ( !double.IsFinite( Squared ) )
+			throw new ArgumentOutOfRangeException( nameof(value), "Interaction range is too large." );
+	}
+
+	public double Value { get; }
+	public double Squared { get; }
 }
 
 public sealed record ServerInteractionContext
@@ -92,6 +122,8 @@ public sealed record TimedActionTicket
 public sealed class InteractionAuthorityService
 {
 	public static readonly TimeSpan RevalidationInterval = TimeSpan.FromMilliseconds( 250 );
+	public static readonly TimeSpan MaximumTimedActionDuration = TimeSpan.FromMinutes( 5 );
+	public static readonly TimeSpan TimedActionCompletionGrace = TimeSpan.FromSeconds( 15 );
 
 	private readonly IServerInteractionWorld _world;
 	private readonly IInteractionDirectory _directory;
@@ -101,7 +133,10 @@ public sealed class InteractionAuthorityService
 	private readonly IHexClock _clock;
 	private readonly Func<InteractionSessionId> _createId;
 	private readonly Dictionary<InteractionSessionId, DateTimeOffset> _lastValidation = new();
+	private readonly object _timedActionSync = new();
 	private readonly Dictionary<InteractionSessionId, TimedActionTicket> _timedActions = new();
+	private readonly Dictionary<TimedActionActor, InteractionSessionId> _timedActionActors = new();
+	private readonly PriorityQueue<InteractionSessionId, long> _timedActionExpiry = new();
 
 	public InteractionAuthorityService(
 		IServerInteractionWorld world,
@@ -230,16 +265,26 @@ public sealed class InteractionAuthorityService
 		InteractionTarget target,
 		TimeSpan duration )
 	{
-		if ( duration <= TimeSpan.Zero )
-			return OperationResult<TimedActionTicket>.Failure( ErrorCode.InvalidArgument, "Timed action duration must be positive." );
+		if ( duration <= TimeSpan.Zero || duration > MaximumTimedActionDuration )
+			return OperationResult<TimedActionTicket>.Failure(
+				ErrorCode.InvalidArgument,
+				$"Timed action duration must be positive and no greater than {MaximumTimedActionDuration.TotalMinutes:0} minutes." );
 		if ( target.Kind == InteractionTargetKind.Character && target.Id == characterId.Value )
 			return OperationResult<TimedActionTicket>.Failure( ErrorCode.PolicyDenied, "Timed actions cannot target the acting character." );
+		var actor = new TimedActionActor( connectionId, characterId );
+		lock ( _timedActionSync )
+		{
+			SweepTimedActionsUnsafe( _clock.UtcNow );
+			if ( _timedActionActors.ContainsKey( actor ) )
+				return OperationResult<TimedActionTicket>.Failure( ErrorCode.Conflict, "The actor already has an active timed action." );
+		}
 		var validated = Validate( connectionId, accountId, characterId, target );
 		if ( validated.Failed )
 			return OperationResult<TimedActionTicket>.Failure( validated.Error!.Code, validated.Error.Message );
 		var authorized = validated.Value.Interactable.Authorize( validated.Value.Context );
 		if ( authorized.Failed )
 			return OperationResult<TimedActionTicket>.Failure( authorized.Error!.Code, authorized.Error.Message );
+		var startedAt = _clock.UtcNow;
 		var ticket = new TimedActionTicket
 		{
 			Id = _createId(),
@@ -247,10 +292,19 @@ public sealed class InteractionAuthorityService
 			AccountId = accountId,
 			CharacterId = characterId,
 			Target = target,
-			StartedAt = _clock.UtcNow,
+			StartedAt = startedAt,
 			Duration = duration
 		};
-		_timedActions[ticket.Id] = ticket;
+		lock ( _timedActionSync )
+		{
+			SweepTimedActionsUnsafe( _clock.UtcNow );
+			if ( _timedActionActors.ContainsKey( actor ) )
+				return OperationResult<TimedActionTicket>.Failure( ErrorCode.Conflict, "The actor already has an active timed action." );
+			_timedActions.Add( ticket.Id, ticket );
+			_timedActionActors.Add( actor, ticket.Id );
+			var expiresAt = startedAt + duration + TimedActionCompletionGrace;
+			_timedActionExpiry.Enqueue( ticket.Id, expiresAt.UtcTicks );
+		}
 		return OperationResult<TimedActionTicket>.Success( ticket );
 	}
 
@@ -260,12 +314,18 @@ public sealed class InteractionAuthorityService
 		AccountId accountId,
 		CharacterId characterId )
 	{
-		if ( !_timedActions.TryGetValue( ticketId, out var ticket ) ||
-			ticket.ConnectionId != connectionId || ticket.AccountId != accountId || ticket.CharacterId != characterId )
-			return OperationResult<ServerInteractionContext>.Failure( ErrorCode.Unauthorized, "Timed action ticket is stale or belongs to another actor." );
-		if ( _clock.UtcNow - ticket.StartedAt < ticket.Duration )
-			return OperationResult<ServerInteractionContext>.Failure( ErrorCode.Conflict, "Timed action has not completed." );
-		_timedActions.Remove( ticketId );
+		TimedActionTicket ticket;
+		lock ( _timedActionSync )
+		{
+			var now = _clock.UtcNow;
+			SweepTimedActionsUnsafe( now );
+			if ( !_timedActions.TryGetValue( ticketId, out ticket! ) ||
+				ticket.ConnectionId != connectionId || ticket.AccountId != accountId || ticket.CharacterId != characterId )
+				return OperationResult<ServerInteractionContext>.Failure( ErrorCode.Unauthorized, "Timed action ticket is stale or belongs to another actor." );
+			if ( now - ticket.StartedAt < ticket.Duration )
+				return OperationResult<ServerInteractionContext>.Failure( ErrorCode.Conflict, "Timed action has not completed." );
+			RemoveTimedActionUnsafe( ticket );
+		}
 		var validated = Validate( connectionId, accountId, characterId, ticket.Target );
 		if ( validated.Failed )
 			return OperationResult<ServerInteractionContext>.Failure( validated.Error!.Code, validated.Error.Message );
@@ -280,15 +340,20 @@ public sealed class InteractionAuthorityService
 		ConnectionId connectionId,
 		CharacterId characterId )
 	{
-		if ( !_timedActions.TryGetValue( ticketId, out var ticket ) ||
-			ticket.ConnectionId != connectionId || ticket.CharacterId != characterId )
-			return false;
-		_timedActions.Remove( ticketId );
-		return true;
+		lock ( _timedActionSync )
+		{
+			SweepTimedActionsUnsafe( _clock.UtcNow );
+			if ( !_timedActions.TryGetValue( ticketId, out var ticket ) ||
+				ticket.ConnectionId != connectionId || ticket.CharacterId != characterId )
+				return false;
+			RemoveTimedActionUnsafe( ticket );
+			return true;
+		}
 	}
 
 	public int RevalidateActiveSessions()
 	{
+		SweepTimedActions();
 		var revoked = 0;
 		_sessions.RevokeExpired();
 		foreach ( var session in _sessions.ActiveSessions )
@@ -360,16 +425,14 @@ public sealed class InteractionAuthorityService
 	{
 		if ( interactionPolicy is null )
 			return OperationResult.Failure( ErrorCode.NotFound, "Interaction target policy is unavailable." );
+		if ( context.ActorPosition.DistanceSquared( context.TargetPosition ) > interactionPolicy.Range.Squared )
+			return OperationResult.Failure( ErrorCode.PolicyDenied, "Interaction target is out of range." );
 		if ( interactionPolicy.RequireCharacter && context.CharacterId == default )
 			return OperationResult.Failure( ErrorCode.Unauthorized, "An active character is required." );
 		if ( interactionPolicy.RequireAlive && !context.IsAlive )
 			return OperationResult.Failure( ErrorCode.PolicyDenied, "Dead characters cannot interact." );
 		if ( interactionPolicy.RequireUnrestrained && context.IsRestrained )
 			return OperationResult.Failure( ErrorCode.PolicyDenied, "Restrained characters cannot interact." );
-		if ( interactionPolicy.MaxDistance <= 0f ||
-			context.ActorPosition.DistanceSquared( context.TargetPosition ) >
-			interactionPolicy.MaxDistance * interactionPolicy.MaxDistance )
-			return OperationResult.Failure( ErrorCode.PolicyDenied, "Interaction target is out of range." );
 		if ( interactionPolicy.RequireLineOfSight && !_world.HasLineOfSight( context ) )
 			return OperationResult.Failure( ErrorCode.PolicyDenied, "Interaction target is not visible." );
 		return _policy.Evaluate( context );
@@ -377,8 +440,79 @@ public sealed class InteractionAuthorityService
 
 	private void RemoveTimedActions( Func<TimedActionTicket, bool> predicate )
 	{
-		foreach ( var key in _timedActions.Where( pair => predicate( pair.Value ) ).Select( pair => pair.Key ).ToArray() )
-			_timedActions.Remove( key );
+		lock ( _timedActionSync )
+		{
+			SweepTimedActionsUnsafe( _clock.UtcNow );
+			foreach ( var ticket in _timedActions.Values.Where( predicate ).ToArray() )
+				RemoveTimedActionUnsafe( ticket );
+		}
 	}
+
+	public int TrackedTimedActionCount
+	{
+		get
+		{
+			lock ( _timedActionSync )
+			{
+				SweepTimedActionsUnsafe( _clock.UtcNow );
+				return _timedActions.Count;
+			}
+		}
+	}
+
+	public int QueuedTimedActionExpiryCount
+	{
+		get
+		{
+			lock ( _timedActionSync ) return _timedActionExpiry.Count;
+		}
+	}
+
+	public int SweepTimedActions()
+	{
+		lock ( _timedActionSync ) return SweepTimedActionsUnsafe( _clock.UtcNow );
+	}
+
+	private int SweepTimedActionsUnsafe( DateTimeOffset now )
+	{
+		var removed = 0;
+		while ( _timedActionExpiry.TryPeek( out var id, out var expiresAt ) && expiresAt < now.UtcTicks )
+		{
+			_timedActionExpiry.Dequeue();
+			if ( !_timedActions.TryGetValue( id, out var ticket ) ) continue;
+			var actualExpiry = ticket.StartedAt + ticket.Duration + TimedActionCompletionGrace;
+			if ( actualExpiry > now )
+			{
+				_timedActionExpiry.Enqueue( id, actualExpiry.UtcTicks );
+				continue;
+			}
+			RemoveTimedActionUnsafe( ticket );
+			removed++;
+		}
+		return removed;
+	}
+
+	private void RemoveTimedActionUnsafe( TimedActionTicket ticket )
+	{
+		_timedActions.Remove( ticket.Id );
+		_timedActionActors.Remove( new TimedActionActor( ticket.ConnectionId, ticket.CharacterId ) );
+		CompactExpiryQueueUnsafe();
+	}
+
+	private void CompactExpiryQueueUnsafe()
+	{
+		var maximumQueueSize = Math.Max( 64L, (long)_timedActions.Count * 2 + 16 );
+		if ( _timedActionExpiry.Count <= maximumQueueSize ) return;
+		_timedActionExpiry.Clear();
+		foreach ( var current in _timedActions.Values )
+		{
+			var expiresAt = current.StartedAt + current.Duration + TimedActionCompletionGrace;
+			_timedActionExpiry.Enqueue( current.Id, expiresAt.UtcTicks );
+		}
+	}
+
+	private readonly record struct TimedActionActor(
+		ConnectionId ConnectionId,
+		CharacterId CharacterId );
 
 }

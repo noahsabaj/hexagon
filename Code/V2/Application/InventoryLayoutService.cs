@@ -12,6 +12,7 @@ public readonly struct ItemShape : IEquatable<ItemShape>
 {
 	public int Width { get; }
 	public int Height { get; }
+	public InventoryGridSize GridSize => new( Width, Height );
 
 	public ItemShape( int width, int height )
 	{
@@ -53,6 +54,13 @@ public sealed class InventoryLayoutService
 		int x,
 		int y,
 		IReadOnlyDictionary<ItemId, DefinitionId>? stagedDefinitions = null )
+		=> AddAt( inventory, item, new InventoryGridPosition( x, y ), stagedDefinitions );
+
+	public OperationResult<InventoryRecord> AddAt(
+		InventoryRecord inventory,
+		ItemRecord item,
+		InventoryGridPosition position,
+		IReadOnlyDictionary<ItemId, DefinitionId>? stagedDefinitions = null )
 	{
 		if ( inventory.Find( item.Id ) is not null )
 			return OperationResult<InventoryRecord>.Failure( ErrorCode.Conflict, "Item is already in the inventory." );
@@ -60,12 +68,12 @@ public sealed class InventoryLayoutService
 		if ( !_catalog.TryGetShape( item.Definition, out var shape ) )
 			return OperationResult<InventoryRecord>.Failure( ErrorCode.UnknownDefinition, $"Unknown item definition '{item.Definition}'." );
 
-		if ( !CanFit( inventory, x, y, shape, null, stagedDefinitions ) )
+		if ( !CanFit( inventory, position, shape, null, stagedDefinitions ) )
 			return OperationResult<InventoryRecord>.Failure( ErrorCode.Conflict, "Item does not fit at the requested position." );
 
 		return OperationResult<InventoryRecord>.Success( inventory with
 		{
-			Placements = inventory.Placements.Append( new InventoryPlacement( item.Id, x, y ) ).ToArray()
+			Placements = inventory.Placements.Append( new InventoryPlacement( item.Id, position ) ).ToArray()
 		} );
 	}
 
@@ -75,6 +83,13 @@ public sealed class InventoryLayoutService
 		int x,
 		int y,
 		IReadOnlyDictionary<ItemId, DefinitionId>? stagedDefinitions = null )
+		=> Move( inventory, item, new InventoryGridPosition( x, y ), stagedDefinitions );
+
+	public OperationResult<InventoryRecord> Move(
+		InventoryRecord inventory,
+		ItemRecord item,
+		InventoryGridPosition position,
+		IReadOnlyDictionary<ItemId, DefinitionId>? stagedDefinitions = null )
 	{
 		if ( inventory.Find( item.Id ) is null )
 			return OperationResult<InventoryRecord>.Failure( ErrorCode.NotFound, "Item is not a member of the inventory." );
@@ -82,13 +97,13 @@ public sealed class InventoryLayoutService
 		if ( !_catalog.TryGetShape( item.Definition, out var shape ) )
 			return OperationResult<InventoryRecord>.Failure( ErrorCode.UnknownDefinition, $"Unknown item definition '{item.Definition}'." );
 
-		if ( !CanFit( inventory, x, y, shape, item.Id, stagedDefinitions ) )
+		if ( !CanFit( inventory, position, shape, item.Id, stagedDefinitions ) )
 			return OperationResult<InventoryRecord>.Failure( ErrorCode.Conflict, "Item does not fit at the requested position." );
 
 		return OperationResult<InventoryRecord>.Success( inventory with
 		{
 			Placements = inventory.Placements
-				.Select( placement => placement.ItemId == item.Id ? new InventoryPlacement( item.Id, x, y ) : placement )
+				.Select( placement => placement.ItemId == item.Id ? new InventoryPlacement( item.Id, position ) : placement )
 				.ToArray()
 		} );
 	}
@@ -110,11 +125,19 @@ public sealed class InventoryLayoutService
 		ItemRecord item,
 		int x,
 		int y,
+		IReadOnlyDictionary<ItemId, DefinitionId>? stagedDefinitions = null ) =>
+		Transfer( source, target, item, new InventoryGridPosition( x, y ), stagedDefinitions );
+
+	public OperationResult<InventoryTransferResult> Transfer(
+		InventoryRecord source,
+		InventoryRecord target,
+		ItemRecord item,
+		InventoryGridPosition position,
 		IReadOnlyDictionary<ItemId, DefinitionId>? stagedDefinitions = null )
 	{
 		if ( source.Id == target.Id )
 		{
-			var moved = Move( source, item, x, y, stagedDefinitions );
+			var moved = Move( source, item, position, stagedDefinitions );
 			return moved.Succeeded
 				? OperationResult<InventoryTransferResult>.Success( new InventoryTransferResult( moved.Value, moved.Value ) )
 				: OperationResult<InventoryTransferResult>.Failure( moved.Error!.Code, moved.Error.Message );
@@ -123,7 +146,7 @@ public sealed class InventoryLayoutService
 		if ( source.Find( item.Id ) is null )
 			return OperationResult<InventoryTransferResult>.Failure( ErrorCode.NotFound, "Item is not a member of the source inventory." );
 
-		var added = AddAt( target, item, x, y, stagedDefinitions );
+		var added = AddAt( target, item, position, stagedDefinitions );
 		if ( added.Failed )
 			return OperationResult<InventoryTransferResult>.Failure( added.Error!.Code, added.Error.Message );
 
@@ -146,7 +169,7 @@ public sealed class InventoryLayoutService
 		{
 			for ( var x = 0; x <= inventory.Width - shape.Width; x++ )
 			{
-				if ( CanFit( inventory, x, y, shape, null, stagedDefinitions ) )
+				if ( CanFit( inventory, new InventoryGridPosition( x, y ), shape, null, stagedDefinitions ) )
 					return OperationResult<(int X, int Y)>.Success( (x, y) );
 			}
 		}
@@ -156,14 +179,14 @@ public sealed class InventoryLayoutService
 
 	private bool CanFit(
 		InventoryRecord inventory,
-		int x,
-		int y,
+		InventoryGridPosition position,
 		ItemShape shape,
 		ItemId? excludedItem,
 		IReadOnlyDictionary<ItemId, DefinitionId>? stagedDefinitions )
 	{
-		if ( x < 0 || y < 0 || x + shape.Width > inventory.Width || y + shape.Height > inventory.Height )
+		if ( !InventoryGeometry.Fits( inventory.GridSize, position, shape.GridSize ) )
 			return false;
+		var requested = new InventoryRectangle( position, shape.GridSize );
 
 		foreach ( var placement in inventory.Placements )
 		{
@@ -179,15 +202,11 @@ public sealed class InventoryLayoutService
 			{
 				return false;
 			}
-			if ( RectanglesOverlap( x, y, shape.Width, shape.Height,
-				placement.X, placement.Y, placedShape.Width, placedShape.Height ) ) return false;
+			var occupied = new InventoryRectangle( placement.Position, placedShape.GridSize );
+			if ( requested.Overlaps( occupied ) ) return false;
 		}
 
 		return true;
 	}
 
-	private static bool RectanglesOverlap(
-		int ax, int ay, int aw, int ah,
-		int bx, int by, int bw, int bh ) =>
-		ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }

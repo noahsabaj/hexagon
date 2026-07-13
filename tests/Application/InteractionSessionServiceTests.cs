@@ -1,5 +1,6 @@
 using Hexagon.V2.Application;
 using Hexagon.V2.Domain;
+using Hexagon.V2.Persistence;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace Hexagon.V2.Tests.Application;
@@ -94,6 +95,37 @@ public sealed class InteractionSessionServiceTests
 
 		CollectionAssert.AreEqual( new[] { 1 }, callbackCounts );
 		Assert.AreEqual( 1, service.TrackedSessionCount );
+	}
+
+	[TestMethod]
+	public void SessionProofRejectsRevocationExpiryAndIdentifierReuse()
+	{
+		var clock = new FakeClock();
+		var repeatedId = InteractionSessionId.New();
+		var service = new InteractionSessionService(
+			clock,
+			TimeSpan.FromSeconds( 5 ),
+			() => repeatedId );
+		var connection = ConnectionId.New();
+		var character = CharacterId.New();
+		var target = InteractionTarget.SceneEntity( SceneEntityId.New() );
+		var first = service.Open( InteractionSessionKind.Vendor, connection, character, target );
+		var revokedProof = service.Prove( first )!;
+
+		Assert.IsTrue( revokedProof.IsCurrent() );
+		Assert.IsNull( revokedProof.Validate( null! ) );
+		Assert.IsTrue( service.Revoke( first.Id, "closed" ) );
+		Assert.IsFalse( revokedProof.IsCurrent() );
+		Assert.IsNotNull( revokedProof.Validate( null! ) );
+		var replacement = service.Open( InteractionSessionKind.Vendor, connection, character, target );
+		Assert.AreEqual( repeatedId, replacement.Id );
+		Assert.IsNotNull( revokedProof.Validate( null! ), "A reused identifier must not revive an older proof." );
+
+		var expiryProof = service.Prove( replacement )!;
+		clock.Advance( TimeSpan.FromSeconds( 5 ) );
+		Assert.IsFalse( expiryProof.IsCurrent() );
+		Assert.IsNotNull( expiryProof.Validate( null! ) );
+		Assert.IsNull( service.Prove( replacement ) );
 	}
 
 	private sealed class FakeClock : IHexClock

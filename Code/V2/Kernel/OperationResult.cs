@@ -28,7 +28,12 @@ public enum ErrorCode
 	Conflict = 15,
 	NotFound = 16,
 	Unauthorized = 17,
-	InternalError = 18
+	InternalError = 18,
+	RateLimited = 19,
+	InvariantViolation = 20,
+	LeaseUnavailable = 21,
+	StorageLimitExceeded = 22,
+	StaleTransaction = 23
 }
 
 public sealed record OperationError(

@@ -12,6 +12,7 @@ using Hexagon.V2.Kernel.Events;
 using Hexagon.V2.Kernel.Policies;
 using Hexagon.V2.Kernel.Schema;
 using Hexagon.V2.Networking;
+using Hexagon.V2.Persistence;
 
 namespace Hexagon.V2.Application;
 
@@ -26,6 +27,12 @@ public sealed record ItemActionContext(
 	public IReadOnlyDictionary<string, SnapshotValue> Arguments { get; init; } =
 		new Dictionary<string, SnapshotValue>( StringComparer.Ordinal );
 }
+
+public sealed record ItemActionDependency( DocumentAddress Address, DocumentRevision Revision );
+
+public sealed record ItemActionProof(
+	InventoryAccessProof Access,
+	IReadOnlyList<ItemActionDependency> Dependencies );
 
 /// <summary>
 /// Closed presentation categories for post-commit item-action receipts. The
@@ -168,10 +175,36 @@ public sealed class ItemActionService
 		ItemId itemId,
 		ActionId actionId,
 		CancellationToken cancellationToken = default ) =>
-		await ExecuteAsync( actor, inventoryId, itemId, actionId,
-			new Dictionary<string, SnapshotValue>( StringComparer.Ordinal ), cancellationToken );
+		Untyped( await ExecuteCommittedAsync( actor, inventoryId, itemId, actionId,
+			new Dictionary<string, SnapshotValue>( StringComparer.Ordinal ), cancellationToken ) );
 
 	public async ValueTask<OperationResult> ExecuteAsync(
+		InventoryActor actor,
+		InventoryId inventoryId,
+		ItemId itemId,
+		ActionId actionId,
+		IReadOnlyDictionary<string, SnapshotValue> arguments,
+		CancellationToken cancellationToken = default )
+	{
+		return Untyped( await ExecuteCommittedAsync(
+			actor, inventoryId, itemId, actionId, arguments, cancellationToken ) );
+	}
+
+	public ValueTask<OperationResult<CommitReceipt>> ExecuteCommittedAsync(
+		InventoryActor actor,
+		InventoryId inventoryId,
+		ItemId itemId,
+		ActionId actionId,
+		CancellationToken cancellationToken = default ) =>
+		ExecuteCommittedAsync( actor, inventoryId, itemId, actionId,
+			new Dictionary<string, SnapshotValue>( StringComparer.Ordinal ), cancellationToken );
+
+	/// <summary>
+	/// Executes an action and returns the exact provider receipt, including for a
+	/// successful zero-mutation plan. Callers can therefore apply dependencies and
+	/// suppress presentation without inferring writes from action identifiers.
+	/// </summary>
+	public async ValueTask<OperationResult<CommitReceipt>> ExecuteCommittedAsync(
 		InventoryActor actor,
 		InventoryId inventoryId,
 		ItemId itemId,
@@ -184,41 +217,55 @@ public sealed class ItemActionService
 		var itemDocument = _repositories.Items.Find( DomainKeys.Item( itemId ) );
 		var characterDocument = _repositories.Characters.Find( DomainKeys.Character( actor.CharacterId ) );
 		if ( inventoryDocument is null || itemDocument is null || characterDocument is null )
-			return OperationResult.Failure( ErrorCode.NotFound, "Character, inventory or item was not found." );
+			return Failure( ErrorCode.NotFound, "Character, inventory or item was not found." );
 		var inventory = inventoryDocument.Value.DeepCopy();
 		var item = itemDocument.Value.DeepCopy();
 		var character = characterDocument.Value.DeepCopy();
 		if ( character.AccountId != actor.AccountId )
-			return OperationResult.Failure( ErrorCode.Unauthorized, "Active character does not belong to the authenticated actor." );
+			return Failure( ErrorCode.Unauthorized, "Active character does not belong to the authenticated actor." );
 		if ( inventory.Find( item.Id ) is null )
-			return OperationResult.Failure( ErrorCode.NotFound, "Item is not a member of the claimed inventory." );
-		if ( !_access.Has(
+			return Failure( ErrorCode.NotFound, "Item is not a member of the claimed inventory." );
+		var accessProof = _access.Prove(
 			actor.ConnectionId, actor.CharacterId, inventory.Id,
-			InventoryCapability.View | InventoryCapability.Use ) )
-			return OperationResult.Failure( ErrorCode.Unauthorized, "Use capability is missing." );
+			InventoryCapability.View | InventoryCapability.Use );
+		if ( accessProof is null )
+			return Failure( ErrorCode.Unauthorized, "Use capability is missing." );
 		if ( !_schema.Actions.Contains( actionId.Value ) )
-			return OperationResult.Failure( ErrorCode.UnknownDefinition, "Action definition is not registered." );
+			return Failure( ErrorCode.UnknownDefinition, "Action definition is not registered." );
 		if ( !_schema.Items.TryGet( item.Definition.Value, out var definition ) ||
 			!definition!.ActionIds.Contains( actionId.Value, StringComparer.Ordinal ) )
-			return OperationResult.Failure( ErrorCode.PolicyDenied, "Action is not registered for this item definition." );
+			return Failure( ErrorCode.PolicyDenied, "Action is not registered for this item definition." );
 		var handler = _handlers.Require( actionId );
-		if ( handler.Failed ) return OperationResult.Failure( handler.Error!.Code, handler.Error.Message );
+		if ( handler.Failed ) return Failure( handler.Error!.Code, handler.Error.Message );
 
 		var inventoryDocuments = inventory.Placements
 			.Select( placement => _repositories.Items.Find( DomainKeys.Item( placement.ItemId ) ) )
 			.Where( document => document is not null )
 			.ToDictionary( document => document!.Value.Id, document => document! );
 		if ( inventoryDocuments.Count != inventory.Placements.Count )
-			return OperationResult.Failure( ErrorCode.Conflict, "Inventory references a missing item." );
+			return Failure( ErrorCode.Conflict, "Inventory references a missing item." );
 		var inventoryItems = inventoryDocuments.ToDictionary(
 			pair => pair.Key,
 			pair => pair.Value.Value.DeepCopy() );
+		var guardDocument = _repositories.CharacterLifecycleGuards.Find(
+			DomainKeys.CharacterLifecycleGuard( actor.CharacterId ) );
+		if ( guardDocument is null )
+			return Failure( ErrorCode.Conflict, "Character lifecycle guard is missing." );
+		var dependencies = new List<ItemActionDependency>
+		{
+			new( new DocumentAddress( DomainCollections.Characters, characterDocument.Key ), characterDocument.Revision ),
+			new( new DocumentAddress( DomainCollections.CharacterLifecycleGuards, guardDocument.Key ), guardDocument.Revision ),
+			new( new DocumentAddress( DomainCollections.Inventories, inventoryDocument.Key ), inventoryDocument.Revision )
+		};
+		dependencies.AddRange( inventoryDocuments.Values.Select( document => new ItemActionDependency(
+			new DocumentAddress( DomainCollections.Items, document.Key ), document.Revision ) ) );
+		var proof = new ItemActionProof( accessProof, dependencies );
 		var context = new ItemActionContext( actor, character, inventory, item, actionId, inventoryItems )
 		{
 			Arguments = new Dictionary<string, SnapshotValue>( arguments, StringComparer.Ordinal )
 		};
 		var policy = _policy.Evaluate( context );
-		if ( policy.Failed ) return policy;
+		if ( policy.Failed ) return Failure( policy.Error!.Code, policy.Error.Message );
 		OperationResult<ItemActionPlan> planned;
 		try
 		{
@@ -227,13 +274,13 @@ public sealed class ItemActionService
 		catch ( Exception exception )
 		{
 			_diagnostics?.Invoke( exception );
-			return OperationResult.Failure( ErrorCode.InternalError, $"Item action handler '{actionId}' failed closed." );
+			return Failure( ErrorCode.InternalError, $"Item action handler '{actionId}' failed closed." );
 		}
-		if ( planned.Failed ) return OperationResult.Failure( planned.Error!.Code, planned.Error.Message );
+		if ( planned.Failed ) return Failure( planned.Error!.Code, planned.Error.Message );
 		if ( planned.Value is null )
-			return OperationResult.Failure( ErrorCode.InternalError, "Item action handler returned no mutation plan." );
+			return Failure( ErrorCode.InternalError, "Item action handler returned no mutation plan." );
 		var validation = ValidatePlan( context, planned.Value );
-		if ( validation.Failed ) return validation;
+		if ( validation.Failed ) return Failure( validation.Error!.Code, validation.Error.Message );
 
 		var finalInventory = planned.Value.UpdatedInventory ?? inventory;
 		if ( planned.Value.DeletedItems.Count > 0 )
@@ -245,13 +292,19 @@ public sealed class ItemActionService
 			};
 
 		var unitOfWork = _repositories.Provider.BeginUnitOfWork();
+		unitOfWork.Require( proof.Access );
+		unitOfWork.RequireUnchanged( _repositories.Characters, characterDocument );
+		unitOfWork.RequireUnchanged( _repositories.CharacterLifecycleGuards, guardDocument );
+		unitOfWork.RequireUnchanged( _repositories.Inventories, inventoryDocument );
+		foreach ( var document in inventoryDocuments.Values )
+			unitOfWork.RequireUnchanged( _repositories.Items, document );
 		foreach ( var updated in planned.Value.UpdatedItems.Values )
 		{
 			var editor = unitOfWork.Edit( _repositories.Items, inventoryDocuments[updated.Id] );
 			if ( editor is null )
 			{
 				await unitOfWork.DisposeAsync();
-				return OperationResult.Failure( ErrorCode.Conflict, "An action item changed before commit." );
+				return Failure( ErrorCode.Conflict, "An action item changed before commit." );
 			}
 			editor.Replace( updated );
 			unitOfWork.Save( editor );
@@ -264,7 +317,7 @@ public sealed class ItemActionService
 			if ( editor is null )
 			{
 				await unitOfWork.DisposeAsync();
-				return OperationResult.Failure( ErrorCode.Conflict, "Action inventory changed before commit." );
+				return Failure( ErrorCode.Conflict, "Action inventory changed before commit." );
 			}
 			editor.Replace( finalInventory );
 			unitOfWork.Save( editor );
@@ -275,7 +328,7 @@ public sealed class ItemActionService
 			if ( editor is null )
 			{
 				await unitOfWork.DisposeAsync();
-				return OperationResult.Failure( ErrorCode.Conflict, "Action character changed before commit." );
+				return Failure( ErrorCode.Conflict, "Action character changed before commit." );
 			}
 			editor.Replace( planned.Value.UpdatedCharacter );
 			unitOfWork.Save( editor );
@@ -283,15 +336,26 @@ public sealed class ItemActionService
 
 		var committed = await unitOfWork.CommitAsync( cancellationToken );
 		await unitOfWork.DisposeAsync();
-		if ( !committed.Succeeded ) return PersistenceResultMapping.Failure( committed.Error! );
+		if ( !committed.Succeeded )
+		{
+			var mapped = PersistenceResultMapping.Failure( committed.Error! );
+			return Failure( mapped.Error!.Code, mapped.Error.Message );
+		}
 		_events.Publish( new ItemActionCommittedEvent(
 			actor,
 			item.Id,
 			actionId,
 			committed.Value!.Sequence,
 			planned.Value.Presentation ) );
-		return OperationResult.Success();
+		return OperationResult<CommitReceipt>.Success( committed.Value! );
 	}
+
+	private static OperationResult Untyped( OperationResult<CommitReceipt> result ) => result.Succeeded
+		? OperationResult.Success()
+		: OperationResult.Failure( result.Error!.Code, result.Error.Message );
+
+	private static OperationResult<CommitReceipt> Failure( ErrorCode code, string message ) =>
+		OperationResult<CommitReceipt>.Failure( code, message );
 
 	private OperationResult ValidatePlan( ItemActionContext context, ItemActionPlan plan )
 	{
@@ -332,9 +396,15 @@ public sealed class ItemActionService
 		}
 		if ( plan.DeletedItems.Any( id => !context.InventoryItems.ContainsKey( id ) ) )
 			return OperationResult.Failure( ErrorCode.InvalidArgument, "Action attempted to delete an item outside the proven inventory." );
-		if ( plan.DeletedItems.Any( id => _repositories.Inventories.All().Any( document =>
-			document.Value.Owner.Kind == InventoryOwnerKind.ParentItem && document.Value.Owner.OwnerId == id.Value ) ) )
-			return OperationResult.Failure( ErrorCode.InvalidArgument, "Action cannot delete a container item without an explicit cascade operation." );
+		if ( plan.DeletedItems.Count > 0 )
+		{
+			var containerItems = _repositories.Inventories.All()
+				.Where( document => document.Value.Owner.Kind == InventoryOwnerKind.ParentItem )
+				.Select( document => new ItemId( document.Value.Owner.OwnerId ) )
+				.ToHashSet();
+			if ( plan.DeletedItems.Any( containerItems.Contains ) )
+				return OperationResult.Failure( ErrorCode.InvalidArgument, "Action cannot delete a container item without an explicit cascade operation." );
+		}
 		var finalInventory = plan.UpdatedInventory ?? context.Inventory;
 		var expectedItems = context.Inventory.Placements
 			.Select( placement => placement.ItemId )
@@ -348,19 +418,21 @@ public sealed class ItemActionService
 			return OperationResult.Failure( ErrorCode.InvalidArgument, "Action inventory placements do not preserve the proven item set." );
 		var effectiveItems = context.InventoryItems.ToDictionary( pair => pair.Key, pair => pair.Value );
 		foreach ( var updated in plan.UpdatedItems ) effectiveItems[updated.Key] = updated.Value;
-		var occupied = new HashSet<(int X, int Y)>();
+		if ( finalInventory.Width <= 0 || finalInventory.Height <= 0 )
+			return OperationResult.Failure( ErrorCode.Conflict, "Action produced invalid inventory dimensions." );
+		var bounds = new InventoryGridSize( finalInventory.Width, finalInventory.Height );
+		var occupied = new List<InventoryRectangle>();
 		foreach ( var placement in finalInventory.Placements.Where( value => !plan.DeletedItems.Contains( value.ItemId ) ) )
 		{
 			if ( !effectiveItems.TryGetValue( placement.ItemId, out var placedItem ) ||
-				!_shapes.TryGetShape( placedItem.Definition, out var shape ) ||
-				placement.X < 0 || placement.Y < 0 ||
-				placement.X + shape.Width > finalInventory.Width ||
-				placement.Y + shape.Height > finalInventory.Height )
+				!_shapes.TryGetShape( placedItem.Definition, out var shape ) )
 				return OperationResult.Failure( ErrorCode.Conflict, "Action produced an invalid inventory placement." );
-			for ( var y = placement.Y; y < placement.Y + shape.Height; y++ )
-			for ( var x = placement.X; x < placement.X + shape.Width; x++ )
-				if ( !occupied.Add( (x, y) ) )
-					return OperationResult.Failure( ErrorCode.Conflict, "Action produced overlapping inventory placements." );
+			var rectangle = new InventoryRectangle( placement.Position, shape.GridSize );
+			if ( !rectangle.FitsWithin( bounds ) )
+				return OperationResult.Failure( ErrorCode.Conflict, "Action produced an invalid inventory placement." );
+			if ( occupied.Any( existing => existing.Overlaps( rectangle ) ) )
+				return OperationResult.Failure( ErrorCode.Conflict, "Action produced overlapping inventory placements." );
+			occupied.Add( rectangle );
 		}
 		if ( plan.UpdatedCharacter is not null )
 		{

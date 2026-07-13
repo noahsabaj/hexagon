@@ -37,6 +37,8 @@ public sealed class HexClientStore
 
 	private ClientStateSnapshot? _state;
 	private bool _connected;
+	private ClientSessionNonce? _pendingNonce;
+	private ClientSessionScope? _scope;
 	private readonly Dictionary<Guid, long> _chatMessageRevisions = new();
 
 	public event Action<ClientStoreChange>? Changed;
@@ -49,6 +51,7 @@ public sealed class HexClientStore
 			: ClientLifecycleState.Connected;
 
 	public ClientStateSnapshot? State => _state;
+	public ClientSessionScope? Scope => _scope;
 	public ClientStateEpoch? StateEpoch => _state?.Epoch;
 	public PlayerPublicSnapshot? PublicPlayer => _state?.Player;
 	public PlayerPrivateSnapshot? PrivatePlayer => _state?.PrivatePlayer;
@@ -60,20 +63,61 @@ public sealed class HexClientStore
 	public ChatSnapshot? Chat { get; private set; }
 	public ActionProgressSnapshot? ActiveAction => _state?.ActiveAction;
 
-	public void BeginSession()
+	public void PrepareSession( ClientSessionNonce nonce )
 	{
 		ClearAllState();
-		_connected = true;
+		_pendingNonce = nonce;
+		_scope = null;
+		_connected = false;
 		Publish(ClientStoreChangeKind.SessionStarted);
+	}
+
+	public bool AcceptHello( ClientSessionHello hello )
+	{
+		if ( _scope is not null )
+		{
+			if ( _scope.Value == hello.Scope ) return true;
+			Publish( ClientStoreChangeKind.LateStateRejected );
+			return false;
+		}
+		if ( _pendingNonce is null || hello.Scope.Nonce != _pendingNonce.Value )
+		{
+			Publish( ClientStoreChangeKind.LateStateRejected );
+			return false;
+		}
+		_scope = hello.Scope;
+		_connected = true;
+		Publish( ClientStoreChangeKind.SessionStarted );
+		return true;
+	}
+
+	/// <summary>
+	/// Terminates only the exact authenticated session named by the host. Delayed
+	/// revocations from an earlier connection lifetime cannot clear a newer one.
+	/// </summary>
+	public bool RevokeSession( ClientSessionScope scope )
+	{
+		if ( _scope is null || _scope.Value != scope ) return false;
+		ClearAllState();
+		_pendingNonce = null;
+		_scope = null;
+		_connected = false;
+		Publish( ClientStoreChangeKind.SessionCleared );
+		return true;
 	}
 
 	/// <summary>
 	/// Applies a complete host-authored state publication. A different connection
 	/// lifetime or a non-increasing revision is rejected without changing any view.
 	/// </summary>
-	public bool ApplyState( ClientStateSnapshot snapshot )
+	public bool ApplyState( ClientSessionScope scope, ClientStateSnapshot snapshot )
 	{
 		ArgumentNullException.ThrowIfNull( snapshot );
+		if ( !Accepts( scope ) || snapshot.Epoch.Connection != scope.Connection )
+		{
+			Publish( ClientStoreChangeKind.LateStateRejected );
+			return false;
+		}
 		var current = _state;
 		if ( current is not null )
 		{
@@ -96,26 +140,27 @@ public sealed class HexClientStore
 			_chatMessageRevisions.Clear();
 		}
 		_state = snapshot;
-		_connected = true;
 		Publish( ClientStoreChangeKind.StateApplied );
 		return true;
 	}
 
-	public void ReplaceCharacterList(CharacterListSnapshot snapshot)
+	public bool ReplaceCharacterList( ClientSessionScope scope, CharacterListSnapshot snapshot )
 	{
+		if ( !Accepts( scope ) ) return false;
 		CharacterList = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
-		_connected = true;
 		Publish(ClientStoreChangeKind.CharacterListReplaced);
+		return true;
 	}
 
-	public void ReplaceChat(ChatSnapshot snapshot)
+	public bool ReplaceChat( ClientSessionScope scope, ChatSnapshot snapshot )
 	{
 		ArgumentNullException.ThrowIfNull(snapshot);
+		if ( !Accepts( scope ) || snapshot.Epoch.Connection != scope.Connection ) return false;
 		var stateEpoch = _state?.Epoch;
 		if (stateEpoch is null ||
 			snapshot.Epoch.Connection != stateEpoch.Value.Connection ||
 			snapshot.Epoch.Character != stateEpoch.Value.Character)
-			return;
+			return false;
 		var current = Chat;
 		if (current is not null && current.Epoch != snapshot.Epoch)
 		{
@@ -156,17 +201,19 @@ public sealed class HexClientStore
 			foreach (var evicted in _chatMessageRevisions.Keys.Where(id => !retainedIds.Contains(id)).ToArray())
 				_chatMessageRevisions.Remove(evicted);
 			var revision = current is null ? snapshot.Revision : Math.Max(current.Revision, snapshot.Revision);
-			if (current is not null && revision == current.Revision && retained.SequenceEqual(current.Messages)) return;
+			if (current is not null && revision == current.Revision && retained.SequenceEqual(current.Messages)) return false;
 			Chat = new ChatSnapshot(snapshot.Epoch, revision, retained);
 		}
 
-		_connected = true;
 		Publish(ClientStoreChangeKind.ChatReplaced);
+		return true;
 	}
 
 	public void ClearSession()
 	{
 		ClearAllState();
+		_pendingNonce = null;
+		_scope = null;
 		_connected = false;
 		Publish(ClientStoreChangeKind.SessionCleared);
 	}
@@ -178,6 +225,9 @@ public sealed class HexClientStore
 		Chat = null;
 		_chatMessageRevisions.Clear();
 	}
+
+	public bool Accepts( ClientSessionScope scope ) =>
+		_connected && _scope is not null && _scope.Value == scope;
 
 	private void Publish(ClientStoreChangeKind kind)
 	{

@@ -14,6 +14,92 @@ public enum InventoryOwnerKind
 	ParentItem
 }
 
+public readonly record struct InventoryGridPosition
+{
+	[JsonConstructor]
+	public InventoryGridPosition( int x, int y )
+	{
+		if ( x < 0 ) throw new ArgumentOutOfRangeException( nameof(x) );
+		if ( y < 0 ) throw new ArgumentOutOfRangeException( nameof(y) );
+		X = x;
+		Y = y;
+	}
+
+	public int X { get; }
+	public int Y { get; }
+}
+
+public readonly record struct InventoryGridSize
+{
+	[JsonConstructor]
+	public InventoryGridSize( int width, int height )
+	{
+		if ( width <= 0 ) throw new ArgumentOutOfRangeException( nameof(width) );
+		if ( height <= 0 ) throw new ArgumentOutOfRangeException( nameof(height) );
+		Width = width;
+		Height = height;
+	}
+
+	public int Width { get; }
+	public int Height { get; }
+}
+
+/// <summary>
+/// Checked grid rectangle. Endpoints are calculated in 64-bit arithmetic so
+/// hostile coordinates can never wrap back into a valid inventory region.
+/// </summary>
+public readonly record struct InventoryRectangle
+{
+	public InventoryRectangle( InventoryGridPosition position, InventoryGridSize size )
+	{
+		Position = position;
+		Size = size;
+		Right = (long)position.X + size.Width;
+		Bottom = (long)position.Y + size.Height;
+	}
+
+	public InventoryGridPosition Position { get; }
+	public InventoryGridSize Size { get; }
+	public long Left => Position.X;
+	public long Top => Position.Y;
+	public long Right { get; }
+	public long Bottom { get; }
+
+	public bool FitsWithin( InventoryGridSize bounds ) =>
+		Right <= bounds.Width && Bottom <= bounds.Height;
+
+	public bool Overlaps( InventoryRectangle other ) =>
+		Left < other.Right && Right > other.Left && Top < other.Bottom && Bottom > other.Top;
+}
+
+public static class InventoryGeometry
+{
+	public static bool TryCreateRectangle(
+		int x,
+		int y,
+		int width,
+		int height,
+		out InventoryRectangle rectangle )
+	{
+		if ( x < 0 || y < 0 || width <= 0 || height <= 0 )
+		{
+			rectangle = default;
+			return false;
+		}
+
+		rectangle = new InventoryRectangle(
+			new InventoryGridPosition( x, y ),
+			new InventoryGridSize( width, height ) );
+		return true;
+	}
+
+	public static bool Fits(
+		InventoryGridSize bounds,
+		InventoryGridPosition position,
+		InventoryGridSize size ) =>
+		new InventoryRectangle( position, size ).FitsWithin( bounds );
+}
+
 /// <summary>
 /// Closed owner union. OwnerId is the GUID value of the corresponding strong ID.
 /// </summary>
@@ -38,17 +124,20 @@ public readonly record struct InventoryOwner
 public readonly record struct InventoryPlacement
 {
 	public ItemId ItemId { get; }
-	public int X { get; }
-	public int Y { get; }
+	public InventoryGridPosition Position { get; }
+	public int X => Position.X;
+	public int Y => Position.Y;
+
+	public InventoryPlacement( ItemId itemId, int x, int y )
+		: this( itemId, new InventoryGridPosition( x, y ) )
+	{
+	}
 
 	[JsonConstructor]
-	public InventoryPlacement( ItemId itemId, int x, int y )
+	public InventoryPlacement( ItemId itemId, InventoryGridPosition position )
 	{
-		if ( x < 0 ) throw new ArgumentOutOfRangeException( nameof(x) );
-		if ( y < 0 ) throw new ArgumentOutOfRangeException( nameof(y) );
 		ItemId = itemId;
-		X = x;
-		Y = y;
+		Position = position;
 	}
 }
 
@@ -58,6 +147,8 @@ public sealed record InventoryRecord
 	public required InventoryOwner Owner { get; init; }
 	public required int Width { get; init; }
 	public required int Height { get; init; }
+	[JsonIgnore]
+	public InventoryGridSize GridSize => new( Width, Height );
 	public IReadOnlyList<InventoryPlacement> Placements { get; init; } = Array.Empty<InventoryPlacement>();
 	public long Revision { get; init; }
 

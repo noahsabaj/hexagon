@@ -19,7 +19,9 @@ public sealed class HexagonBootstrapComponent : Component
 
 	/// <summary>
 	/// Optional relative FileSystem.Data prefix used by isolated verification runs.
-	/// Production scenes leave this blank and use hexagon/v2/&lt;schema-id&gt;.
+	/// Production scenes leave this blank and use
+	/// hexagon/persistence/v3/&lt;schema-id&gt;. Legacy v2 data is never opened,
+	/// migrated, or deleted.
 	/// </summary>
 	[Property]
 	public string PersistenceRootOverride { get; set; } = string.Empty;

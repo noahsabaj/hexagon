@@ -63,6 +63,11 @@ public sealed record HexSchemaRuntimeDescriptor
 	public required SchemaPersistenceInvariantProfile PersistenceInvariants { get; init; }
 	public IReadOnlyList<IPersistedTypeCodec> PersistenceCodecs { get; init; } =
 		Array.Empty<IPersistedTypeCodec>();
+	/// <summary>
+	/// Creates the game-owned durable storage adapter. Hexagon defines and consumes the
+	/// persistence protocol, while the standalone game owns any raw operating-system access.
+	/// </summary>
+	public required Func<IPersistenceStorage> CreatePersistenceStorage { get; init; }
 	public required Func<HexHostRuntimeContext, IHexHostApplication> CreateHostApplication { get; init; }
 	public Action<HexClientRuntimeContext>? ConfigureClient { get; init; }
 }
@@ -84,7 +89,11 @@ public sealed record HexClientRuntimeContext(
 
 public interface IHexHostTransport
 {
-	void SendOperationResult( Connection recipient, CommandRequestId requestId, OperationResult result );
+	void SendOperationResult(
+		Connection recipient,
+		ClientSessionScope scope,
+		CommandRequestId requestId,
+		OperationResult result );
 	void SendCharacterList( Connection recipient, CharacterListSnapshot snapshot );
 	void SendClientState(
 		Connection recipient,

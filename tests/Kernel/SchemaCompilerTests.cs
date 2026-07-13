@@ -36,6 +36,7 @@ public sealed class SchemaCompilerTests
 			new[] { "alpha", "beta", "gamma", "zeta" },
 			result.Value.Modules.Select(x => x.Id).ToArray());
 		Assert.AreEqual("ban", result.Value.Commands.Require("ban").Value.Id);
+		Assert.AreEqual( CommandCostClass.Standard, result.Value.Commands.Require( "ban" ).Value.Cost );
 	}
 
 	[TestMethod]
@@ -125,6 +126,19 @@ public sealed class SchemaCompilerTests
 
 		Assert.IsTrue(report.Issues.Any(x => x.Path == "character_fields.age" &&
 			x.Message.Contains("does not match Integer", StringComparison.Ordinal)));
+	}
+
+	[TestMethod]
+	public void CommandAdmissionCostMustBeADeclaredWeight()
+	{
+		var schema = new DelegateSchema( "test_schema", builder =>
+			builder.RegisterCommand( new CommandDefinition(
+				"invalid", null, (CommandCostClass)16 ) ) );
+
+		var report = SchemaCompiler.Validate( schema );
+
+		Assert.IsTrue( report.Issues.Any( issue =>
+			issue.Code == ErrorCode.SchemaInvalid && issue.Path == "commands.invalid.cost" ) );
 	}
 
 	private sealed record Payload(string Value);

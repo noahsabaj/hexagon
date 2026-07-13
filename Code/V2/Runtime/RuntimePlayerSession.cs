@@ -1,18 +1,17 @@
 #nullable enable
 
 using System;
-using System.Collections.Generic;
+using System.Diagnostics;
 using Hexagon.V2.Networking;
 
 namespace Hexagon.V2.Runtime;
 
 internal sealed class RuntimePlayerSession : IDisposable
 {
-	private const int MaximumActiveRequests = 64;
-	private const int RetainedRequestIds = 1024;
-	private readonly HashSet<CommandRequestId> _activeRequests = new();
-	private readonly HashSet<CommandRequestId> _seenRequests = new();
-	private readonly Queue<CommandRequestId> _seenOrder = new();
+	private readonly object _sync = new();
+	private readonly CommandAdmissionController _admission = new( Stopwatch.Frequency );
+	private readonly ApplicationConnectionLatch _applicationConnection = new();
+	private ClientSessionNonce? _clientNonce;
 	private bool _disconnected;
 
 	public RuntimePlayerSession( HexPlayerBody player, Action<Exception>? cancellationFailure = null )
@@ -23,31 +22,73 @@ internal sealed class RuntimePlayerSession : IDisposable
 
 	public HexPlayerBody Player { get; }
 	public ConnectionSessionBoundary Boundary { get; }
-	public bool IsConnected => !_disconnected && Boundary.IsConnected;
-
-	public bool TryBeginRequest( CommandRequestId requestId )
+	public bool IsConnected
 	{
-		if ( !IsConnected || _activeRequests.Count >= MaximumActiveRequests ) return false;
-		if ( _seenRequests.Contains( requestId ) || !_activeRequests.Add( requestId ) ) return false;
-		return true;
+		get { lock ( _sync ) return !_disconnected && Boundary.IsConnected; }
+	}
+	public bool IsApplicationConnected
+	{
+		get
+		{
+			lock ( _sync )
+				return !_disconnected && Boundary.IsConnected && _applicationConnection.IsConnected;
+		}
+	}
+	public ClientSessionScope? Scope
+	{
+		get
+		{
+			lock ( _sync )
+				return _clientNonce is null
+					? null
+					: new ClientSessionScope( _clientNonce.Value, Boundary.ConnectionEpoch );
+		}
 	}
 
-	public bool FinishRequest( CommandRequestId requestId )
+	public bool TryBind(
+		ClientSessionNonce nonce,
+		out ClientSessionScope scope,
+		out bool newlyBound )
 	{
-		if ( !_activeRequests.Remove( requestId ) ) return false;
-		_seenRequests.Add( requestId );
-		_seenOrder.Enqueue( requestId );
-		while ( _seenOrder.Count > RetainedRequestIds )
-			_seenRequests.Remove( _seenOrder.Dequeue() );
-		return true;
+		lock ( _sync )
+		{
+			if ( _disconnected || !Boundary.IsConnected || (_clientNonce is not null && _clientNonce != nonce) )
+			{
+				scope = default;
+				newlyBound = false;
+				return false;
+			}
+			newlyBound = _clientNonce is null;
+			_clientNonce ??= nonce;
+			scope = new ClientSessionScope( nonce, Boundary.ConnectionEpoch );
+			_ = _applicationConnection.ObserveNonceBound();
+			return true;
+		}
 	}
+
+	public bool IsCurrent( ClientSessionScope scope ) => Scope == scope;
+	public bool ObserveHostReady() => _applicationConnection.ObserveHostReady();
+	public bool ObserveHelloIssued() => _applicationConnection.ObserveHelloIssued();
+	public bool CompleteApplicationConnection( bool succeeded ) =>
+		_applicationConnection.CompleteNotification( succeeded );
+
+	public CommandAdmissionResult TryBeginRequest( CommandRequestId requestId, int cost ) =>
+		IsConnected
+			? _admission.TryBegin( requestId, cost, Stopwatch.GetTimestamp() )
+			: CommandAdmissionResult.Reject( CommandAdmissionFailure.Disconnected );
+
+	public bool FinishRequest( CommandRequestId requestId ) => _admission.Finish( requestId );
 
 	public void Disconnect()
 	{
-		if ( _disconnected ) return;
-		_disconnected = true;
+		lock ( _sync )
+		{
+			if ( _disconnected ) return;
+			_disconnected = true;
+			_applicationConnection.Disconnect();
+		}
 		Boundary.Disconnect();
-		_activeRequests.Clear();
+		_admission.Disconnect();
 	}
 
 	public void Dispose()

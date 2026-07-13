@@ -53,9 +53,21 @@ public sealed record MoveInventoryItemCommand(
 	InventoryId SourceId,
 	InventoryId TargetId,
 	ItemId ItemId,
-	int X,
-	int Y
-) : ClientCommand;
+	InventoryGridPosition Position
+) : ClientCommand
+{
+	public int X => Position.X;
+	public int Y => Position.Y;
+
+	public MoveInventoryItemCommand(
+		InventoryId sourceId,
+		InventoryId targetId,
+		ItemId itemId,
+		int x,
+		int y ) : this( sourceId, targetId, itemId, new InventoryGridPosition( x, y ) )
+	{
+	}
+}
 
 public sealed record RunItemActionCommand(
 	InventoryId InventoryId,

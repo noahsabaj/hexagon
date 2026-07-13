@@ -19,6 +19,7 @@ public readonly record struct RpcActor(
 	AccountId AccountId,
 	HexPlayerBody Player,
 	CharacterRecord? Character,
+	ClientSessionScope ClientScope,
 	CommandSessionLease Session )
 {
 	public ConnectionEpoch ConnectionEpoch => Session.Connection;
@@ -30,6 +31,7 @@ public static class RpcGuard
 {
 	public static OperationResult<RpcActor> Resolve(
 		HexagonRuntimeSystem runtime,
+		ClientSessionScope scope,
 		bool requiresStableCharacter )
 	{
 		if ( runtime is null )
@@ -37,7 +39,7 @@ public static class RpcGuard
 		var caller = Rpc.Caller;
 		if ( caller is null || caller.SteamId.ValueUnsigned == 0 )
 			return OperationResult<RpcActor>.Failure( ErrorCode.Unauthorized, "RPC caller is not authenticated." );
-		return runtime.ResolveActor( caller, requiresStableCharacter );
+		return runtime.ResolveActor( caller, scope, requiresStableCharacter );
 	}
 
 	public static OperationResult RequireActiveCharacter( RpcActor actor ) => actor.Character is null

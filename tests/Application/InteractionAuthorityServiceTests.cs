@@ -83,6 +83,28 @@ public sealed class InteractionAuthorityServiceTests
 	}
 
 	[TestMethod]
+	public void NonFiniteGeometryCannotBeConstructedAndHugeFiniteDistanceShortCircuitsAuthorization()
+	{
+		Assert.ThrowsExactly<ArgumentOutOfRangeException>( () => new WorldPoint( float.NaN, 0, 0 ) );
+		Assert.ThrowsExactly<ArgumentOutOfRangeException>( () => new WorldPoint( 0, float.PositiveInfinity, 0 ) );
+		Assert.ThrowsExactly<ArgumentOutOfRangeException>( () => new InteractionRange( double.NaN ) );
+		Assert.ThrowsExactly<ArgumentOutOfRangeException>( () => new InteractionRange( double.PositiveInfinity ) );
+		Assert.ThrowsExactly<ArgumentOutOfRangeException>( () => new InteractionRange( 0 ) );
+
+		var fixture = new InteractionFixture();
+		fixture.World.TargetPosition = new WorldPoint( float.MaxValue, float.MaxValue, float.MaxValue );
+		var result = fixture.Service.Begin(
+			fixture.Actor.ConnectionId,
+			fixture.Actor.AccountId,
+			fixture.Actor.CharacterId,
+			fixture.Target );
+
+		Assert.AreEqual( ErrorCode.PolicyDenied, result.Error!.Code );
+		Assert.AreEqual( 0, fixture.World.LineOfSightCount );
+		Assert.AreEqual( 0, fixture.Interactable.AuthorizeCount );
+	}
+
+	[TestMethod]
 	public void OneShotAuthorizationRevalidatesWithoutOpeningSessionOrGrantingInventory()
 	{
 		var fixture = new InteractionFixture();
@@ -219,6 +241,84 @@ public sealed class InteractionAuthorityServiceTests
 			fixture.Actor.CharacterId );
 
 		Assert.AreEqual( ErrorCode.Unauthorized, completed.Error!.Code );
+	}
+
+	[TestMethod]
+	public void TimedActionsEnforceActorCapMaximumDurationAndCompletionGrace()
+	{
+		var fixture = new InteractionFixture();
+		var tooLong = fixture.Service.BeginTimedAction(
+			fixture.Actor.ConnectionId,
+			fixture.Actor.AccountId,
+			fixture.Actor.CharacterId,
+			fixture.Target,
+			InteractionAuthorityService.MaximumTimedActionDuration + TimeSpan.FromTicks( 1 ) );
+		var first = fixture.Service.BeginTimedAction(
+			fixture.Actor.ConnectionId,
+			fixture.Actor.AccountId,
+			fixture.Actor.CharacterId,
+			fixture.Target,
+			TimeSpan.FromSeconds( 1 ) );
+		var second = fixture.Service.BeginTimedAction(
+			fixture.Actor.ConnectionId,
+			fixture.Actor.AccountId,
+			fixture.Actor.CharacterId,
+			fixture.Target,
+			TimeSpan.FromSeconds( 1 ) );
+
+		Assert.AreEqual( ErrorCode.InvalidArgument, tooLong.Error!.Code );
+		Assert.IsTrue( first.Succeeded );
+		Assert.AreEqual( ErrorCode.Conflict, second.Error!.Code );
+		Assert.AreEqual( 1, fixture.Service.TrackedTimedActionCount );
+
+		fixture.Clock.Advance(
+			TimeSpan.FromSeconds( 1 ) + InteractionAuthorityService.TimedActionCompletionGrace + TimeSpan.FromTicks( 1 ) );
+		Assert.AreEqual( 1, fixture.Service.SweepTimedActions() );
+		Assert.AreEqual( 0, fixture.Service.TrackedTimedActionCount );
+	}
+
+	[TestMethod]
+	public async Task ConcurrentTimedBeginsPermitExactlyOneTicketPerActor()
+	{
+		var fixture = new InteractionFixture();
+		var gate = new ManualResetEventSlim();
+		var first = Task.Run( () =>
+		{
+			gate.Wait();
+			return fixture.Service.BeginTimedAction(
+				fixture.Actor.ConnectionId, fixture.Actor.AccountId, fixture.Actor.CharacterId,
+				fixture.Target, TimeSpan.FromSeconds( 1 ) );
+		} );
+		var second = Task.Run( () =>
+		{
+			gate.Wait();
+			return fixture.Service.BeginTimedAction(
+				fixture.Actor.ConnectionId, fixture.Actor.AccountId, fixture.Actor.CharacterId,
+				fixture.Target, TimeSpan.FromSeconds( 1 ) );
+		} );
+		gate.Set();
+		var results = await Task.WhenAll( first, second );
+
+		Assert.AreEqual( 1, results.Count( result => result.Succeeded ) );
+		Assert.AreEqual( 1, results.Count( result => result.Error?.Code == ErrorCode.Conflict ) );
+		Assert.AreEqual( 1, fixture.Service.TrackedTimedActionCount );
+	}
+
+	[TestMethod]
+	public void TimedActionExpiryQueueRemainsBoundedUnderCancellationChurn()
+	{
+		var fixture = new InteractionFixture();
+		for ( var index = 0; index < 200; index++ )
+		{
+			var ticket = fixture.Service.BeginTimedAction(
+				fixture.Actor.ConnectionId, fixture.Actor.AccountId, fixture.Actor.CharacterId,
+				fixture.Target, TimeSpan.FromMinutes( 5 ) ).Value;
+			Assert.IsTrue( fixture.Service.CancelTimedAction(
+				ticket.Id, fixture.Actor.ConnectionId, fixture.Actor.CharacterId ) );
+		}
+
+		Assert.AreEqual( 0, fixture.Service.TrackedTimedActionCount );
+		Assert.IsLessThanOrEqualTo( 64, fixture.Service.QueuedTimedActionExpiryCount );
 	}
 
 	[TestMethod]
@@ -361,6 +461,7 @@ public sealed class InteractionAuthorityServiceTests
 		public WorldPoint ActorPosition { get; set; } = new( 0, 0, 0 );
 		public WorldPoint TargetPosition { get; set; } = new( 10, 0, 0 );
 		public int BuildCount { get; private set; }
+		public int LineOfSightCount { get; private set; }
 
 		public bool TryBuildContext(
 			ConnectionId connectionId,
@@ -390,7 +491,11 @@ public sealed class InteractionAuthorityServiceTests
 			return true;
 		}
 
-		public bool HasLineOfSight( ServerInteractionContext context ) => LineOfSight;
+		public bool HasLineOfSight( ServerInteractionContext context )
+		{
+			LineOfSightCount++;
+			return LineOfSight;
+		}
 	}
 
 	private sealed class FakeDirectory : IInteractionDirectory

@@ -18,6 +18,14 @@ public sealed class PackageLayoutTests
 		using var manifest = JsonDocument.Parse( File.ReadAllText( Path.Combine( roots.Hexagon, "hexagon.sbproj" ) ) );
 
 		Assert.AreEqual( "library", manifest.RootElement.GetProperty( "Type" ).GetString() );
+		Assert.IsFalse( manifest.RootElement.GetProperty( "IsStandaloneOnly" ).GetBoolean() );
+		Assert.IsFalse(
+			manifest.RootElement.TryGetProperty( "IsWhitelistDisabled", out _ ),
+			"Game/library manifests must not rely on the obsolete top-level whitelist field." );
+		Assert.IsTrue(
+			manifest.RootElement.GetProperty( "Metadata" ).GetProperty( "Compiler" )
+				.GetProperty( "Whitelist" ).GetBoolean(),
+			"The reusable library must remain platform-whitelisted." );
 		Assert.IsFalse(
 			manifest.RootElement.GetProperty( "Metadata" ).TryGetProperty( "StartupScene", out _ ),
 			"Library packages must not select a startup scene." );
@@ -35,6 +43,14 @@ public sealed class PackageLayoutTests
 		using var manifest = JsonDocument.Parse( File.ReadAllText( Path.Combine( roots.Hl2Rp, "hl2rp.sbproj" ) ) );
 
 		Assert.AreEqual( "game", manifest.RootElement.GetProperty( "Type" ).GetString() );
+		Assert.IsTrue( manifest.RootElement.GetProperty( "IsStandaloneOnly" ).GetBoolean() );
+		Assert.IsFalse(
+			manifest.RootElement.TryGetProperty( "IsWhitelistDisabled", out _ ),
+			"Standalone game compilation is selected by IsStandaloneOnly and Metadata.Compiler.Whitelist." );
+		Assert.IsFalse(
+			manifest.RootElement.GetProperty( "Metadata" ).GetProperty( "Compiler" )
+				.GetProperty( "Whitelist" ).GetBoolean(),
+			"The game owns the production OS persistence adapter and must remain standalone-only." );
 		var startupScene = manifest.RootElement.GetProperty( "Metadata" ).GetProperty( "StartupScene" ).GetString();
 		var dedicatedScene = manifest.RootElement.GetProperty( "Metadata" ).GetProperty( "DedicatedServerStartupScene" ).GetString();
 		Assert.IsFalse( string.IsNullOrWhiteSpace( startupScene ) );
@@ -95,9 +111,12 @@ public sealed class PackageLayoutTests
 
 		foreach ( var marker in new[]
 		{
-			"hexagon-v2-manual-remote-acceptance/1",
+			"hexagon-v2-manual-remote-acceptance/2",
 			"manual_operator_attestation",
+			"hexagon_sha",
+			"hl2rp_sha",
 			"source_fingerprint",
+			"ls-files --cached --others --exclude-standard",
 			"artifact_ids",
 			"operator.statement",
 			"does not execute or independently prove"

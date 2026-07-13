@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Serialization;
 using Hexagon.V2.Domain;
+using Hexagon.V2.Persistence;
 
 namespace Hexagon.V2.Application;
 
@@ -48,7 +49,7 @@ public readonly record struct InteractionTarget
 
 public sealed record InteractionPolicy
 {
-	public float MaxDistance { get; init; } = 130f;
+	public InteractionRange Range { get; init; } = new( 130d );
 	public bool RequireLineOfSight { get; init; } = true;
 	public bool RequireCharacter { get; init; } = true;
 	public bool RequireAlive { get; init; } = true;
@@ -70,6 +71,39 @@ public sealed record InteractionSession
 }
 
 /// <summary>
+/// Commit-time proof that a continuing interaction session is still the exact
+/// live capability observed by the action planner. Reused session identifiers
+/// cannot satisfy an older proof because every open receives a fresh revision.
+/// </summary>
+public sealed class InteractionSessionProof : ICommitPrecondition
+{
+	private readonly InteractionSessionService _owner;
+
+	internal InteractionSessionProof(
+		InteractionSessionService owner,
+		InteractionSession session,
+		long revision )
+	{
+		_owner = owner;
+		Session = session;
+		Revision = revision;
+	}
+
+	public InteractionSession Session { get; }
+	public long Revision { get; }
+
+	/// <summary>
+	/// Returns whether this proof still names the exact live session revision.
+	/// This is intended for ordering non-durable effects after a successful commit;
+	/// commit-time authorization must still attach the proof with <c>Require</c>.
+	/// </summary>
+	public bool IsCurrent() => _owner.ValidateProof( this ) is null;
+
+	public PersistenceInvariantIssue? Validate( CommitPreconditionContext context ) =>
+		_owner.ValidateProof( this );
+}
+
+/// <summary>
 /// Owns continuing interaction capabilities. At most one live session of each kind
 /// is allowed per connection; opening another atomically revokes the previous one.
 /// </summary>
@@ -82,6 +116,8 @@ public sealed class InteractionSessionService
 	private readonly TimeSpan _idleTimeout;
 	private readonly Func<InteractionSessionId> _createId;
 	private readonly Dictionary<InteractionSessionId, InteractionSession> _sessions = new();
+	private readonly Dictionary<InteractionSessionId, long> _sessionRevisions = new();
+	private long _revision;
 
 	public event Action<InteractionSession>? SessionRevoked;
 
@@ -126,6 +162,7 @@ public sealed class InteractionSessionService
 				LastActivityAt = now
 			};
 			_sessions.Add( session.Id, session );
+			_sessionRevisions.Add( session.Id, AdvanceRevisionUnsafe() );
 		}
 
 		foreach ( var old in replaced ) SessionRevoked?.Invoke( old );
@@ -192,6 +229,24 @@ public sealed class InteractionSessionService
 		}
 	}
 
+	public InteractionSessionProof? Prove( InteractionSession observed )
+	{
+		ArgumentNullException.ThrowIfNull( observed );
+		lock ( _sync )
+		{
+			if ( !_sessions.TryGetValue( observed.Id, out var current ) ||
+				current.Revoked ||
+				current.Kind != observed.Kind ||
+				current.ConnectionId != observed.ConnectionId ||
+				current.CharacterId != observed.CharacterId ||
+				current.Target != observed.Target ||
+				_clock.UtcNow - current.LastActivityAt >= _idleTimeout ||
+				!_sessionRevisions.TryGetValue( observed.Id, out var revision ) )
+				return null;
+			return new InteractionSessionProof( this, current, revision );
+		}
+	}
+
 	/// <summary>
 	/// Number of live capability records retained by the service. Revoked sessions
 	/// are removed before callbacks run, so this count cannot grow with history.
@@ -254,6 +309,32 @@ public sealed class InteractionSessionService
 	{
 		var revoked = session with { Revoked = true, RevokeReason = reason };
 		_sessions.Remove( session.Id );
+		_sessionRevisions.Remove( session.Id );
+		AdvanceRevisionUnsafe();
 		return revoked;
 	}
+
+	internal PersistenceInvariantIssue? ValidateProof( InteractionSessionProof proof )
+	{
+		lock ( _sync )
+		{
+			var observed = proof.Session;
+			return _sessions.TryGetValue( observed.Id, out var current ) &&
+				!current.Revoked &&
+				current.Kind == observed.Kind &&
+				current.ConnectionId == observed.ConnectionId &&
+				current.CharacterId == observed.CharacterId &&
+				current.Target == observed.Target &&
+				_clock.UtcNow - current.LastActivityAt < _idleTimeout &&
+				_sessionRevisions.TryGetValue( observed.Id, out var revision ) &&
+				revision == proof.Revision
+				? null
+				: new PersistenceInvariantIssue(
+					"interaction.session.stale",
+					$"interaction-session/{observed.Id}",
+					"Interaction session changed or expired after the action was planned." );
+		}
+	}
+
+	private long AdvanceRevisionUnsafe() => _revision = checked(_revision + 1);
 }

@@ -22,6 +22,12 @@
     "RankType": "None",
     "PerMapRanking": false,
     "LeaderboardType": "None",
-    "CsProjName": ""
+    "CsProjName": "",
+    "Compiler": {
+      "Whitelist": true,
+      "Unsafe": false,
+      "Nullables": true,
+      "WarningsAsErrors": ""
+    }
   }
 }

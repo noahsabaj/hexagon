@@ -40,7 +40,7 @@ public sealed class ItemActionServiceTests
 			["amount"] = SnapshotValue.Integer( 7 )
 		};
 
-		var result = await service.ExecuteAsync(
+		var result = await service.ExecuteCommittedAsync(
 			seeded.Actor,
 			seeded.Inventory.Id,
 			seeded.Item.Id,
@@ -49,6 +49,9 @@ public sealed class ItemActionServiceTests
 		arguments["amount"] = SnapshotValue.Integer( 100 );
 
 		Assert.IsTrue( result.Succeeded );
+		Assert.IsNotNull( result.Value );
+		Assert.IsEmpty( result.Value.Documents,
+			"A successful read-only action still returns the exact provider-issued empty receipt." );
 		Assert.AreEqual( 7L, observed );
 	}
 
@@ -137,6 +140,29 @@ public sealed class ItemActionServiceTests
 		Assert.HasCount( 1, diagnostics );
 		Assert.AreEqual( 0, events.Count );
 		Assert.IsEmpty( FindItem( environment, seeded.Item.Id ).Traits );
+	}
+
+	[TestMethod]
+	public async Task RevokedCapabilityInvalidatesEvenZeroMutationActionProof()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var seeded = await SeedSingleAsync( environment );
+		GrantUse( environment, seeded.Actor, seeded.Inventory.Id );
+		var events = new RecordingCommittedHandler();
+		var handler = new RecordingActionHandler(
+			ExecuteAction,
+			_ =>
+			{
+				environment.Access.RevokeCharacter( seeded.Actor.ConnectionId, seeded.Actor.CharacterId );
+				return OperationResult<ItemActionPlan>.Success( new ItemActionPlan() );
+			} );
+		var service = CreateService( environment, CompileSchema(), handler, events );
+
+		var result = await service.ExecuteAsync(
+			seeded.Actor, seeded.Inventory.Id, seeded.Item.Id, new ActionId( ExecuteAction ) );
+
+		Assert.AreEqual( ErrorCode.Conflict, result.Error!.Code );
+		Assert.AreEqual( 0, events.Count );
 	}
 
 	[TestMethod]
@@ -357,6 +383,10 @@ public sealed class ItemActionServiceTests
 				environment.Repositories.Characters,
 				DomainKeys.Character( character.Id ),
 				character );
+			unitOfWork.Create(
+				environment.Repositories.CharacterLifecycleGuards,
+				DomainKeys.CharacterLifecycleGuard( character.Id ),
+				new CharacterLifecycleGuardRecord { CharacterId = character.Id, ReferenceRevision = 0 } );
 			foreach ( var item in items )
 				unitOfWork.Create( environment.Repositories.Items, DomainKeys.Item( item.Id ), item );
 			foreach ( var inventory in inventories )
@@ -382,7 +412,7 @@ public sealed class ItemActionServiceTests
 	};
 
 	private static string? TraitName( ItemRecord item ) =>
-		item.Traits["state"].Data.GetProperty( "Name" ).GetString();
+		item.Traits["state"].Data.GetProperty( "name" ).GetString();
 
 	private static ItemRecord FindItem(
 		ApplicationServiceTestEnvironment environment,
