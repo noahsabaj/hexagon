@@ -10,6 +10,7 @@ internal sealed class RuntimePlayerSession : IDisposable
 {
 	private readonly object _sync = new();
 	private readonly CommandAdmissionController _admission = new( Stopwatch.Frequency );
+	private readonly ClientBootstrapDiagnosticAdmissionController _bootstrapDiagnostics = new();
 	private readonly ApplicationConnectionLatch _applicationConnection = new();
 	private ClientSessionNonce? _clientNonce;
 	private bool _disconnected;
@@ -79,6 +80,11 @@ internal sealed class RuntimePlayerSession : IDisposable
 
 	public bool FinishRequest( CommandRequestId requestId ) => _admission.Finish( requestId );
 
+	public ClientBootstrapDiagnosticAdmissionResult TryAcceptBootstrapDiagnostic(
+		ClientBootstrapDiagnosticPhase phase,
+		ClientBootstrapDiagnosticCode code,
+		string? detail ) => _bootstrapDiagnostics.TryAccept( phase, code, detail );
+
 	public void Disconnect()
 	{
 		lock ( _sync )
@@ -89,6 +95,7 @@ internal sealed class RuntimePlayerSession : IDisposable
 		}
 		Boundary.Disconnect();
 		_admission.Disconnect();
+		_bootstrapDiagnostics.Disconnect();
 	}
 
 	public void Dispose()

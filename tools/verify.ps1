@@ -315,6 +315,20 @@ if (-not $SkipSboxBuild) {
         '--warnaserror'
     )
 
+    $pwshCommand = Get-Command 'pwsh' -ErrorAction SilentlyContinue
+    if ($null -eq $pwshCommand) {
+        throw 'PowerShell 7 (pwsh) is required for s&box client assembly access verification.'
+    }
+    Invoke-CheckedCommand -Description 'Verifying the client-visible HL2RP assembly against s&box access control' `
+        -FilePath $pwshCommand.Source `
+        -Arguments @(
+            '-NoLogo',
+            '-NoProfile',
+            '-File', (Join-Path $PSScriptRoot 'verify-client-assembly-access.ps1'),
+            '-SchemaRoot', $schemaRootPath,
+            '-SboxRoot', $SboxRoot
+        )
+
     if (-not $SkipSboxSmoke) {
         & (Join-Path $PSScriptRoot 'smoke-sbox.ps1') `
             -SchemaManifest $schemaManifest `

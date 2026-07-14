@@ -25,6 +25,25 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 	internal HexagonRuntimeSystem? Runtime { get; set; }
 
 	[Rpc.Host]
+	public void ReportClientBootstrapDiagnostic(
+		ClientBootstrapDiagnosticPhase phase,
+		ClientBootstrapDiagnosticCode code,
+		string detail )
+	{
+		var runtime = Runtime;
+		var caller = Rpc.Caller;
+		if ( runtime is null || caller is null || caller.SteamId.ValueUnsigned == 0 ) return;
+		var admitted = runtime.TryAcceptClientBootstrapDiagnostic( caller, phase, code, detail );
+		if ( !admitted.Accepted ) return;
+		var diagnostic = admitted.Diagnostic;
+		var safeDetail = ClientBootstrapDiagnosticContract.EscapeLogValue( diagnostic.Detail );
+		Log.Error(
+			$"HEXAGON_CLIENT_FAILED source=remote account={caller.SteamId.ValueUnsigned} " +
+			$"connection={caller.Id} phase={diagnostic.Phase} code={diagnostic.Code} " +
+			$"detail=\"{safeDetail}\"" );
+	}
+
+	[Rpc.Host]
 	public void RequestEstablishSession( ClientSessionNonce nonce )
 	{
 		var runtime = Runtime;

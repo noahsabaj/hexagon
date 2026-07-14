@@ -171,6 +171,10 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		{
 			ClientReadiness = HexRuntimeReadiness.Failed;
 			Log.Error( $"HEXAGON_CLIENT_FAILED {bootstrapResult.Error!.Message}" );
+			ReportClientBootstrapFailure(
+				ClientBootstrapDiagnosticPhase.Bootstrap,
+				ClientBootstrapDiagnosticCode.BootstrapUnavailable,
+				bootstrapResult.Error.Message );
 			return;
 		}
 
@@ -181,6 +185,10 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		{
 			ClientReadiness = HexRuntimeReadiness.Failed;
 			Log.Error( $"HEXAGON_CLIENT_FAILED {descriptor.Error!.Message}" );
+			ReportClientBootstrapFailure(
+				ClientBootstrapDiagnosticPhase.SchemaDiscovery,
+				ClientBootstrapDiagnosticCode.SchemaRuntimeUnavailable,
+				descriptor.Error.Message );
 			return;
 		}
 
@@ -204,6 +212,10 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			ClientStore.ClearSession();
 			ClientReadiness = HexRuntimeReadiness.Failed;
 			Log.Error( exception, "HEXAGON_CLIENT_FAILED schema client configuration threw." );
+			ReportClientBootstrapFailure(
+				ClientBootstrapDiagnosticPhase.ClientConfiguration,
+				ClientBootstrapDiagnosticCode.ClientConfigurationFailed,
+				$"{exception.GetType().Name}: {exception.Message}" );
 			return;
 		}
 
@@ -296,6 +308,17 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		_sessions.TryGetValue( connection.Id, out var session )
 			? session.TryBeginRequest( requestId, cost )
 			: CommandAdmissionResult.Reject( CommandAdmissionFailure.Disconnected );
+
+	internal ClientBootstrapDiagnosticAdmissionResult TryAcceptClientBootstrapDiagnostic(
+		Connection connection,
+		ClientBootstrapDiagnosticPhase phase,
+		ClientBootstrapDiagnosticCode code,
+		string? detail ) => _sessions.TryGetValue( connection.Id, out var session )
+		? session.TryAcceptBootstrapDiagnostic( phase, code, detail )
+		: new ClientBootstrapDiagnosticAdmissionResult(
+			false,
+			ClientBootstrapDiagnosticAdmissionFailure.Disconnected,
+			default );
 
 	internal bool FinishRejectedCommand( Connection connection, CommandRequestId requestId ) =>
 		_sessions.TryGetValue( connection.Id, out var session ) && session.FinishRequest( requestId );
@@ -650,6 +673,26 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		return services;
 	}
 
+	private void ReportClientBootstrapFailure(
+		ClientBootstrapDiagnosticPhase phase,
+		ClientBootstrapDiagnosticCode code,
+		string detail )
+	{
+		try
+		{
+			var services = _runtimeScene.GetAll<HexHostServicesComponent>().FirstOrDefault();
+			if ( services is null ) return;
+			services.ReportClientBootstrapDiagnostic(
+				phase,
+				code,
+				ClientBootstrapDiagnosticContract.PrepareDetail( code, detail ) );
+		}
+		catch ( Exception exception )
+		{
+			Log.Warning( exception, "Hexagon could not report the bounded client bootstrap diagnostic to the host." );
+		}
+	}
+
 	private OperationResult<HexagonBootstrapComponent> RequireBootstrap()
 	{
 		var bootstraps = Scene.GetAll<HexagonBootstrapComponent>().ToArray();
@@ -715,6 +758,9 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 				throw new InvalidOperationException( "The host application is not initialized." );
 			application.Connected( actor );
 			succeeded = true;
+			Log.Info(
+				$"HEXAGON_SESSION_BOUND account={actor.AccountId.Value} connection={actor.Connection.Id} " +
+				$"epoch={actor.ClientScope.Connection}" );
 			return true;
 		}
 		catch ( Exception exception )

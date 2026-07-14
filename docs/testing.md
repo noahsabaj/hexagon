@@ -18,8 +18,11 @@ The verification boundary is split deliberately:
   errors, and enforces the neutral layer boundary. The `hexagon / neutral`
   GitHub check runs this profile on Ubuntu 24.04 and requires a clean diff.
 - `tools/verify.ps1` is the full source-bound local profile. It includes both
-  neutral suites, package validation, generated s&box builds, persistence
-  commit/recovery smoke, and the remote-evidence gate. It is intentionally not
+  neutral suites, package validation, generated s&box builds, a client-equivalent
+  archive build checked by the installed `Sandbox.Access` verifier, persistence
+  commit/recovery smoke, and the remote-evidence gate. Raw operating-system server
+  code is excluded exactly as s&box excludes `.Server.cs` from remote clients.
+  PowerShell 7 is required for this binary access-control step. The profile is not
   assigned to a self-hosted GitHub runner.
 
 HL2RP stores its exact Hexagon dependency in `hexagon.lock.json`. Its hosted
