@@ -45,6 +45,9 @@ Invoke-CheckedCommand -Description 'Running Hexagon neutral tests' -FilePath 'do
     '--filter', 'TestCategory!=CrossRepository'
 )
 
+Write-Host '==> Running remote-acceptance verifier contract tests' -ForegroundColor Cyan
+& (Join-Path $PSScriptRoot 'test-remote-acceptance.ps1')
+
 Write-Host '==> Running portable framework/project validation' -ForegroundColor Cyan
 & (Join-Path $PSScriptRoot 'validate-framework-portable.ps1') -HexagonRoot $root
 

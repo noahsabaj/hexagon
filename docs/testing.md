@@ -46,12 +46,28 @@ build. Manifest, source-boundary, and portable checks fail if either side drifts
 
 ## Manual dedicated-server two-client runbook
 
-Create a source-bound evidence skeleton before starting the run:
+On a fresh persistence root, bootstrap authorization **before** the timed
+acceptance run. An authenticated account must already be able to use HL2RP's
+Access workspace so the two test accounts can receive the restricted
+entitlements needed for Civil Protection, scanner, restraint/search, and City
+Administration scenarios. For a local fresh-store setup, temporarily enter an
+operator Steam ID64 in the scene's `HL2RP Bootstrap Operators` component, use
+that authenticated editor session to grant the required entitlements, shut down
+cleanly so those grants are durable, then close/reload without saving the
+operator ID into the tracked scene. This is setup, not dedicated-server
+acceptance evidence. Confirm both exact source worktrees are clean afterward;
+do not publish a personal account ID or attest an editor-hosted setup run.
+
+Create the evidence directory and source-bound skeleton **outside both Git worktrees**.
+This is required because the release publisher rejects tracked or
+untracked worktree changes, including a manifest created beside the scripts:
 
 ```powershell
+$evidence = 'C:\HexagonReleaseEvidence\<run-id>'
+New-Item -ItemType Directory -Path $evidence
 ./tools/verify-remote-acceptance.ps1 `
   -SchemaRoot ../hl2rp-hexagon `
-  -EvidencePath ./remote-acceptance.json `
+  -EvidencePath "$evidence\remote-acceptance.json" `
   -HexagonSha <hexagon-40-character-sha> `
   -HL2RPSha <hl2rp-40-character-sha> `
   -WriteTemplate
@@ -70,15 +86,69 @@ and UTC start, capture, completion, and attestation times.
 Exercise every observation in the template. For each one, record a concrete
 description of what was observed and reference at least one contemporaneous
 artifact. Add screenshots, video, or traces where a raw log cannot show the UI
-or isolation result. Shut down cleanly, restart the dedicated server, and record
-the recovered sequence and digest after verifying characters, inventories,
-world items, entity state, and typed traits.
+or isolation result.
+
+For restart evidence, preserve the **complete raw server log from each server
+process** before s&box rotates or overwrites it. After the first process becomes
+quiescent and immediately before its persistence shutdown, it emits exactly one:
+
+```text
+HL2RP_RECOVERY_SNAPSHOT phase=pre_shutdown sequence=<positive-integer> digest=<lowercase-64-hex>
+```
+
+Wait for that line and `HEXAGON_DRAINED host`, copy that process's untouched log
+to `$evidence\server-pre-shutdown.log`, and only then restart the same dedicated
+server against the same persistence root and exact source commits. Successful
+recovery emits exactly one:
+
+```text
+HL2RP_RECOVERY_SNAPSHOT phase=post_restart sequence=<positive-integer> digest=<lowercase-64-hex>
+```
+
+Copy the restarted process's untouched log to
+`$evidence\server-post-restart.log`. Verify the restored characters,
+inventories, world items, entity state, and typed traits in both clients. The
+two sequence values and two digests must match exactly; otherwise the restart
+observation failed and must not be attested.
+
+Extract the values from the raw artifacts rather than retyping or constructing
+a marker file. This PowerShell fragment fails closed on missing, malformed, or
+duplicate markers and prints the values to enter under
+`recovery.pre_shutdown` and `recovery.post_restart`; keep each template
+`artifact_id` pointed at the corresponding hashed raw server log:
+
+```powershell
+$pattern = 'HL2RP_RECOVERY_SNAPSHOT phase={0} sequence=(?<sequence>[1-9][0-9]*) digest=(?<digest>[a-f0-9]{{64}})(?=[ \t]*\r?$)'
+$snapshots = @{}
+foreach ($phase in 'pre_shutdown', 'post_restart') {
+  $path = Join-Path $evidence "server-$($phase.Replace('_', '-')).log"
+  $matches = [regex]::Matches(
+    (Get-Content -LiteralPath $path -Raw),
+    ($pattern -f $phase),
+    [Text.RegularExpressions.RegexOptions]::Multiline)
+  if ($matches.Count -ne 1) { throw "$phase marker count was $($matches.Count), expected 1" }
+  $snapshots[$phase] = [pscustomobject]@{
+    sequence = [long]$matches[0].Groups['sequence'].Value
+    digest = $matches[0].Groups['digest'].Value
+  }
+}
+if ($snapshots.pre_shutdown.sequence -ne $snapshots.post_restart.sequence -or
+    $snapshots.pre_shutdown.digest -cne $snapshots.post_restart.digest) {
+  throw 'Restart did not recover the exact pre-shutdown state.'
+}
+$snapshots
+```
 
 Hash every referenced artifact, complete the named operator attestation, then
 pass the manifest to `tools/verify.ps1`. The validator rejects mismatched source
-SHAs, stale tracked-tree fingerprints, duplicate accounts or process instances, missing scenarios,
-unreferenced or changed artifacts, invalid timestamps, and incomplete recovery
-metadata. Its success means the manual evidence bundle is complete and has not
+SHAs, stale tracked-tree fingerprints, numerically duplicate accounts or process
+instances, non-Boolean attestations, missing scenarios, reused or aliased
+artifact paths, unreferenced or changed artifacts, timestamps more than five
+minutes in the future, ambiguous recovery markers, manifest/log disagreements,
+and non-identical pre-shutdown/post-restart snapshots. Exactly two distinct
+server-log artifacts are required, and the `restart_restores_all_state`
+observation must reference both raw
+server-log artifacts. Validator success means the manual evidence bundle is complete and has not
 changed since hashing; it does **not** execute or independently prove the remote
 scenarios. `-SkipRemoteAcceptance` therefore remains an explicitly incomplete
 local-only release check.
@@ -89,7 +159,7 @@ available, publish the protected release context with:
 ```powershell
 ./tools/publish-release-evidence.ps1 `
   -SchemaRoot ../hl2rp-hexagon `
-  -RemoteAcceptanceEvidence ./remote-acceptance.json `
+  -RemoteAcceptanceEvidence "$evidence\remote-acceptance.json" `
   -HexagonSha <hexagon-40-character-sha> `
   -HL2RPSha <hl2rp-40-character-sha>
 ```

@@ -128,7 +128,7 @@ if ($WriteTemplate) {
         }
     }
     $template = [ordered]@{
-        format = 'hexagon-v2-manual-remote-acceptance/2'
+        format = 'hexagon-v2-manual-remote-acceptance/3'
         evidence_kind = 'manual_operator_attestation'
         schema = 'hl2rp'
         runbook = 'hexagon/docs/testing.md#manual-dedicated-server-two-client-runbook'
@@ -153,10 +153,22 @@ if ($WriteTemplate) {
             [ordered]@{ role = 'A'; account_id = '0'; remote = $true },
             [ordered]@{ role = 'B'; account_id = '0'; remote = $true }
         )
-        recovery = [ordered]@{ sequence = 0; digest = '' }
+        recovery = [ordered]@{
+            pre_shutdown = [ordered]@{
+                sequence = 0
+                digest = ''
+                artifact_id = 'server-pre-shutdown-log'
+            }
+            post_restart = [ordered]@{
+                sequence = 0
+                digest = ''
+                artifact_id = 'server-post-restart-log'
+            }
+        }
         observations = @($observations)
         artifacts = @(
-            [ordered]@{ id = 'server-log'; role = 'server'; kind = 'log'; path = ''; sha256 = ''; captured_at_utc = '' },
+            [ordered]@{ id = 'server-pre-shutdown-log'; role = 'server'; kind = 'log'; path = ''; sha256 = ''; captured_at_utc = '' },
+            [ordered]@{ id = 'server-post-restart-log'; role = 'server'; kind = 'log'; path = ''; sha256 = ''; captured_at_utc = '' },
             [ordered]@{ id = 'client-a-log'; role = 'client_a'; kind = 'log'; path = ''; sha256 = ''; captured_at_utc = '' },
             [ordered]@{ id = 'client-b-log'; role = 'client_b'; kind = 'log'; path = ''; sha256 = ''; captured_at_utc = '' }
         )
@@ -174,8 +186,15 @@ if ($WriteTemplate) {
 if (-not (Test-Path -LiteralPath $evidenceFullPath -PathType Leaf)) {
     throw "Manual remote-acceptance evidence was not found at '$evidenceFullPath'."
 }
-$evidence = Get-Content -LiteralPath $evidenceFullPath -Raw | ConvertFrom-Json
-if ($evidence.format -cne 'hexagon-v2-manual-remote-acceptance/2' -or
+$evidenceJson = Get-Content -LiteralPath $evidenceFullPath -Raw
+$convertFromJson = Get-Command ConvertFrom-Json
+$evidence = if ($convertFromJson.Parameters.ContainsKey('DateKind')) {
+    $evidenceJson | ConvertFrom-Json -DateKind String
+}
+else {
+    $evidenceJson | ConvertFrom-Json
+}
+if ($evidence.format -cne 'hexagon-v2-manual-remote-acceptance/3' -or
     $evidence.evidence_kind -cne 'manual_operator_attestation' -or
     $evidence.schema -cne 'hl2rp') {
     throw 'Remote acceptance evidence is not the supported manual-attestation format.'
@@ -198,6 +217,7 @@ if (-not [Guid]::TryParse([string]$evidence.run_id, [ref]$runId) -or $runId -eq 
 $started = [DateTimeOffset]::MinValue
 $completed = [DateTimeOffset]::MinValue
 $attested = [DateTimeOffset]::MinValue
+$maximumAcceptedFutureTimestamp = [DateTimeOffset]::UtcNow.AddMinutes(5)
 if (-not [DateTimeOffset]::TryParse([string]$evidence.started_at_utc, [ref]$started) -or
     $started.Offset -ne [TimeSpan]::Zero -or
     -not [DateTimeOffset]::TryParse([string]$evidence.completed_at_utc, [ref]$completed) -or
@@ -225,23 +245,30 @@ if ($instances.Where({ [string]::IsNullOrWhiteSpace($_) }).Count -gt 0 -or
 
 $clients = @($evidence.clients)
 if ($clients.Count -ne 2 -or @(Compare-Object @('A', 'B') @($clients.role | Sort-Object)).Count -ne 0 -or
-    @($clients.account_id | Sort-Object -Unique).Count -ne 2 -or
-    $clients.Where({ -not [bool]$_.remote }).Count -ne 0) {
-    throw 'Evidence must identify two distinct authenticated remote client roles and accounts.'
+    $clients.Where({ $_.remote -isnot [bool] -or $_.remote -ne $true }).Count -ne 0) {
+    throw 'Evidence must identify two distinct authenticated remote client roles and accounts using actual JSON Boolean true remote flags.'
 }
+$authenticatedAccounts = [System.Collections.Generic.HashSet[UInt64]]::new()
 foreach ($client in $clients) {
     $account = [UInt64]0
     if (-not [UInt64]::TryParse([string]$client.account_id, [ref]$account) -or $account -eq 0) {
         throw "Remote client role '$($client.role)' has an invalid authenticated account ID."
     }
+    if (-not $authenticatedAccounts.Add($account)) {
+        throw 'Evidence must identify two distinct authenticated account IDs after numeric parsing.'
+    }
 }
-if ([long]$evidence.recovery.sequence -le 0 -or [string]$evidence.recovery.digest -notmatch '^[a-f0-9]{64}$') {
-    throw 'Remote acceptance recovery sequence/digest is invalid.'
-}
-
 $evidenceDirectory = Split-Path -Parent $evidenceFullPath
 $artifacts = @($evidence.artifacts)
 $artifactIds = @{}
+$artifactRecords = @{}
+$artifactPathComparer = if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+    [System.StringComparer]::OrdinalIgnoreCase
+}
+else {
+    [System.StringComparer]::Ordinal
+}
+$artifactPaths = [System.Collections.Generic.HashSet[string]]::new($artifactPathComparer)
 foreach ($artifact in $artifacts) {
     $id = [string]$artifact.id
     if ([string]::IsNullOrWhiteSpace($id) -or $artifactIds.ContainsKey($id)) {
@@ -253,7 +280,8 @@ foreach ($artifact in $artifacts) {
     }
     $captured = [DateTimeOffset]::MinValue
     if (-not [DateTimeOffset]::TryParse([string]$artifact.captured_at_utc, [ref]$captured) -or
-        $captured.Offset -ne [TimeSpan]::Zero -or $captured -lt $started -or $captured -gt $completed) {
+        $captured.Offset -ne [TimeSpan]::Zero -or $captured -lt $started -or $captured -gt $completed -or
+        $captured -gt $maximumAcceptedFutureTimestamp) {
         throw "Artifact '$id' has no in-run UTC capture timestamp."
     }
     $artifactPath = if ([System.IO.Path]::IsPathRooted([string]$artifact.path)) {
@@ -265,16 +293,99 @@ foreach ($artifact in $artifacts) {
     if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
         throw "Remote acceptance artifact '$artifactPath' is missing."
     }
+    $artifactPath = [System.IO.Path]::GetFullPath(
+        (Resolve-Path -LiteralPath $artifactPath).Path)
+    if (-not $artifactPaths.Add($artifactPath)) {
+        throw "Remote acceptance artifact path '$artifactPath' is reused by more than one artifact record."
+    }
     if ([string]$artifact.sha256 -notmatch '^[a-f0-9]{64}$' -or
         (Get-FileSha256 -Path $artifactPath) -cne [string]$artifact.sha256) {
         throw "Remote acceptance artifact hash mismatch for '$id'."
     }
     $artifactIds[$id] = $artifactPath
+    $artifactRecords[$id] = $artifact
 }
-foreach ($role in @('server', 'client_a', 'client_b')) {
+if ($completed -gt $maximumAcceptedFutureTimestamp -or
+    $attested -gt $maximumAcceptedFutureTimestamp) {
+    throw 'Run completion and attestation timestamps must be no later than five minutes in the future.'
+}
+foreach ($role in @('client_a', 'client_b')) {
     if (@($artifacts | Where-Object { $_.role -ceq $role -and $_.kind -ceq 'log' }).Count -ne 1) {
         throw "Evidence must contain exactly one contemporaneous '$role' log artifact."
     }
+}
+if (@($artifacts | Where-Object { $_.role -ceq 'server' -and $_.kind -ceq 'log' }).Count -ne 2) {
+    throw "Evidence must contain exactly two contemporaneous 'server' log artifacts."
+}
+
+function Get-VerifiedRecoverySnapshot {
+    param(
+        [Parameter(Mandatory)][string] $Phase,
+        [Parameter(Mandatory)][object] $Snapshot
+    )
+
+    $sequence = [long]0
+    if (-not [long]::TryParse([string]$Snapshot.sequence, [ref]$sequence) -or $sequence -le 0 -or
+        [string]$Snapshot.digest -cnotmatch '^[a-f0-9]{64}$') {
+        throw "Remote acceptance recovery snapshot '$Phase' has an invalid sequence or digest."
+    }
+
+    $artifactId = [string]$Snapshot.artifact_id
+    if ([string]::IsNullOrWhiteSpace($artifactId) -or -not $artifactIds.ContainsKey($artifactId)) {
+        throw "Remote acceptance recovery snapshot '$Phase' references missing artifact '$artifactId'."
+    }
+    $artifact = $artifactRecords[$artifactId]
+    if ([string]$artifact.role -cne 'server' -or [string]$artifact.kind -cne 'log') {
+        throw "Remote acceptance recovery snapshot '$Phase' must reference a hashed server log artifact."
+    }
+
+    $logText = Get-Content -LiteralPath $artifactIds[$artifactId] -Raw
+    $phasePattern = [regex]::Escape($Phase)
+    $markerPattern = "HL2RP_RECOVERY_SNAPSHOT[ `t]+phase=$phasePattern(?=[ `t])"
+    $markerMatches = [regex]::Matches($logText, $markerPattern)
+    if ($markerMatches.Count -ne 1) {
+        throw "Server log artifact '$artifactId' must contain exactly one recovery marker for phase '$Phase'; found $($markerMatches.Count)."
+    }
+
+    $snapshotPattern = "HL2RP_RECOVERY_SNAPSHOT[ `t]+phase=$phasePattern[ `t]+sequence=(?<sequence>[1-9][0-9]*)[ `t]+digest=(?<digest>[a-f0-9]{64})(?=[ `t]*`r?$)"
+    $snapshotMatches = [regex]::Matches(
+        $logText,
+        $snapshotPattern,
+        [System.Text.RegularExpressions.RegexOptions]::Multiline)
+    if ($snapshotMatches.Count -ne 1) {
+        throw "Server log artifact '$artifactId' does not contain one canonical '$Phase' recovery snapshot."
+    }
+
+    $loggedSequence = [long]::Parse(
+        $snapshotMatches[0].Groups['sequence'].Value,
+        [System.Globalization.CultureInfo]::InvariantCulture)
+    $loggedDigest = $snapshotMatches[0].Groups['digest'].Value
+    if ($loggedSequence -ne $sequence -or $loggedDigest -cne [string]$Snapshot.digest) {
+        throw "Recovery snapshot '$Phase' does not match its hashed server log artifact '$artifactId'."
+    }
+
+    return [pscustomobject]@{
+        Sequence = $sequence
+        Digest = [string]$Snapshot.digest
+        ArtifactId = $artifactId
+    }
+}
+
+$preShutdown = Get-VerifiedRecoverySnapshot `
+    -Phase 'pre_shutdown' `
+    -Snapshot $evidence.recovery.pre_shutdown
+$postRestart = Get-VerifiedRecoverySnapshot `
+    -Phase 'post_restart' `
+    -Snapshot $evidence.recovery.post_restart
+if ($preShutdown.ArtifactId -eq $postRestart.ArtifactId -or
+    $artifactPathComparer.Equals(
+        [string]$artifactIds[$preShutdown.ArtifactId],
+        [string]$artifactIds[$postRestart.ArtifactId])) {
+    throw 'Pre-shutdown and post-restart recovery snapshots must reference distinct server log artifacts and files.'
+}
+if ($preShutdown.Sequence -ne $postRestart.Sequence -or
+    $preShutdown.Digest -cne $postRestart.Digest) {
+    throw 'Pre-shutdown and post-restart recovery sequence/digest must match exactly.'
 }
 
 $observations = @($evidence.observations)
@@ -284,8 +395,10 @@ if ($observations.Count -ne $requiredObservations.Count -or
 }
 foreach ($name in $requiredObservations) {
     $observation = @($observations | Where-Object { $_.name -ceq $name })
-    if ($observation.Count -ne 1 -or $observation[0].passed -ne $true) {
-        throw "Manual remote acceptance observation '$name' is absent or was not attested as passing."
+    if ($observation.Count -ne 1 -or
+        $observation[0].passed -isnot [bool] -or
+        $observation[0].passed -ne $true) {
+        throw "Manual remote acceptance observation '$name' is absent or does not use actual JSON Boolean true for passed."
     }
     if ([string]::IsNullOrWhiteSpace([string]$observation[0].notes) -or
         [string]$observation[0].notes -match '^(pass|passed|ok)$') {
@@ -299,6 +412,14 @@ foreach ($name in $requiredObservations) {
         if (-not $artifactIds.ContainsKey([string]$reference)) {
             throw "Observation '$name' references unknown artifact '$reference'."
         }
+    }
+}
+
+$restartObservation = @($observations | Where-Object { $_.name -ceq 'restart_restores_all_state' })[0]
+$restartReferences = @($restartObservation.artifact_ids)
+foreach ($recoveryArtifactId in @($preShutdown.ArtifactId, $postRestart.ArtifactId) | Sort-Object -Unique) {
+    if ($recoveryArtifactId -cnotin $restartReferences) {
+        throw "Observation 'restart_restores_all_state' must reference recovery artifact '$recoveryArtifactId'."
     }
 }
 

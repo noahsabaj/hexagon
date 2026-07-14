@@ -114,13 +114,17 @@ public sealed class PackageLayoutTests
 
 		foreach ( var marker in new[]
 		{
-			"hexagon-v2-manual-remote-acceptance/2",
+			"hexagon-v2-manual-remote-acceptance/3",
 			"manual_operator_attestation",
 			"hexagon_sha",
 			"hl2rp_sha",
 			"source_fingerprint",
 			"ls-files --cached --others --exclude-standard",
 			"artifact_ids",
+			"pre_shutdown",
+			"post_restart",
+			"HL2RP_RECOVERY_SNAPSHOT",
+			"Pre-shutdown and post-restart recovery sequence/digest must match exactly.",
 			"operator.statement",
 			"does not execute or independently prove"
 		} )
@@ -129,6 +133,9 @@ public sealed class PackageLayoutTests
 		Assert.IsFalse( verifier.Contains( "HEXAGON_REMOTE_ASSERT", StringComparison.Ordinal ),
 			"A text sentinel must not be presented as executable remote acceptance." );
 		StringAssert.Contains( runbook, "Manual dedicated-server two-client runbook" );
+		StringAssert.Contains( runbook, "outside both Git worktrees" );
+		StringAssert.Contains( runbook, "HL2RP_RECOVERY_SNAPSHOT phase=pre_shutdown" );
+		StringAssert.Contains( runbook, "HL2RP_RECOVERY_SNAPSHOT phase=post_restart" );
 		StringAssert.Contains( runbook, "does **not** execute or independently prove" );
 	}
 

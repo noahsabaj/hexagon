@@ -14,7 +14,7 @@ also skips the authoritative engine whitelist, startup, hotload, and recovery
 evidence; a generated-project build alone does not prove those engine paths.
 
 .EXAMPLE
-./tools/verify.ps1 -RemoteAcceptanceEvidence ./remote-acceptance.json
+./tools/verify.ps1 -RemoteAcceptanceEvidence C:\HexagonReleaseEvidence\run-id\remote-acceptance.json
 
 .EXAMPLE
 ./tools/verify.ps1 -SkipRemoteAcceptance
