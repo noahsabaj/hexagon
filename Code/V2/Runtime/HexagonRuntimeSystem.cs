@@ -265,7 +265,11 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		{
 			try
 			{
-				session.Player.GameObject.Destroy();
+				// Connection-owned network objects can already be gone by the time the
+				// listener is notified. Component.DestroyGameObject() deliberately
+				// tolerates that teardown ordering instead of dereferencing a null
+				// GameObject during disconnect cleanup.
+				session.Player.DestroyGameObject();
 			}
 			finally
 			{
