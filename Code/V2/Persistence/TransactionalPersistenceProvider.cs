@@ -20,6 +20,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 	private readonly object _stateLock = new();
 	private Dictionary<DocumentAddress, CommittedState> _documents = new();
 	private Dictionary<string, HashSet<DocumentAddress>> _liveCollectionIndex = new( StringComparer.Ordinal );
+	private PersistenceInvariantDocumentIndex _invariantDocumentIndex = new();
 	private Dictionary<string, Type> _collectionTypes = new( StringComparer.Ordinal );
 	private readonly Dictionary<string, object> _repositories = new( StringComparer.Ordinal );
 	private readonly IPersistenceInvariantSet _invariants;
@@ -573,9 +574,22 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		}
 
 		IReadOnlyList<PersistenceInvariantIssue> invariantIssues;
+		PersistenceInvariantPreparation? invariantPreparation = null;
+		var incrementalInvariants = _invariants as IIncrementalPersistenceInvariantSet;
 		try
 		{
-			invariantIssues = _invariants.Validate( candidate );
+			if ( incrementalInvariants is not null )
+			{
+				invariantPreparation = incrementalInvariants.Prepare( candidate ) ??
+					throw new InvalidOperationException( "Incremental invariant preparation returned null." );
+				invariantIssues = invariantPreparation.Issues ??
+					throw new InvalidOperationException( "Incremental invariant preparation returned null issues." );
+			}
+			else
+			{
+				invariantIssues = _invariants.Validate( candidate ) ??
+					throw new InvalidOperationException( "Persistence invariant set returned null issues." );
+			}
 		}
 		catch ( Exception exception )
 		{
@@ -615,7 +629,8 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		}
 
 		var durabilityOutcome = durability.Value!;
-		var publication = CaptureSynchronous( () => PublishCommit( prepared ) );
+		var publication = CaptureSynchronous( () => PublishCommit(
+			prepared, incrementalInvariants, invariantPreparation ) );
 		if ( !publication.Succeeded )
 		{
 			var exception = publication.Exception!;
@@ -676,8 +691,14 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			if ( !state.IsDeleted ) index.Add( state.Address );
 		}
 
-		var candidate = BuildInvariantContext(
-			documents.Values, recovered.Sequence, recovered.CompactionGeneration, isRecovery: true );
+		var recoveredCandidates = documents.Values
+			.Where( state => !state.IsDeleted )
+			.ToDictionary( state => state.Address, ToCandidate );
+		var candidate = new PersistenceInvariantContext(
+			recovered.Sequence,
+			recovered.CompactionGeneration,
+			recoveredCandidates,
+			isRecovery: true );
 		var issues = _invariants.Validate( candidate );
 		if ( issues.Count > 0 )
 		{
@@ -685,11 +706,13 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			throw new PersistenceCorruptionException(
 				$"Recovered persistence invariant '{issue.Code}' failed at '{issue.Path}': {issue.Message}" );
 		}
+		if ( _invariants is IIncrementalPersistenceInvariantSet incremental ) incremental.Rebuild( candidate );
 
 		lock ( _stateLock )
 		{
 			_documents = documents;
 			_liveCollectionIndex = liveIndex;
+			_invariantDocumentIndex = new PersistenceInvariantDocumentIndex( recoveredCandidates.Values );
 			_collectionTypes = collectionTypes;
 			_storeId = recovered.StoreId;
 			_writerEpoch = recovered.WriterEpoch;
@@ -780,7 +803,10 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		};
 	}
 
-	private CommitReceipt PublishCommit( PreparedCommit prepared )
+	private CommitReceipt PublishCommit(
+		PreparedCommit prepared,
+		IIncrementalPersistenceInvariantSet? incrementalInvariants,
+		PersistenceInvariantPreparation? invariantPreparation )
 	{
 		lock ( _stateLock )
 		{
@@ -788,6 +814,9 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			{
 				Publish( state );
 			}
+			if ( incrementalInvariants is not null )
+				incrementalInvariants.Publish( invariantPreparation ??
+					throw new InvalidOperationException( "Incremental invariant publication has no preparation." ) );
 
 			_sequence = prepared.Batch.Sequence;
 		}
@@ -1051,19 +1080,15 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		long compactionGeneration,
 		bool isRecovery = false )
 	{
-		var previous = _documents.Values
-			.Where( state => !state.IsDeleted )
-			.ToDictionary( state => state.Address, ToCandidate );
-		var values = new Dictionary<DocumentAddress, PersistenceCandidateDocument>( previous );
+		var delta = new Dictionary<DocumentAddress, PersistenceCandidateDocument?>();
 		var changed = new HashSet<DocumentAddress>();
 		foreach ( var state in replacements )
 		{
 			changed.Add( state.Address );
-			if ( state.IsDeleted ) values.Remove( state.Address );
-			else values[state.Address] = ToCandidate( state );
+			delta[state.Address] = state.IsDeleted ? null : ToCandidate( state );
 		}
 		return new PersistenceInvariantContext(
-			sequence, compactionGeneration, values, previous, changed, isRecovery );
+			sequence, compactionGeneration, _invariantDocumentIndex, delta, changed, isRecovery );
 	}
 
 	private static PersistenceCandidateDocument ToCandidate( CommittedState state ) => new(
@@ -1087,10 +1112,12 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		if ( state.IsDeleted )
 		{
 			index.Remove( state.Address );
+			_invariantDocumentIndex.Remove( state.Address );
 		}
 		else
 		{
 			index.Add( state.Address );
+			_invariantDocumentIndex.Publish( ToCandidate( state ) );
 		}
 	}
 

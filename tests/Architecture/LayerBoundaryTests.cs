@@ -79,6 +79,109 @@ public sealed class LayerBoundaryTests
 	}
 
 	[TestMethod]
+	public void AuthoritativeBodyLifecycleUsesAnIndependentDormantUnownedNetworkRoot()
+	{
+		var playerBody = Path.Combine( V2Root(), "Runtime", "HexPlayerBody.cs" );
+		var source = SourceWithoutComments( playerBody );
+
+		StringAssert.Contains( source, "new GameObject( false, \"Hexagon Authoritative Body\" )" );
+		Assert.IsFalse( source.Contains( "new GameObject( GameObject, false", StringComparison.Ordinal ) );
+		StringAssert.Contains( source, "Owner = null!" );
+		StringAssert.Contains( source, "StartEnabled = false" );
+		StringAssert.Contains( source, "OwnerTransfer = OwnerTransfer.Fixed" );
+		StringAssert.Contains( source, "OrphanedMode = NetworkOrphaned.Destroy" );
+		StringAssert.Contains( source, "controller.UseInputControls = false" );
+		StringAssert.Contains( source, "Components.Get<PlayerController>( FindMode.EverythingInSelf )" );
+		StringAssert.Contains( source, "NetworkMode = NetworkMode.Never" );
+		StringAssert.Contains( source, "if ( _predictedBody is not null ) DestroyPredictedBody()" );
+		StringAssert.Contains( source, "AuthoritativeBodyReplacement.RequireActivated" );
+		StringAssert.Contains( source, "_candidate.Network.Refresh()" );
+	}
+
+	[TestMethod]
+	public void IdentityShellDestructionCleansIndependentAuthoritativeBodies()
+	{
+		var playerBody = Path.Combine( V2Root(), "Runtime", "HexPlayerBody.cs" );
+		var source = SourceWithoutComments( playerBody );
+		var onDestroy = source.IndexOf( "protected override void OnDestroy()", StringComparison.Ordinal );
+		var preparedCleanup = source.IndexOf( "_preparedBody?.Dispose()", onDestroy, StringComparison.Ordinal );
+		var activeCleanup = source.IndexOf( "DestroyAuthoritativeBody()", preparedCleanup, StringComparison.Ordinal );
+
+		Assert.IsGreaterThanOrEqualTo( 0, onDestroy );
+		Assert.IsGreaterThan( onDestroy, preparedCleanup );
+		Assert.IsGreaterThan( preparedCleanup, activeCleanup );
+	}
+
+	[TestMethod]
+	public void ClientInputCannotBecomeSpatialAuthority()
+	{
+		var playerBody = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexPlayerBody.cs" ) );
+		StringAssert.Contains( playerBody, "Rpc.Host( NetFlags.OwnerOnly | NetFlags.UnreliableNoDelay )" );
+		StringAssert.Contains( playerBody, "Rpc.Caller.Id != HostConnection.Id" );
+		StringAssert.Contains( playerBody, "_inputAdmission.TryBeginAttempt" );
+		StringAssert.Contains( playerBody, "_inputAdmission.TryAcceptCharged" );
+		StringAssert.Contains( playerBody, "HostInputAuthenticator" );
+		StringAssert.Contains( playerBody, "HasProcessedInput" );
+		StringAssert.Contains( playerBody, "ProcessedMovementState" );
+		StringAssert.Contains( playerBody, "PredictionReconciliation.Calculate" );
+		StringAssert.Contains( playerBody, "AuthoritativeBody" );
+		Assert.IsFalse( playerBody.Contains( "ProcessedInputSequence == 0", StringComparison.Ordinal ),
+			"Sequence zero is valid after wrap and cannot be used as the unprocessed-input sentinel." );
+		Assert.IsFalse( playerBody.Contains( "PlayableBody", StringComparison.Ordinal ) );
+
+		var runtime = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.cs" ) );
+		StringAssert.Contains( runtime, "connection.CanSpawnObjects = false" );
+		StringAssert.Contains( runtime, "connection.CanRefreshObjects = false" );
+		StringAssert.Contains( runtime, "connection.CanDestroyObjects = false" );
+		StringAssert.Contains( runtime, "PlayerInputSessionAuthentication.IsAuthorized" );
+	}
+
+	[TestMethod]
+	public void ProjectNetworkingAndPredictionCollisionDefaultsAreFailClosed()
+	{
+		var networking = File.ReadAllText( Path.Combine( ProductRoot(), "ProjectSettings", "Networking.config" ) );
+		foreach ( var permission in new[]
+		{
+			"\"ClientsCanSpawnObjects\": false",
+			"\"ClientsCanRefreshObjects\": false",
+			"\"ClientsCanDestroyObjects\": false"
+		} ) StringAssert.Contains( networking, permission );
+		StringAssert.Contains( networking, "\"UpdateRate\": 30" );
+		var collision = File.ReadAllText( Path.Combine( ProductRoot(), "ProjectSettings", "Collision.config" ) );
+		StringAssert.Contains( collision, "\"b\": \"prediction\"" );
+		StringAssert.Contains( collision, "\"r\": \"Ignore\"" );
+	}
+
+	[TestMethod]
+	public void HostServicePublicationAndRpcShutdownAreFailClosed()
+	{
+		var runtime = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.cs" ) );
+		StringAssert.Contains( runtime, "OperationResult<HexHostServicesComponent> CreateHostServices()" );
+		StringAssert.Contains( runtime, "HostServicePublication.RequirePublished" );
+		StringAssert.Contains( runtime, "servicesObject.NetworkSpawn" );
+		StringAssert.Contains( runtime, "if ( servicesObject.IsValid() ) servicesObject.Destroy()" );
+		StringAssert.Contains( runtime, "if ( hostServices.Failed )" );
+
+		var shutdown = runtime.IndexOf( "private async Task<OperationResult> ShutdownHostAsync()", StringComparison.Ordinal );
+		var commandDrain = runtime.IndexOf( "_hostOperations.DrainAsync()", shutdown, StringComparison.Ordinal );
+		var disconnect = runtime.IndexOf( "application.Disconnected", shutdown, StringComparison.Ordinal );
+		var applicationDrain = runtime.IndexOf( "application.DisposeAsync", shutdown, StringComparison.Ordinal );
+		var persistenceDrain = runtime.IndexOf( "persistence.ShutdownAsync", shutdown, StringComparison.Ordinal );
+		var persistenceDispose = runtime.IndexOf( "persistence.DisposeAsync", shutdown, StringComparison.Ordinal );
+		var quiescedEvidence = runtime.IndexOf( "application.CompleteQuiescedShutdown", shutdown, StringComparison.Ordinal );
+		Assert.IsGreaterThanOrEqualTo( 0, shutdown );
+		Assert.IsLessThan( commandDrain, disconnect, "Disconnect callbacks must revoke sessions before RPC dispatch drains." );
+		Assert.IsLessThan( applicationDrain, commandDrain, "RPC dispatch must finish before application disposal." );
+		Assert.IsLessThan( persistenceDrain, applicationDrain, "Application disposal must finish before persistence shutdown." );
+		Assert.IsLessThan( persistenceDispose, persistenceDrain, "Persistence must stop before it is disposed." );
+		Assert.IsLessThan( quiescedEvidence, persistenceDispose, "Quiesced evidence must follow persistence disposal." );
+
+		var services = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexHostServicesComponent.cs" ) );
+		StringAssert.Contains( services, "runtime.TryStartHostOperation" );
+		Assert.IsFalse( services.Contains( "_ = DispatchAsync", StringComparison.Ordinal ) );
+	}
+
+	[TestMethod]
 	public void ClientLayerDoesNotReferenceServerAggregatesOrPersistence()
 	{
 		var forbidden = new[]

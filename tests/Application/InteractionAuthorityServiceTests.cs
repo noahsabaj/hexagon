@@ -369,6 +369,7 @@ public sealed class InteractionAuthorityServiceTests
 		fixture.Service.Disconnected( fixture.Actor.ConnectionId );
 		Assert.IsFalse( fixture.HasGrant( disconnectedInventory ) );
 
+		fixture.Reconnect();
 		var invalidTargetInventory = InventoryId.New();
 		fixture.SetGrant( invalidTargetInventory );
 		fixture.BeginSession();
@@ -390,6 +391,7 @@ public sealed class InteractionAuthorityServiceTests
 			Directory = new FakeDirectory( Interactable );
 			Sessions = new InteractionSessionService( Clock );
 			Access = new InventoryAccessService();
+			Access.OpenConnection( Actor.ConnectionId );
 			Service = new InteractionAuthorityService(
 				World,
 				Directory,
@@ -408,6 +410,8 @@ public sealed class InteractionAuthorityServiceTests
 		public InteractionSessionService Sessions { get; }
 		public InventoryAccessService Access { get; }
 		public InteractionAuthorityService Service { get; }
+
+		public void Reconnect() => Access.OpenConnection( Actor.ConnectionId );
 
 		public void SetGrant( InventoryId inventoryId )
 		{

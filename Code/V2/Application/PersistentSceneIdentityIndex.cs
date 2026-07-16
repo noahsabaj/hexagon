@@ -47,6 +47,7 @@ public sealed class PersistentSceneIdentityIndex
 			if ( string.IsNullOrWhiteSpace( candidate.StablePath ) )
 				throw new ArgumentException( "Scene identity stable paths cannot be blank.", nameof(candidates) );
 			materialized.Add( candidate );
+			if ( candidate.Provenance != SceneIdentityProvenance.EditorAuthored ) continue;
 			pathCounts[candidate.StablePath] = pathCounts.GetValueOrDefault( candidate.StablePath ) + 1;
 			if ( candidate.Id is not null ) idCounts[candidate.Id.Value] = idCounts.GetValueOrDefault( candidate.Id.Value ) + 1;
 		}
@@ -58,7 +59,9 @@ public sealed class PersistentSceneIdentityIndex
 		{
 			var candidate = materialized[index];
 			string? diagnostic = null;
-			if ( pathCounts[candidate.StablePath] > 1 )
+			if ( candidate.Provenance != SceneIdentityProvenance.EditorAuthored )
+				diagnostic = $"Persistent scene entity '{candidate.StablePath}' originated from a runtime/network root; entity is disabled.";
+			else if ( pathCounts[candidate.StablePath] > 1 )
 				diagnostic = $"Persistent scene path '{candidate.StablePath}' is duplicated; entity is disabled.";
 			else if ( candidate.Id is null )
 				diagnostic = $"Persistent scene entity '{candidate.StablePath}' has no editor-authored ID.";
@@ -68,7 +71,10 @@ public sealed class PersistentSceneIdentityIndex
 			var resolution = new SceneIdentityResolution(
 				candidate.StablePath,
 				candidate.Id,
-				candidate.Id,
+				candidate.Provenance == SceneIdentityProvenance.EditorAuthored
+					? candidate.Id
+					: null,
+				candidate.Provenance,
 				diagnostic is null,
 				false,
 				diagnostic );

@@ -226,10 +226,7 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 			inventories,
 			activeAction );
 		if ( runtime.TryGetPlayer( recipient.Id, out var player ) )
-		{
 			player.HostApplyPublicSnapshot( publicSnapshot );
-			if ( !publicSnapshot.HasCharacter ) player.HostClearCharacter();
-		}
 		var scope = runtime.CaptureClientScope( recipient );
 		if ( scope.Failed ) return;
 		var encoded = SnapshotWireCodec.EncodeClientState( snapshot );
@@ -346,7 +343,17 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 			}
 			actor = stableActor.Value;
 		}
-		_ = DispatchAsync( runtime, actor, requestId, command );
+		if ( !runtime.TryStartHostOperation(
+			$"command:{requestId.Value:D}",
+			() => DispatchAsync( runtime, actor, requestId, command ) ) )
+		{
+			CompleteDispatch(
+				runtime,
+				actor,
+				requestId,
+				RuntimeOperationOutcome<OperationResult>.Success(
+					OperationResult.Failure( ErrorCode.Conflict, "The host is draining and no longer accepts commands." ) ) );
+		}
 	}
 
 	private async Task DispatchAsync(

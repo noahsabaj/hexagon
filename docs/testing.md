@@ -76,15 +76,35 @@ New-Item -ItemType Directory -Path $evidence
   -WriteTemplate
 ```
 
-Use the two exact source commits and tracked-tree fingerprint recorded in the
-template. The fingerprint covers the complete non-ignored working tree in both
-repositories except the generated remote-evidence manifest itself, including
-all tracked workflows, project files, configuration, and runtime assets. The
-publisher additionally requires both checkouts to be clean. Start one true
+Use the two exact source commits and effective-input fingerprint recorded in the
+format-v4 template. The fingerprint covers the canonical tracked bytes of every
+input in both repositories, including workflows, project files, configuration,
+and runtime assets. Ignored source or `ProjectSettings` configuration is a hard
+error; only explicit derived `bin`/`obj`, generated project metadata, and compiled
+asset outputs are permitted. The publisher additionally requires both checkouts
+to be clean. Start one true
 dedicated-server process and two remote client processes authenticated as the
 two different nonzero accounts recorded as roles A and B. Capture continuous
 raw logs from all three processes and record distinct process-instance labels
 and UTC start, capture, completion, and attestation times.
+
+On each machine, capture the runtime environment during the attested run and
+use the resulting JSON as the matching `environment` artifact:
+
+```powershell
+./tools/capture-release-environment.ps1 -SchemaRoot ../hl2rp-hexagon -Role server   -OutputPath "$evidence\server-environment.json"
+./tools/capture-release-environment.ps1 -SchemaRoot ../hl2rp-hexagon -Role client_a -OutputPath "$evidence\client-a-environment.json"
+./tools/capture-release-environment.ps1 -SchemaRoot ../hl2rp-hexagon -Role client_b -OutputPath "$evidence\client-b-environment.json"
+```
+
+Run each command on the machine for that role from clean checkouts of the exact
+source pair used by its game process. The capture binds the role to both source
+SHAs and the effective-input fingerprint, the resolved .NET runtime contract
+from the matching s&box runtime config, OS/runtime architecture, Steam app 590830
+build, s&box `.version`, role entry point, `engine2.dll`, and
+`Sandbox.Engine.dll`. All three roles must have the exact source/effective-input
+fingerprint and one engine/runtime fingerprint; the two clients must also have
+the same client executable hash.
 
 Exercise every observation in the template. For each one, record a concrete
 description of what was observed and reference at least one contemporaneous
@@ -146,7 +166,7 @@ Hash every referenced artifact, complete the named operator attestation, then
 pass the manifest to `tools/verify.ps1`. The validator rejects mismatched source
 SHAs, stale tracked-tree fingerprints, numerically duplicate accounts or process
 instances, non-Boolean attestations, missing scenarios, reused or aliased
-artifact paths, unreferenced or changed artifacts, timestamps more than five
+artifact paths, unreferenced or changed artifacts, environment drift, timestamps more than five
 minutes in the future, ambiguous recovery markers, manifest/log disagreements,
 and non-identical pre-shutdown/post-restart snapshots. Exactly two distinct
 server-log artifacts are required, and the `restart_restores_all_state`
@@ -157,7 +177,14 @@ scenarios. `-SkipRemoteAcceptance` therefore remains an explicitly incomplete
 local-only release check.
 
 After both source heads are final and the complete two-client bundle is
-available, publish the protected release context with:
+available, enable immutable releases once on the HL2RP evidence repository if
+the repository administrator has not already done so:
+
+```powershell
+gh api --method PATCH repos/noahsabaj/hl2rp-hexagon/immutable-releases -F enabled=true
+```
+
+Then publish the protected release context with:
 
 ```powershell
 ./tools/publish-release-evidence.ps1 `
@@ -166,3 +193,12 @@ available, publish the protected release context with:
   -HexagonSha <hexagon-40-character-sha> `
   -HL2RPSha <hl2rp-40-character-sha>
 ```
+
+The publisher checks authentication, immutable-release enablement, clean exact
+heads, the Hexagon lock, and effective inputs before changing GitHub state. It
+posts `pending` to both commits, reruns the full verifier, creates the
+deterministic `sbox-evidence-<run-id>` immutable prerelease bundle, and posts
+paired `success` statuses linked to that release. Any failure after pending is
+compensated with paired `failure` statuses; an existing release is accepted only
+when its run, tag, commits, body, asset length, and GitHub-reported SHA-256 asset
+digest match exactly.

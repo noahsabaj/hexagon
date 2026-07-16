@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -161,9 +162,14 @@ public sealed record PersistenceCandidateDocument(
 /// <summary>Read-only candidate view used identically before commit publication and during recovery.</summary>
 public sealed class PersistenceInvariantContext
 {
-	private readonly IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument> _documents;
-	private readonly IReadOnlyCollection<PersistenceCandidateDocument> _documentValues;
-	private readonly IReadOnlyDictionary<string, IReadOnlyList<PersistenceCandidateDocument>> _collections;
+	private static readonly IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument?> EmptyDelta =
+		new Dictionary<DocumentAddress, PersistenceCandidateDocument?>();
+	private readonly PersistenceInvariantDocumentIndex _baseIndex;
+	private readonly IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument?> _delta;
+	private readonly Dictionary<string, IReadOnlyList<PersistenceCandidateDocument>> _collections =
+		new( StringComparer.Ordinal );
+	private IReadOnlyCollection<PersistenceCandidateDocument>? _documentValues;
+	private long _visitedDocumentCount;
 
 	internal PersistenceInvariantContext(
 		long sequence,
@@ -175,18 +181,27 @@ public sealed class PersistenceInvariantContext
 	{
 		Sequence = sequence;
 		CompactionGeneration = compactionGeneration;
-		_documents = documents;
-		_documentValues = documents.Values.ToArray();
-		_collections = _documentValues
-			.GroupBy( document => document.Address.Collection, StringComparer.Ordinal )
-			.ToDictionary(
-				group => group.Key,
-				group => (IReadOnlyList<PersistenceCandidateDocument>)group
-					.OrderBy( document => document.Address.Key, StringComparer.Ordinal )
-					.ToArray(),
-				StringComparer.Ordinal );
+		_baseIndex = new PersistenceInvariantDocumentIndex( documents.Values );
+		_delta = EmptyDelta;
 		PreviousDocuments = previousDocuments ?? new Dictionary<DocumentAddress, PersistenceCandidateDocument>();
 		ChangedAddresses = changedAddresses ?? new HashSet<DocumentAddress>();
+		IsRecovery = isRecovery;
+	}
+
+	internal PersistenceInvariantContext(
+		long sequence,
+		long compactionGeneration,
+		PersistenceInvariantDocumentIndex baseIndex,
+		IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument?> delta,
+		IReadOnlySet<DocumentAddress> changedAddresses,
+		bool isRecovery = false )
+	{
+		Sequence = sequence;
+		CompactionGeneration = compactionGeneration;
+		_baseIndex = baseIndex ?? throw new ArgumentNullException( nameof(baseIndex) );
+		_delta = delta ?? throw new ArgumentNullException( nameof(delta) );
+		PreviousDocuments = baseIndex.Documents;
+		ChangedAddresses = changedAddresses ?? throw new ArgumentNullException( nameof(changedAddresses) );
 		IsRecovery = isRecovery;
 	}
 
@@ -195,20 +210,126 @@ public sealed class PersistenceInvariantContext
 	public bool IsRecovery { get; }
 	public IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument> PreviousDocuments { get; }
 	public IReadOnlySet<DocumentAddress> ChangedAddresses { get; }
-	public IReadOnlyCollection<PersistenceCandidateDocument> Documents => _documentValues;
+	public long VisitedDocumentCount => Interlocked.Read( ref _visitedDocumentCount );
+	public IReadOnlyCollection<PersistenceCandidateDocument> Documents =>
+		_documentValues ??= MaterializeDocuments();
+
+	public IReadOnlyList<PersistenceCandidateDocument> Collection( string collection )
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace( collection );
+		if ( _collections.TryGetValue( collection, out var documents ) ) return documents;
+		var values = _baseIndex.Collection( collection )
+			.ToDictionary( document => document.Address, document => document );
+		foreach ( var change in _delta )
+		{
+			if ( change.Key.Collection != collection ) continue;
+			if ( change.Value is null ) values.Remove( change.Key );
+			else values[change.Key] = change.Value;
+		}
+		documents = values.Values
+			.OrderBy( document => document.Address.Key, StringComparer.Ordinal )
+			.ToArray();
+		RecordVisits( documents.Count );
+		_collections.Add( collection, documents );
+		return documents;
+	}
+
+	public bool TryGet( DocumentAddress address, out PersistenceCandidateDocument? document )
+	{
+		RecordVisits( 1 );
+		if ( _delta.TryGetValue( address, out document ) ) return document is not null;
+		return _baseIndex.Documents.TryGetValue( address, out document );
+	}
+
+	public bool TryGetPrevious( DocumentAddress address, out PersistenceCandidateDocument? document )
+	{
+		RecordVisits( 1 );
+		return PreviousDocuments.TryGetValue( address, out document );
+	}
+
+	internal void RecordVisitedDocuments( int count )
+	{
+		if ( count < 0 ) throw new ArgumentOutOfRangeException( nameof(count) );
+		RecordVisits( count );
+	}
+
+	private IReadOnlyCollection<PersistenceCandidateDocument> MaterializeDocuments()
+	{
+		var values = new Dictionary<DocumentAddress, PersistenceCandidateDocument>( _baseIndex.Documents );
+		foreach ( var change in _delta )
+		{
+			if ( change.Value is null ) values.Remove( change.Key );
+			else values[change.Key] = change.Value;
+		}
+		var documents = values.Values.ToArray();
+		RecordVisits( documents.Length );
+		return documents;
+	}
+
+	private void RecordVisits( int count ) => Interlocked.Add( ref _visitedDocumentCount, count );
+}
+
+internal sealed class PersistenceInvariantDocumentIndex
+{
+	private readonly Dictionary<DocumentAddress, PersistenceCandidateDocument> _documents = new();
+	private readonly IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument> _readOnlyDocuments;
+	private readonly Dictionary<string, SortedDictionary<string, PersistenceCandidateDocument>> _collections =
+		new( StringComparer.Ordinal );
+
+	public PersistenceInvariantDocumentIndex() =>
+		_readOnlyDocuments = new ReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument>( _documents );
+
+	public PersistenceInvariantDocumentIndex( IEnumerable<PersistenceCandidateDocument> documents ) : this()
+	{
+		foreach ( var document in documents ) Publish( document );
+	}
+
+	public IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument> Documents => _readOnlyDocuments;
 
 	public IReadOnlyList<PersistenceCandidateDocument> Collection( string collection ) =>
 		_collections.TryGetValue( collection, out var documents )
-			? documents
+			? documents.Values.ToArray()
 			: Array.Empty<PersistenceCandidateDocument>();
 
-	public bool TryGet( DocumentAddress address, out PersistenceCandidateDocument? document ) =>
-		_documents.TryGetValue( address, out document );
+	public void Publish( PersistenceCandidateDocument document )
+	{
+		_documents[document.Address] = document;
+		if ( !_collections.TryGetValue( document.Address.Collection, out var collection ) )
+		{
+			collection = new SortedDictionary<string, PersistenceCandidateDocument>( StringComparer.Ordinal );
+			_collections.Add( document.Address.Collection, collection );
+		}
+		collection[document.Address.Key] = document;
+	}
+
+	public void Remove( DocumentAddress address )
+	{
+		_documents.Remove( address );
+		if ( !_collections.TryGetValue( address.Collection, out var collection ) ) return;
+		collection.Remove( address.Key );
+		if ( collection.Count == 0 ) _collections.Remove( address.Collection );
+	}
 }
 
 public interface IPersistenceInvariantSet
 {
 	IReadOnlyList<PersistenceInvariantIssue> Validate( PersistenceInvariantContext context );
+}
+
+public sealed record PersistenceInvariantPreparation(
+	IReadOnlyList<PersistenceInvariantIssue> Issues,
+	object? PublicationState = null );
+
+/// <summary>
+/// Optional commit-time incremental invariant path. Prepare must not mutate the
+/// committed invariant index. Publish runs only after the commit is durable;
+/// Rebuild reconstructs the index from a fully validated recovery view.
+/// </summary>
+public interface IIncrementalPersistenceInvariantSet : IPersistenceInvariantSet
+{
+	PersistenceInvariantPreparation Prepare( PersistenceInvariantContext context );
+	void Publish( PersistenceInvariantPreparation preparation );
+	void Rebuild( PersistenceInvariantContext context );
 }
 
 public sealed class EmptyPersistenceInvariantSet : IPersistenceInvariantSet

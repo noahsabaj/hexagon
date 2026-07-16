@@ -24,6 +24,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'release-inputs.ps1')
+
 $requiredObservations = @(
     'character_ownership_isolated',
     'capability_denials_enforced',
@@ -52,50 +54,7 @@ function Get-RepositoryHead {
 
 function Get-SourceFingerprint {
     param([Parameter(Mandatory)][object[]] $Repositories)
-
-    $sha = [System.Security.Cryptography.IncrementalHash]::CreateHash(
-        [System.Security.Cryptography.HashAlgorithmName]::SHA256)
-    try {
-        foreach ($repository in $Repositories) {
-            $resolved = (Resolve-Path -LiteralPath ([string]$repository.Root)).Path.TrimEnd('\')
-            $global:LASTEXITCODE = 0
-            [string[]]$tracked = @(& git -C $resolved ls-files --cached --others --exclude-standard)
-            if ($LASTEXITCODE -ne 0) {
-                throw "Could not enumerate tracked release inputs for '$resolved'."
-            }
-            [Array]::Sort($tracked, [System.StringComparer]::Ordinal)
-            foreach ($trackedPath in $tracked) {
-                $relative = $trackedPath.Replace('\', '/')
-                # Evidence manifests are outputs of this verifier, not release inputs.
-                if ($relative -match '(^|/)remote-acceptance(?:[.-][^/]*)?\.json$') { continue }
-                $filePath = Join-Path $resolved $relative.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
-                if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
-                    # A dirty pre-commit worktree can contain an indexed deletion. The release
-                    # publisher separately requires a clean checkout, where every enumerated
-                    # path is tracked and present; template verification still fingerprints the
-                    # exact current tree used by local remediation checks.
-                    continue
-                }
-                $pathBytes = [System.Text.Encoding]::UTF8.GetBytes(
-                    "$([string]$repository.Label)/$relative`n")
-                $sha.AppendData($pathBytes)
-                $stream = [System.IO.File]::OpenRead($filePath)
-                try {
-                    $buffer = [byte[]]::new(65536)
-                    while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-                        $sha.AppendData($buffer, 0, $read)
-                    }
-                }
-                finally {
-                    $stream.Dispose()
-                }
-            }
-        }
-        return ([BitConverter]::ToString($sha.GetHashAndReset()) -replace '-', '').ToLowerInvariant()
-    }
-    finally {
-        $sha.Dispose()
-    }
+    return (Get-EffectiveReleaseInputs -Repositories $Repositories).Fingerprint
 }
 
 function Get-FileSha256 {
@@ -128,7 +87,7 @@ if ($WriteTemplate) {
         }
     }
     $template = [ordered]@{
-        format = 'hexagon-v2-manual-remote-acceptance/3'
+        format = 'hexagon-v2-manual-remote-acceptance/4'
         evidence_kind = 'manual_operator_attestation'
         schema = 'hl2rp'
         runbook = 'hexagon/docs/testing.md#manual-dedicated-server-two-client-runbook'
@@ -148,6 +107,11 @@ if ($WriteTemplate) {
             server_instance = ''
             client_a_instance = ''
             client_b_instance = ''
+            runtime_artifact_ids = [ordered]@{
+                server = 'server-environment'
+                client_a = 'client-a-environment'
+                client_b = 'client-b-environment'
+            }
         }
         clients = @(
             [ordered]@{ role = 'A'; account_id = '0'; remote = $true },
@@ -170,7 +134,10 @@ if ($WriteTemplate) {
             [ordered]@{ id = 'server-pre-shutdown-log'; role = 'server'; kind = 'log'; path = ''; sha256 = ''; captured_at_utc = '' },
             [ordered]@{ id = 'server-post-restart-log'; role = 'server'; kind = 'log'; path = ''; sha256 = ''; captured_at_utc = '' },
             [ordered]@{ id = 'client-a-log'; role = 'client_a'; kind = 'log'; path = ''; sha256 = ''; captured_at_utc = '' },
-            [ordered]@{ id = 'client-b-log'; role = 'client_b'; kind = 'log'; path = ''; sha256 = ''; captured_at_utc = '' }
+            [ordered]@{ id = 'client-b-log'; role = 'client_b'; kind = 'log'; path = ''; sha256 = ''; captured_at_utc = '' },
+            [ordered]@{ id = 'server-environment'; role = 'server'; kind = 'environment'; path = ''; sha256 = ''; captured_at_utc = '' },
+            [ordered]@{ id = 'client-a-environment'; role = 'client_a'; kind = 'environment'; path = ''; sha256 = ''; captured_at_utc = '' },
+            [ordered]@{ id = 'client-b-environment'; role = 'client_b'; kind = 'environment'; path = ''; sha256 = ''; captured_at_utc = '' }
         )
     }
     $directory = Split-Path -Parent $evidenceFullPath
@@ -194,7 +161,7 @@ $evidence = if ($convertFromJson.Parameters.ContainsKey('DateKind')) {
 else {
     $evidenceJson | ConvertFrom-Json
 }
-if ($evidence.format -cne 'hexagon-v2-manual-remote-acceptance/3' -or
+if ($evidence.format -cne 'hexagon-v2-manual-remote-acceptance/4' -or
     $evidence.evidence_kind -cne 'manual_operator_attestation' -or
     $evidence.schema -cne 'hl2rp') {
     throw 'Remote acceptance evidence is not the supported manual-attestation format.'
@@ -274,7 +241,7 @@ foreach ($artifact in $artifacts) {
     if ([string]::IsNullOrWhiteSpace($id) -or $artifactIds.ContainsKey($id)) {
         throw "Artifact ID '$id' is blank or duplicated."
     }
-    if ([string]$artifact.kind -notin @('log', 'screenshot', 'video', 'trace') -or
+    if ([string]$artifact.kind -notin @('log', 'screenshot', 'video', 'trace', 'environment') -or
         [string]$artifact.role -notin @('server', 'client_a', 'client_b', 'observer')) {
         throw "Artifact '$id' has an unsupported kind or role."
     }
@@ -309,6 +276,115 @@ if ($completed -gt $maximumAcceptedFutureTimestamp -or
     $attested -gt $maximumAcceptedFutureTimestamp) {
     throw 'Run completion and attestation timestamps must be no later than five minutes in the future.'
 }
+
+$runtimeArtifactIds = @{
+    server = [string]$evidence.environment.runtime_artifact_ids.server
+    client_a = [string]$evidence.environment.runtime_artifact_ids.client_a
+    client_b = [string]$evidence.environment.runtime_artifact_ids.client_b
+}
+$runtimeEnvironments = @{}
+foreach ($role in @('server', 'client_a', 'client_b')) {
+    $artifactId = $runtimeArtifactIds[$role]
+    if ([string]::IsNullOrWhiteSpace($artifactId) -or -not $artifactRecords.ContainsKey($artifactId)) {
+        throw "Runtime environment role '$role' references missing artifact '$artifactId'."
+    }
+    $artifact = $artifactRecords[$artifactId]
+    if ([string]$artifact.role -cne $role -or [string]$artifact.kind -cne 'environment') {
+        throw "Runtime environment artifact '$artifactId' must have role '$role' and kind 'environment'."
+    }
+    $runtimeJson = Get-Content -LiteralPath $artifactIds[$artifactId] -Raw
+    $runtime = if ($convertFromJson.Parameters.ContainsKey('DateKind')) {
+        $runtimeJson | ConvertFrom-Json -DateKind String
+    }
+    else {
+        $runtimeJson | ConvertFrom-Json
+    }
+    if ([string]$runtime.format -cne 'hexagon-v2-runtime-environment/1' -or
+        [string]$runtime.role -cne $role) {
+        throw "Runtime environment artifact '$artifactId' has an unsupported format or role."
+    }
+    $runtimeCaptured = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse([string]$runtime.captured_at_utc, [ref]$runtimeCaptured) -or
+        $runtimeCaptured.Offset -ne [TimeSpan]::Zero -or
+        $runtimeCaptured -lt $started -or $runtimeCaptured -gt $completed -or
+        $runtimeCaptured -gt $maximumAcceptedFutureTimestamp) {
+        throw "Runtime environment artifact '$artifactId' was not captured during the attested run."
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$runtime.os.description) -or
+        [string]::IsNullOrWhiteSpace([string]$runtime.os.architecture) -or
+        [string]$runtime.source.hexagon_sha -cnotmatch '^[a-f0-9]{40}$' -or
+        [string]$runtime.source.hl2rp_sha -cnotmatch '^[a-f0-9]{40}$' -or
+        [string]$runtime.source.effective_input_fingerprint -cnotmatch '^[a-f0-9]{64}$' -or
+        [string]::IsNullOrWhiteSpace([string]$runtime.dotnet.framework) -or
+        [string]::IsNullOrWhiteSpace([string]$runtime.dotnet.requested_version) -or
+        [string]::IsNullOrWhiteSpace([string]$runtime.dotnet.version) -or
+        [string]::IsNullOrWhiteSpace([string]$runtime.dotnet.architecture) -or
+        [string]::IsNullOrWhiteSpace([string]$runtime.dotnet.runtime_config_file_name) -or
+        [string]$runtime.dotnet.runtime_config_sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+        [int]$runtime.sbox.steam_app_id -ne 590830 -or
+        [string]$runtime.sbox.steam_build_id -cnotmatch '^[0-9]+$' -or
+        [string]::IsNullOrWhiteSpace([string]$runtime.sbox.version) -or
+        [string]$runtime.sbox.version_sha256 -cnotmatch '^[a-f0-9]{64}$') {
+        throw "Runtime environment artifact '$artifactId' is incomplete."
+    }
+    if ([string]$runtime.source.hexagon_sha -cne $HexagonSha -or
+        [string]$runtime.source.hl2rp_sha -cne $HL2RPSha -or
+        [string]$runtime.source.effective_input_fingerprint -cne $fingerprint) {
+        throw "Runtime environment role '$role' does not match the exact source/effective-input fingerprint."
+    }
+    $runtimeFiles = @($runtime.sbox.files)
+    $expectedRuntimeFiles = [ordered]@{
+        entry_point = if ($role -ceq 'server') { 'sbox-server.exe' } else { 'sbox.exe' }
+        engine2 = 'engine2.dll'
+        sandbox_engine = 'Sandbox.Engine.dll'
+    }
+    if ($runtimeFiles.Count -ne $expectedRuntimeFiles.Count) {
+        throw "Runtime environment artifact '$artifactId' must contain exactly three runtime file records."
+    }
+    foreach ($expectedRuntimeFile in $expectedRuntimeFiles.GetEnumerator()) {
+        $matches = @($runtimeFiles | Where-Object { [string]$_.name -ceq $expectedRuntimeFile.Key })
+        if ($matches.Count -ne 1 -or
+            [string]$matches[0].file_name -cne [string]$expectedRuntimeFile.Value -or
+            [string]$matches[0].sha256 -cnotmatch '^[a-f0-9]{64}$') {
+            throw "Runtime environment role '$role' must hash exact file '$($expectedRuntimeFile.Value)' as '$($expectedRuntimeFile.Key)'."
+        }
+    }
+    $runtimeEnvironments[$role] = $runtime
+}
+
+function Get-RuntimeFileHash {
+    param(
+        [Parameter(Mandatory)][object] $Runtime,
+        [Parameter(Mandatory)][string] $Name
+    )
+    return [string]@($Runtime.sbox.files | Where-Object { $_.name -ceq $Name })[0].sha256
+}
+
+$referenceRuntime = $runtimeEnvironments['server']
+foreach ($role in @('client_a', 'client_b')) {
+    $runtime = $runtimeEnvironments[$role]
+    foreach ($property in @('steam_build_id', 'version', 'version_sha256')) {
+        if ([string]$runtime.sbox.$property -cne [string]$referenceRuntime.sbox.$property) {
+            throw "Runtime environment role '$role' does not match the server s&box fingerprint."
+        }
+    }
+    if ([string]$runtime.os.architecture -cne [string]$referenceRuntime.os.architecture -or
+        [string]$runtime.dotnet.framework -cne [string]$referenceRuntime.dotnet.framework -or
+        [string]$runtime.dotnet.requested_version -cne [string]$referenceRuntime.dotnet.requested_version -or
+        [string]$runtime.dotnet.version -cne [string]$referenceRuntime.dotnet.version -or
+        [string]$runtime.dotnet.architecture -cne [string]$referenceRuntime.dotnet.architecture -or
+        (Get-RuntimeFileHash -Runtime $runtime -Name 'engine2') -cne
+            (Get-RuntimeFileHash -Runtime $referenceRuntime -Name 'engine2') -or
+        (Get-RuntimeFileHash -Runtime $runtime -Name 'sandbox_engine') -cne
+            (Get-RuntimeFileHash -Runtime $referenceRuntime -Name 'sandbox_engine')) {
+        throw "Runtime environment role '$role' does not match the server engine/runtime fingerprint."
+    }
+}
+if ((Get-RuntimeFileHash -Runtime $runtimeEnvironments['client_a'] -Name 'entry_point') -cne
+    (Get-RuntimeFileHash -Runtime $runtimeEnvironments['client_b'] -Name 'entry_point')) {
+    throw 'The two client entry-point hashes do not match.'
+}
+
 foreach ($role in @('client_a', 'client_b')) {
     if (@($artifacts | Where-Object { $_.role -ceq $role -and $_.kind -ceq 'log' }).Count -ne 1) {
         throw "Evidence must contain exactly one contemporaneous '$role' log artifact."
@@ -421,6 +497,28 @@ foreach ($recoveryArtifactId in @($preShutdown.ArtifactId, $postRestart.Artifact
     if ($recoveryArtifactId -cnotin $restartReferences) {
         throw "Observation 'restart_restores_all_state' must reference recovery artifact '$recoveryArtifactId'."
     }
+}
+
+$referencedArtifactIds = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::Ordinal)
+foreach ($artifactId in $runtimeArtifactIds.Values) {
+    [void]$referencedArtifactIds.Add([string]$artifactId)
+}
+foreach ($observation in $observations) {
+    foreach ($artifactId in @($observation.artifact_ids)) {
+        [void]$referencedArtifactIds.Add([string]$artifactId)
+    }
+}
+[void]$referencedArtifactIds.Add($preShutdown.ArtifactId)
+[void]$referencedArtifactIds.Add($postRestart.ArtifactId)
+$unreferencedArtifactIds = @(
+    $artifacts |
+        ForEach-Object { [string]$_.id } |
+        Where-Object { -not $referencedArtifactIds.Contains($_) }
+)
+if ($unreferencedArtifactIds.Count -ne 0) {
+    [Array]::Sort($unreferencedArtifactIds, [System.StringComparer]::Ordinal)
+    throw "Remote acceptance artifacts are unreferenced: $($unreferencedArtifactIds -join ', ')."
 }
 
 Write-Host "Manual remote-acceptance evidence is complete and artifact-consistent for source $fingerprint." -ForegroundColor Green

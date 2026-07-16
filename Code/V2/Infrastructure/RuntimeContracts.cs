@@ -119,4 +119,5 @@ public interface IHexHostApplication : IAsyncDisposable
 		RpcActor actor,
 		ClientCommand command,
 		CancellationToken cancellationToken = default );
+	OperationResult CompleteQuiescedShutdown( PersistenceShutdownResult persistenceShutdown );
 }

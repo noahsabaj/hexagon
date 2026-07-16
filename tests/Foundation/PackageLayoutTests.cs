@@ -236,12 +236,17 @@ public sealed class PackageLayoutTests
 
 		foreach ( var marker in new[]
 		{
-			"hexagon-v2-manual-remote-acceptance/3",
+			"hexagon-v2-manual-remote-acceptance/4",
 			"manual_operator_attestation",
 			"hexagon_sha",
 			"hl2rp_sha",
 			"source_fingerprint",
-			"ls-files --cached --others --exclude-standard",
+			"runtime_artifact_ids",
+			"hexagon-v2-runtime-environment/1",
+			"runtime.source.effective_input_fingerprint",
+			"runtime_config_sha256",
+			"engine/runtime fingerprint",
+			"artifacts are unreferenced",
 			"artifact_ids",
 			"pre_shutdown",
 			"post_restart",
@@ -259,6 +264,42 @@ public sealed class PackageLayoutTests
 		StringAssert.Contains( runbook, "HL2RP_RECOVERY_SNAPSHOT phase=pre_shutdown" );
 		StringAssert.Contains( runbook, "HL2RP_RECOVERY_SNAPSHOT phase=post_restart" );
 		StringAssert.Contains( runbook, "does **not** execute or independently prove" );
+	}
+
+	[TestMethod]
+	public void ReleaseEvidencePublisherIsEffectiveInputBoundAndFailureCompensating()
+	{
+		var hexagon = RepositoryRoots.FindHexagon();
+		var publisher = File.ReadAllText( Path.Combine(
+			hexagon, "tools", "publish-release-evidence.ps1" ) );
+		var inputPolicy = File.ReadAllText( Path.Combine(
+			hexagon, "tools", "release-inputs.ps1" ) );
+		var bundle = File.ReadAllText( Path.Combine(
+			hexagon, "tools", "release-evidence-bundle.ps1" ) );
+
+		foreach ( var marker in new[]
+		{
+			"Get-EffectiveReleaseInputs",
+			"-RequireClean",
+			"immutable-releases",
+			"sbox-evidence-$runId",
+			"-State pending",
+			"-State success",
+			"Publish-PairedFailure",
+			"statusPublicationStarted",
+			"matchingAssets[0].digest",
+			"Get-ReleaseTagCommit",
+			"target_url=$TargetUrl",
+			"New-ReleaseEvidenceBundle"
+		} )
+			StringAssert.Contains( publisher, marker );
+
+		StringAssert.Contains( inputPolicy, "Ignored release material exists" );
+		StringAssert.Contains( inputPolicy, "Assert-GeneratedCompileInputsTracked" );
+		StringAssert.Contains( inputPolicy, "Add-ReleaseInputFileBytes" );
+		StringAssert.Contains( inputPolicy, "Code/Properties/launchSettings.json" );
+		StringAssert.Contains( bundle, "hexagon-v2-release-evidence-bundle/1" );
+		StringAssert.Contains( bundle, "1980, 1, 1" );
 	}
 
 	private static Dictionary<string, string> EnumerateAssets( string projectRoot )

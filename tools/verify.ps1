@@ -65,6 +65,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'release-inputs.ps1')
+
 $hexagonRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($SchemaRoot)) {
     $SchemaRoot = Join-Path (Split-Path -Parent $hexagonRoot) 'hl2rp-hexagon'
@@ -300,6 +302,21 @@ if (-not $SkipSboxBuild) {
     }
     Write-Host "==> Verified generated HL2RP source binding: $expectedLibraryProject" -ForegroundColor Cyan
 
+    $releaseRepositories = @(
+        [pscustomobject]@{ Label = 'hexagon'; Root = $hexagonRoot },
+        [pscustomobject]@{ Label = 'hl2rp-hexagon'; Root = $schemaRootPath }
+    )
+    [void](Get-EffectiveReleaseInputs -Repositories $releaseRepositories)
+    Assert-GeneratedCompileInputsTracked `
+        -ProjectPath $generatedLibraryProject `
+        -Repositories $releaseRepositories `
+        -AllowNonIgnoredUntracked
+    Assert-GeneratedCompileInputsTracked `
+        -ProjectPath $generatedProject `
+        -Repositories $releaseRepositories `
+        -AllowNonIgnoredUntracked
+    Write-Host '==> Verified generated Compile items are tracked or nonignored-untracked effective inputs' -ForegroundColor Cyan
+
     if (-not $NoRestore) {
         Invoke-CheckedCommand -Description 'Restoring the generated s&box project' -FilePath 'dotnet' -Arguments @('restore', $generatedProject, '--nologo')
     }
@@ -307,7 +324,7 @@ if (-not $SkipSboxBuild) {
     Invoke-CheckedCommand -Description 'Building the generated s&box project with warnings as errors' -FilePath 'dotnet' -Arguments @(
         'build',
         $generatedProject,
-        '--configuration', 'Debug',
+        '--configuration', 'Release',
         '--no-restore',
         '--nologo',
         '--disable-build-servers',

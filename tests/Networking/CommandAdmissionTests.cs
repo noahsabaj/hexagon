@@ -226,6 +226,18 @@ public sealed class CommandAdmissionTests
 	}
 
 	[TestMethod]
+	public void ReconciliationPendingErrorCodeRoundTripsWithoutDowngrade()
+	{
+		var decoded = OperationResultWireContract.Decode(
+			false,
+			(int)ErrorCode.ReconciliationPending,
+			"committed and pending",
+			0 );
+
+		Assert.AreEqual( ErrorCode.ReconciliationPending, decoded.Error!.Code );
+	}
+
+	[TestMethod]
 	public async Task ParallelBeginFinishAndDisconnectPreserveTheActiveCapAndState()
 	{
 		for ( var iteration = 0; iteration < 50; iteration++ )

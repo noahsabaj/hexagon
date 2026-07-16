@@ -23,13 +23,14 @@ public sealed class DomainInvariantReport
 /// Neutral startup/test validator for cross-document invariants that cannot be
 /// represented by a single aggregate revision.
 /// </summary>
-public sealed class DomainInvariantValidator : IPersistenceInvariantSet
+public sealed class DomainInvariantValidator : IIncrementalPersistenceInvariantSet
 {
 	private readonly DomainRepositories? _repositories;
 	private readonly PersistedTypeRegistry _types;
 	private readonly CompiledSchema _schema;
 	private readonly IItemShapeCatalog _shapes;
 	private readonly SchemaPersistenceInvariantProfile _persistenceProfile;
+	private readonly DomainInvariantDependencyIndex _dependencyIndex = new();
 
 	public DomainInvariantValidator(
 		DomainRepositories repositories,
@@ -98,6 +99,65 @@ public sealed class DomainInvariantValidator : IPersistenceInvariantSet
 		return issues.Select( issue => new PersistenceInvariantIssue(
 			issue.Code.ToString(), issue.Path, issue.Message ) ).ToArray();
 	}
+
+	public PersistenceInvariantPreparation Prepare( PersistenceInvariantContext context )
+	{
+		ArgumentNullException.ThrowIfNull( context );
+		if ( context.IsRecovery )
+			throw new InvalidOperationException( "Recovery must use full invariant validation and Rebuild." );
+		if ( !_dependencyIndex.IsReady )
+			throw new InvalidOperationException( "Domain invariant dependency index has not been rebuilt." );
+
+		var mutations = new List<DomainDependencyMutation>( context.ChangedAddresses.Count );
+		foreach ( var address in context.ChangedAddresses )
+		{
+			_dependencyIndex.TryGet( address, out var previous );
+			var current = context.TryGet( address, out var candidate ) && candidate is not null
+				? Describe( candidate )
+				: null;
+			mutations.Add( new DomainDependencyMutation( address, previous, current ) );
+		}
+
+		var closure = _dependencyIndex.DependencyClosure( mutations );
+		var candidateDocuments = new Dictionary<DocumentAddress, PersistenceCandidateDocument>();
+		var previousDocuments = new Dictionary<DocumentAddress, PersistenceCandidateDocument>();
+		foreach ( var address in closure )
+		{
+			if ( context.TryGet( address, out var candidate ) && candidate is not null )
+				candidateDocuments.Add( address, candidate );
+			if ( _dependencyIndex.TryGet( address, out var previous ) && previous is not null )
+				previousDocuments.Add( address, previous.Document );
+		}
+		context.RecordVisitedDocuments( closure.Count );
+
+		var subset = new PersistenceInvariantContext(
+			context.Sequence,
+			context.CompactionGeneration,
+			candidateDocuments,
+			previousDocuments,
+			context.ChangedAddresses,
+			isRecovery: false );
+		var issues = Validate( subset );
+		return new PersistenceInvariantPreparation(
+			issues,
+			new DomainInvariantPublication( mutations.ToArray(), closure.Count ) );
+	}
+
+	public void Publish( PersistenceInvariantPreparation preparation )
+	{
+		ArgumentNullException.ThrowIfNull( preparation );
+		if ( preparation.PublicationState is not DomainInvariantPublication publication )
+			throw new InvalidOperationException( "Domain invariant publication state is missing or invalid." );
+		_dependencyIndex.Apply( publication.Mutations );
+	}
+
+	public void Rebuild( PersistenceInvariantContext context )
+	{
+		ArgumentNullException.ThrowIfNull( context );
+		_dependencyIndex.Rebuild( context.Documents.Select( Describe ) );
+	}
+
+	internal int IndexedDocumentCount => _dependencyIndex.DocumentCount;
 
 	private DomainInvariantReport ValidateDocuments(
 		IReadOnlyList<DocumentSnapshot<CharacterRecord>> characterDocuments,
@@ -949,6 +1009,221 @@ public sealed class DomainInvariantValidator : IPersistenceInvariantSet
 				maximum,
 				Query( node * 2 + 1, middle + 1, right, start, end ) );
 			return _lazy[node] + maximum;
+		}
+	}
+
+	private static DomainDependencyDocument Describe( PersistenceCandidateDocument document )
+	{
+		var tokens = new HashSet<string>( StringComparer.Ordinal )
+		{
+			$"address:{document.Address.Collection}/{document.Address.Key}"
+		};
+		switch ( document.Value )
+		{
+			case CharacterRecord character:
+				AddCharacter( tokens, character.Id );
+				tokens.Add( SlotToken( character.AccountId, character.Slot ) );
+				break;
+			case CharacterSlotRecord slot:
+				AddCharacter( tokens, slot.CharacterId );
+				tokens.Add( SlotToken( slot.AccountId, slot.Slot ) );
+				break;
+			case CharacterLifecycleGuardRecord guard:
+				AddCharacter( tokens, guard.CharacterId );
+				break;
+			case InventoryRecord inventory:
+				tokens.Add( InventoryToken( inventory.Id ) );
+				AddOwner( tokens, inventory.Owner );
+				foreach ( var placement in inventory.Placements ) tokens.Add( ItemToken( placement.ItemId ) );
+				break;
+			case OwnerInventoryRecord ownerInventory:
+				tokens.Add( InventoryToken( ownerInventory.InventoryId ) );
+				AddOwner( tokens, ownerInventory.Owner );
+				tokens.Add( OwnerRoleToken( ownerInventory.Owner, ownerInventory.Role ) );
+				break;
+			case ItemRecord item:
+				tokens.Add( ItemToken( item.Id ) );
+				break;
+			case WorldItemRecord worldItem:
+				tokens.Add( ItemToken( worldItem.ItemId ) );
+				break;
+			case UniqueReservationRecord reservation:
+				AddCharacter( tokens, reservation.CharacterId );
+				tokens.Add( $"reservation:{NormalizeTokenPart( reservation.Namespace )}:{NormalizeTokenPart( reservation.Value )}" );
+				break;
+			case CharacterReferenceRecord reference:
+				AddCharacter( tokens, reference.CharacterId );
+				if ( reference.RelatedCharacterId is CharacterId related ) AddCharacter( tokens, related );
+				if ( reference.SceneEntityId is SceneEntityId scene ) tokens.Add( SceneToken( scene ) );
+				break;
+			case PersistentSceneEntityRecord sceneEntity:
+				tokens.Add( SceneToken( sceneEntity.Id ) );
+				break;
+		}
+		return new DomainDependencyDocument( document, tokens.ToArray() );
+	}
+
+	private static void AddCharacter( ISet<string> tokens, CharacterId characterId ) =>
+		tokens.Add( CharacterToken( characterId ) );
+
+	private static void AddOwner( ISet<string> tokens, InventoryOwner owner )
+	{
+		switch ( owner.Kind )
+		{
+			case InventoryOwnerKind.Character:
+				tokens.Add( CharacterToken( new CharacterId( owner.OwnerId ) ) );
+				break;
+			case InventoryOwnerKind.ParentItem:
+				tokens.Add( ItemToken( new ItemId( owner.OwnerId ) ) );
+				break;
+			case InventoryOwnerKind.SceneEntity:
+				tokens.Add( SceneToken( new SceneEntityId( owner.OwnerId ) ) );
+				break;
+		}
+	}
+
+	private static string CharacterToken( CharacterId id ) => $"character:{id.Value:N}";
+	private static string InventoryToken( InventoryId id ) => $"inventory:{id.Value:N}";
+	private static string ItemToken( ItemId id ) => $"item:{id.Value:N}";
+	private static string SceneToken( SceneEntityId id ) => $"scene:{id.Value:N}";
+	private static string SlotToken( AccountId accountId, int slot ) => $"slot:{accountId.Value}:{slot}";
+	private static string OwnerRoleToken( InventoryOwner owner, string? role ) =>
+		$"owner-role:{(int)owner.Kind}:{owner.OwnerId:N}:{NormalizeTokenPart( role )}";
+	private static string NormalizeTokenPart( string? value ) => value?.Trim().ToLowerInvariant() ?? "<null>";
+
+	private sealed record DomainDependencyDocument(
+		PersistenceCandidateDocument Document,
+		IReadOnlyList<string> Tokens );
+
+	private sealed record DomainDependencyMutation(
+		DocumentAddress Address,
+		DomainDependencyDocument? Previous,
+		DomainDependencyDocument? Current );
+
+	private sealed record DomainInvariantPublication(
+		IReadOnlyList<DomainDependencyMutation> Mutations,
+		int ClosureDocumentCount );
+
+	private sealed class DomainInvariantDependencyIndex
+	{
+		private readonly Dictionary<DocumentAddress, DomainDependencyDocument> _documents = new();
+		private readonly Dictionary<string, HashSet<DocumentAddress>> _byToken = new( StringComparer.Ordinal );
+
+		public bool IsReady { get; private set; }
+		public int DocumentCount => _documents.Count;
+
+		public bool TryGet( DocumentAddress address, out DomainDependencyDocument? document ) =>
+			_documents.TryGetValue( address, out document );
+
+		public void Rebuild( IEnumerable<DomainDependencyDocument> documents )
+		{
+			_documents.Clear();
+			_byToken.Clear();
+			foreach ( var document in documents ) Add( document );
+			IsReady = true;
+		}
+
+		public IReadOnlySet<DocumentAddress> DependencyClosure(
+			IReadOnlyCollection<DomainDependencyMutation> mutations )
+		{
+			var changed = mutations.ToDictionary( mutation => mutation.Address );
+			var transientByToken = new Dictionary<string, HashSet<DocumentAddress>>( StringComparer.Ordinal );
+			foreach ( var mutation in mutations )
+			{
+				AddTransient( mutation.Previous );
+				AddTransient( mutation.Current );
+			}
+
+			var addresses = mutations.Select( mutation => mutation.Address ).ToHashSet();
+			var visitedTokens = new HashSet<string>( StringComparer.Ordinal );
+			var pendingTokens = new Queue<string>();
+			foreach ( var mutation in mutations )
+			{
+				Enqueue( mutation.Previous );
+				Enqueue( mutation.Current );
+			}
+
+			while ( pendingTokens.Count > 0 )
+			{
+				var token = pendingTokens.Dequeue();
+				VisitAddresses( _byToken.GetValueOrDefault( token ) );
+				VisitAddresses( transientByToken.GetValueOrDefault( token ) );
+			}
+			return addresses;
+
+			void AddTransient( DomainDependencyDocument? document )
+			{
+				if ( document is null ) return;
+				foreach ( var token in document.Tokens )
+				{
+					if ( !transientByToken.TryGetValue( token, out var tokenAddresses ) )
+					{
+						tokenAddresses = new HashSet<DocumentAddress>();
+						transientByToken.Add( token, tokenAddresses );
+					}
+					tokenAddresses.Add( document.Document.Address );
+				}
+			}
+
+			void Enqueue( DomainDependencyDocument? document )
+			{
+				if ( document is null ) return;
+				foreach ( var token in document.Tokens )
+					if ( visitedTokens.Add( token ) ) pendingTokens.Enqueue( token );
+			}
+
+			void VisitAddresses( IEnumerable<DocumentAddress>? candidates )
+			{
+				if ( candidates is null ) return;
+				foreach ( var address in candidates )
+				{
+					if ( !addresses.Add( address ) ) continue;
+					if ( changed.TryGetValue( address, out var mutation ) )
+					{
+						Enqueue( mutation.Previous );
+						Enqueue( mutation.Current );
+					}
+					else if ( _documents.TryGetValue( address, out var document ) )
+					{
+						Enqueue( document );
+					}
+				}
+			}
+		}
+
+		public void Apply( IReadOnlyList<DomainDependencyMutation> mutations )
+		{
+			if ( !IsReady ) throw new InvalidOperationException( "Domain invariant dependency index is not ready." );
+			foreach ( var mutation in mutations )
+			{
+				Remove( mutation.Address );
+				if ( mutation.Current is not null ) Add( mutation.Current );
+			}
+		}
+
+		private void Add( DomainDependencyDocument document )
+		{
+			_documents.Add( document.Document.Address, document );
+			foreach ( var token in document.Tokens )
+			{
+				if ( !_byToken.TryGetValue( token, out var addresses ) )
+				{
+					addresses = new HashSet<DocumentAddress>();
+					_byToken.Add( token, addresses );
+				}
+				addresses.Add( document.Document.Address );
+			}
+		}
+
+		private void Remove( DocumentAddress address )
+		{
+			if ( !_documents.Remove( address, out var document ) ) return;
+			foreach ( var token in document.Tokens )
+			{
+				if ( !_byToken.TryGetValue( token, out var addresses ) ) continue;
+				addresses.Remove( address );
+				if ( addresses.Count == 0 ) _byToken.Remove( token );
+			}
 		}
 	}
 }

@@ -49,6 +49,7 @@ public sealed class InventoryAccessProof : ICommitPrecondition
 		CharacterId characterId,
 		InventoryId inventoryId,
 		InventoryCapability required,
+		Guid connectionEpoch,
 		long revision )
 	{
 		_owner = owner;
@@ -56,6 +57,7 @@ public sealed class InventoryAccessProof : ICommitPrecondition
 		CharacterId = characterId;
 		InventoryId = inventoryId;
 		Required = required;
+		ConnectionEpoch = connectionEpoch;
 		CapabilityRevision = revision;
 	}
 
@@ -63,6 +65,7 @@ public sealed class InventoryAccessProof : ICommitPrecondition
 	public CharacterId CharacterId { get; }
 	public InventoryId InventoryId { get; }
 	public InventoryCapability Required { get; }
+	public Guid ConnectionEpoch { get; }
 	public long CapabilityRevision { get; }
 
 	public PersistenceInvariantIssue? Validate( CommitPreconditionContext context ) =>
@@ -80,6 +83,34 @@ public sealed class InventoryAccessService
 		(ConnectionId Connection, InventoryId Inventory, InventoryGrantKind Kind, InteractionSessionId? Session),
 		InventoryGrant> _grants = new();
 	private readonly Dictionary<(ConnectionId Connection, CharacterId Character, InventoryId Inventory), long> _revisions = new();
+	private readonly Dictionary<ConnectionId, Guid> _connectionEpochs = new();
+	private long _lastCapabilityRevision;
+
+	internal int RevisionEntryCount
+	{
+		get { lock ( _sync ) return _revisions.Count; }
+	}
+
+	internal int ConnectionEpochCount
+	{
+		get { lock ( _sync ) return _connectionEpochs.Count; }
+	}
+
+	/// <summary>
+	/// Opens a fresh authorization epoch for one live connection. Reopening the
+	/// same engine ID first removes every prior grant and tuple revision so stale
+	/// work cannot survive a reconnect ABA.
+	/// </summary>
+	public void OpenConnection( ConnectionId connectionId )
+	{
+		lock ( _sync )
+		{
+			_ = RemoveGrantsUnderLock( grant => grant.ConnectionId == connectionId );
+			foreach ( var key in _revisions.Keys.Where( key => key.Connection == connectionId ).ToArray() )
+				_revisions.Remove( key );
+			_connectionEpochs[connectionId] = Guid.NewGuid();
+		}
+	}
 
 	public void Grant( InventoryGrant grant )
 	{
@@ -93,7 +124,14 @@ public sealed class InventoryAccessService
 
 		lock ( _sync )
 		{
-			_grants[(grant.ConnectionId, grant.InventoryId, grant.Kind, grant.SessionId)] = grant;
+			if ( !_connectionEpochs.ContainsKey( grant.ConnectionId ) )
+				throw new InvalidOperationException(
+					"Inventory capabilities can only be granted to an open connection epoch." );
+			var grantKey = (grant.ConnectionId, grant.InventoryId, grant.Kind, grant.SessionId);
+			_grants.TryGetValue( grantKey, out var previous );
+			_grants[grantKey] = grant;
+			if ( previous is not null && previous.CharacterId != grant.CharacterId )
+				PruneOrAdvance( previous.ConnectionId, previous.CharacterId, previous.InventoryId );
 			Advance( grant.ConnectionId, grant.CharacterId, grant.InventoryId );
 		}
 	}
@@ -107,9 +145,11 @@ public sealed class InventoryAccessService
 		lock ( _sync )
 		{
 			if ( !HasUnderLock( connectionId, characterId, inventoryId, required ) ) return null;
+			if ( !_connectionEpochs.TryGetValue( connectionId, out var connectionEpoch ) ) return null;
+			if ( !_revisions.TryGetValue( (connectionId, characterId, inventoryId), out var revision ) ) return null;
 			return new InventoryAccessProof(
 				this, connectionId, characterId, inventoryId, required,
-				_revisions.GetValueOrDefault( (connectionId, characterId, inventoryId) ) );
+				connectionEpoch, revision );
 		}
 	}
 
@@ -139,19 +179,26 @@ public sealed class InventoryAccessService
 	public IReadOnlyList<InventoryGrant> RevokeCharacter( ConnectionId connectionId, CharacterId characterId ) =>
 		RevokeWhere( grant => grant.ConnectionId == connectionId && grant.CharacterId == characterId );
 
-	public IReadOnlyList<InventoryGrant> RevokeConnection( ConnectionId connectionId ) =>
-		RevokeWhere( grant => grant.ConnectionId == connectionId );
+	public IReadOnlyList<InventoryGrant> RevokeConnection( ConnectionId connectionId )
+	{
+		lock ( _sync )
+		{
+			var removed = RemoveGrantsUnderLock( grant => grant.ConnectionId == connectionId );
+			foreach ( var key in _revisions.Keys.Where( key => key.Connection == connectionId ).ToArray() )
+				_revisions.Remove( key );
+			_connectionEpochs.Remove( connectionId );
+			return removed;
+		}
+	}
 
 	private IReadOnlyList<InventoryGrant> RevokeWhere( Func<InventoryGrant, bool> predicate )
 	{
 		lock ( _sync )
 		{
-			var removed = _grants.Values.Where( predicate ).ToArray();
-			foreach ( var grant in removed )
-			{
-				_grants.Remove( (grant.ConnectionId, grant.InventoryId, grant.Kind, grant.SessionId) );
-				Advance( grant.ConnectionId, grant.CharacterId, grant.InventoryId );
-			}
+			var removed = RemoveGrantsUnderLock( predicate );
+			foreach ( var grant in removed
+				.DistinctBy( grant => (grant.ConnectionId, grant.CharacterId, grant.InventoryId) ) )
+				PruneOrAdvance( grant.ConnectionId, grant.CharacterId, grant.InventoryId );
 			return removed;
 		}
 	}
@@ -160,8 +207,10 @@ public sealed class InventoryAccessService
 	{
 		lock ( _sync )
 		{
-			var revision = _revisions.GetValueOrDefault( (proof.ConnectionId, proof.CharacterId, proof.InventoryId) );
-			return revision == proof.CapabilityRevision &&
+			return _connectionEpochs.TryGetValue( proof.ConnectionId, out var connectionEpoch ) &&
+				connectionEpoch == proof.ConnectionEpoch &&
+				_revisions.TryGetValue( (proof.ConnectionId, proof.CharacterId, proof.InventoryId), out var revision ) &&
+				revision == proof.CapabilityRevision &&
 				HasUnderLock( proof.ConnectionId, proof.CharacterId, proof.InventoryId, proof.Required )
 				? null
 				: new PersistenceInvariantIssue(
@@ -177,6 +226,7 @@ public sealed class InventoryAccessService
 		InventoryId inventoryId,
 		InventoryCapability required )
 	{
+		if ( !_connectionEpochs.ContainsKey( connectionId ) ) return false;
 		var capabilities = InventoryCapability.None;
 		foreach ( var grant in _grants.Values.Where( value =>
 			value.ConnectionId == connectionId && value.InventoryId == inventoryId &&
@@ -187,7 +237,31 @@ public sealed class InventoryAccessService
 
 	private void Advance( ConnectionId connectionId, CharacterId characterId, InventoryId inventoryId )
 	{
-		var key = (connectionId, characterId, inventoryId);
-		_revisions[key] = checked(_revisions.GetValueOrDefault( key ) + 1);
+		if ( !_connectionEpochs.ContainsKey( connectionId ) )
+			throw new InvalidOperationException(
+				"Inventory capability revision cannot advance for a closed connection." );
+		_revisions[(connectionId, characterId, inventoryId)] = checked(++_lastCapabilityRevision);
 	}
+
+	private void PruneOrAdvance( ConnectionId connectionId, CharacterId characterId, InventoryId inventoryId )
+	{
+		var key = (connectionId, characterId, inventoryId);
+		if ( _grants.Values.Any( grant =>
+			grant.ConnectionId == connectionId && grant.CharacterId == characterId &&
+			grant.InventoryId == inventoryId ) )
+		{
+			Advance( connectionId, characterId, inventoryId );
+			return;
+		}
+		_revisions.Remove( key );
+	}
+
+	private InventoryGrant[] RemoveGrantsUnderLock( Func<InventoryGrant, bool> predicate )
+	{
+		var removed = _grants.Values.Where( predicate ).ToArray();
+		foreach ( var grant in removed )
+			_grants.Remove( (grant.ConnectionId, grant.InventoryId, grant.Kind, grant.SessionId) );
+		return removed;
+	}
+
 }

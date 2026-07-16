@@ -692,6 +692,318 @@ public sealed class DomainInvariantValidatorTests
 		Assert.IsTrue( recoveryIssues.Any( issue => issue.Path == $"character/{unchangedAddress.Key}/schema-state" ) );
 	}
 
+	[TestMethod]
+	public async Task IncrementalValidationMatchesFullValidationForChangedDependencyClosure()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var documents = BuildIndependentCharacterGraphs( environment, 200 );
+		var validator = IncrementalValidator( environment );
+		var recovery = new PersistenceInvariantContext( 1, 0, documents, isRecovery: true );
+		Assert.IsEmpty( validator.Validate( recovery ) );
+		validator.Rebuild( recovery );
+
+		var changedAddress = documents.Keys.First( address => address.Collection == DomainCollections.Characters );
+		var previous = documents[changedAddress];
+		var character = (CharacterRecord)previous.Value;
+		var changedDocument = previous with
+		{
+			Revision = new DocumentRevision( 2 ),
+			Value = character with { AccountId = new AccountId( character.AccountId.Value + 100_000 ) }
+		};
+		var changed = new HashSet<DocumentAddress> { changedAddress };
+		var delta = new Dictionary<DocumentAddress, PersistenceCandidateDocument?>
+		{
+			[changedAddress] = changedDocument
+		};
+		var incrementalContext = new PersistenceInvariantContext(
+			2, 0, new PersistenceInvariantDocumentIndex( documents.Values ), delta, changed );
+		var incremental = validator.Prepare( incrementalContext );
+
+		var fullDocuments = new Dictionary<DocumentAddress, PersistenceCandidateDocument>( documents )
+		{
+			[changedAddress] = changedDocument
+		};
+		var full = validator.Validate( new PersistenceInvariantContext(
+			2, 0, fullDocuments, documents, changed ) );
+
+		AssertIssueSetsEqual( full, incremental.Issues );
+		Assert.IsNotEmpty( full );
+	}
+
+	[TestMethod]
+	[DataRow( 1_000 )]
+	[DataRow( 10_000 )]
+	[DataRow( 100_000 )]
+	[Timeout( 30_000, CooperativeCancellation = true )]
+	public async Task IncrementalValidationWorkRemainsBoundedAcrossStoreSizes( int documentCount )
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		const int documentsPerGraph = 5;
+		Assert.AreEqual( 0, documentCount % documentsPerGraph );
+		var graphCount = documentCount / documentsPerGraph;
+		var documents = BuildIndependentCharacterGraphs( environment, graphCount );
+		var validator = IncrementalValidator( environment );
+		var recovery = new PersistenceInvariantContext( 1, 0, documents, isRecovery: true );
+		Assert.IsEmpty( validator.Validate( recovery ) );
+		validator.Rebuild( recovery );
+		Assert.AreEqual( documentCount, validator.IndexedDocumentCount );
+
+		var changedAddress = documents.Keys.First( address => address.Collection == DomainCollections.Characters );
+		var previous = documents[changedAddress];
+		var character = (CharacterRecord)previous.Value;
+		var changedDocument = previous with
+		{
+			Revision = new DocumentRevision( 2 ),
+			Value = character with { Name = character.Name + " updated" }
+		};
+		var changed = new HashSet<DocumentAddress> { changedAddress };
+		var delta = new Dictionary<DocumentAddress, PersistenceCandidateDocument?>
+		{
+			[changedAddress] = changedDocument
+		};
+		var context = new PersistenceInvariantContext(
+			2, 0, new PersistenceInvariantDocumentIndex( documents.Values ), delta, changed );
+
+		var prepared = validator.Prepare( context );
+
+		Assert.IsEmpty( prepared.Issues );
+		Assert.IsLessThanOrEqualTo(
+			16L,
+			context.VisitedDocumentCount,
+			$"One-record validation visited {context.VisitedDocumentCount} candidate documents in a {documentCount}-document store." );
+		validator.Publish( prepared );
+		Assert.AreEqual( documentCount, validator.IndexedDocumentCount );
+	}
+
+	[TestMethod]
+	public async Task RandomizedIncrementalMutationsMatchFullValidation()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		const int graphCount = 128;
+		const int mutationKindCount = 8;
+		const int mutationCount = 48;
+		var documents = BuildIndependentCharacterGraphs( environment, graphCount );
+		var baseIndex = new PersistenceInvariantDocumentIndex( documents.Values );
+		var validator = IncrementalValidator( environment );
+		var recovery = new PersistenceInvariantContext( 1, 0, documents, isRecovery: true );
+		Assert.IsEmpty( validator.Validate( recovery ) );
+		validator.Rebuild( recovery );
+		var random = new Random( 0x5EED_2026 );
+		var coveredMutationKinds = new bool[mutationKindCount];
+
+		for ( var iteration = 0; iteration < mutationCount; iteration++ )
+		{
+			var graphIndex = random.Next( graphCount );
+			var mutationKind = iteration < mutationKindCount ? iteration : random.Next( mutationKindCount );
+			coveredMutationKinds[mutationKind] = true;
+			var addresses = IndependentGraphAddresses( graphIndex );
+			var delta = new Dictionary<DocumentAddress, PersistenceCandidateDocument?>();
+			switch ( mutationKind )
+			{
+				case 0:
+				{
+					var document = documents[addresses.Character];
+					var character = (CharacterRecord)document.Value;
+					delta.Add( addresses.Character, ReplaceValue(
+						document,
+						character with { Name = $"{character.Name}-{random.Next():x8}" } ) );
+					break;
+				}
+				case 1:
+				{
+					var document = documents[addresses.Character];
+					var character = (CharacterRecord)document.Value;
+					delta.Add( addresses.Character, ReplaceValue(
+						document,
+						character with { AccountId = new AccountId( (ulong)(1_000_000 + random.Next( 1_000_000 )) ) } ) );
+					break;
+				}
+				case 2:
+					delta.Add( addresses.Slot, null );
+					break;
+				case 3:
+				{
+					var document = documents[addresses.Guard];
+					var guard = (CharacterLifecycleGuardRecord)document.Value;
+					delta.Add( addresses.Guard, ReplaceValue(
+						document,
+						guard with { CharacterId = new CharacterId( IndexedGuid( graphIndex, 12 ) ) } ) );
+					break;
+				}
+				case 4:
+				{
+					var document = documents[addresses.OwnerInventory];
+					var ownerInventory = (OwnerInventoryRecord)document.Value;
+					delta.Add( addresses.OwnerInventory, ReplaceValue(
+						document,
+						ownerInventory with { InventoryId = new InventoryId( IndexedGuid( graphIndex, 13 ) ) } ) );
+					break;
+				}
+				case 5:
+				{
+					var document = documents[addresses.Inventory];
+					var inventory = (InventoryRecord)document.Value;
+					var otherCharacter = new CharacterId( IndexedGuid( (graphIndex + 1) % graphCount, 10 ) );
+					delta.Add( addresses.Inventory, ReplaceValue(
+						document,
+						inventory with { Owner = InventoryOwner.Character( otherCharacter ) } ) );
+					break;
+				}
+				case 6:
+				{
+					var source = documents[addresses.Character];
+					var forgedAddress = new DocumentAddress(
+						DomainCollections.Characters, $"forged-{iteration}-{random.Next():x8}" );
+					delta.Add( forgedAddress, source with
+					{
+						Address = forgedAddress,
+						Revision = new DocumentRevision( 1 )
+					} );
+					break;
+				}
+				case 7:
+					delta.Add( addresses.Character, null );
+					delta.Add( addresses.Slot, null );
+					delta.Add( addresses.Guard, null );
+					delta.Add( addresses.Inventory, null );
+					delta.Add( addresses.OwnerInventory, null );
+					break;
+				default:
+					Assert.Fail( $"Unknown mutation kind {mutationKind}." );
+					break;
+			}
+
+			AssertIncrementalMatchesFull( validator, baseIndex, documents, delta, iteration + 2 );
+		}
+
+		Assert.IsTrue( coveredMutationKinds.All( covered => covered ) );
+	}
+
+	private static DomainInvariantValidator IncrementalValidator( ApplicationServiceTestEnvironment environment ) => new(
+		environment.Provider.Types,
+		environment.Schema,
+		new SchemaItemShapeCatalog( environment.Schema ),
+		environment.PersistenceProfile );
+
+	private static Dictionary<DocumentAddress, PersistenceCandidateDocument> BuildIndependentCharacterGraphs(
+		ApplicationServiceTestEnvironment environment,
+		int count )
+	{
+		var documents = new Dictionary<DocumentAddress, PersistenceCandidateDocument>();
+		for ( var index = 0; index < count; index++ )
+		{
+			var account = new AccountId( (ulong)(20_000 + index) );
+			var character = ApplicationServiceTestEnvironment.Character(
+				account, 0, new CharacterId( IndexedGuid( index, 10 ) ) );
+			var inventory = ApplicationServiceTestEnvironment.Inventory(
+				InventoryOwner.Character( character.Id ),
+				id: new InventoryId( IndexedGuid( index, 11 ) ) );
+			AddCandidate(
+				documents,
+				environment.Provider.Types,
+				DomainCollections.Characters,
+				DomainKeys.Character( character.Id ),
+				character );
+			AddCandidate(
+				documents,
+				environment.Provider.Types,
+				DomainCollections.CharacterSlots,
+				DomainKeys.CharacterSlot( account, 0 ),
+				new CharacterSlotRecord { AccountId = account, Slot = 0, CharacterId = character.Id } );
+			AddCandidate(
+				documents,
+				environment.Provider.Types,
+				DomainCollections.CharacterLifecycleGuards,
+				DomainKeys.CharacterLifecycleGuard( character.Id ),
+				new CharacterLifecycleGuardRecord { CharacterId = character.Id, ReferenceRevision = 0 } );
+			AddCandidate(
+				documents,
+				environment.Provider.Types,
+				DomainCollections.Inventories,
+				DomainKeys.Inventory( inventory.Id ),
+				inventory );
+			AddCandidate(
+				documents,
+				environment.Provider.Types,
+				DomainCollections.OwnerInventories,
+				DomainKeys.OwnerInventory( inventory.Owner, "main" ),
+				new OwnerInventoryRecord { Owner = inventory.Owner, Role = "main", InventoryId = inventory.Id } );
+		}
+		return documents;
+	}
+
+	private static void AddCandidate<T>(
+		IDictionary<DocumentAddress, PersistenceCandidateDocument> documents,
+		PersistedTypeRegistry types,
+		string collection,
+		string key,
+		T value ) where T : class
+	{
+		var codec = types.Resolve<T>();
+		var address = new DocumentAddress( collection, key );
+		documents.Add( address, new PersistenceCandidateDocument(
+			address, new DocumentRevision( 1 ), codec.Key, codec.CurrentVersion, value ) );
+	}
+
+	private static void AssertIssueSetsEqual(
+		IReadOnlyList<PersistenceInvariantIssue> expected,
+		IReadOnlyList<PersistenceInvariantIssue> actual )
+	{
+		static string Key( PersistenceInvariantIssue issue ) => $"{issue.Code}|{issue.Path}|{issue.Message}";
+		var expectedKeys = expected.Select( Key ).OrderBy( key => key, StringComparer.Ordinal ).ToArray();
+		var actualKeys = actual.Select( Key ).OrderBy( key => key, StringComparer.Ordinal ).ToArray();
+		CollectionAssert.AreEqual( expectedKeys, actualKeys );
+	}
+
+	private static void AssertIncrementalMatchesFull(
+		DomainInvariantValidator validator,
+		PersistenceInvariantDocumentIndex baseIndex,
+		IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument> documents,
+		IReadOnlyDictionary<DocumentAddress, PersistenceCandidateDocument?> delta,
+		long sequence )
+	{
+		var changed = delta.Keys.ToHashSet();
+		var incremental = validator.Prepare( new PersistenceInvariantContext(
+			sequence, 0, baseIndex, delta, changed ) );
+		var fullDocuments = new Dictionary<DocumentAddress, PersistenceCandidateDocument>( documents );
+		foreach ( var change in delta )
+		{
+			if ( change.Value is null ) fullDocuments.Remove( change.Key );
+			else fullDocuments[change.Key] = change.Value;
+		}
+		var full = validator.Validate( new PersistenceInvariantContext(
+			sequence, 0, fullDocuments, documents, changed ) );
+		AssertIssueSetsEqual( full, incremental.Issues );
+	}
+
+	private static PersistenceCandidateDocument ReplaceValue<T>(
+		PersistenceCandidateDocument document,
+		T value ) where T : class => document with
+	{
+		Revision = new DocumentRevision( document.Revision.Value + 1 ),
+		Value = value
+	};
+
+	private static IndependentGraphDocumentAddresses IndependentGraphAddresses( int index )
+	{
+		var character = new CharacterId( IndexedGuid( index, 10 ) );
+		var inventory = new InventoryId( IndexedGuid( index, 11 ) );
+		var owner = InventoryOwner.Character( character );
+		return new IndependentGraphDocumentAddresses(
+			new DocumentAddress( DomainCollections.Characters, DomainKeys.Character( character ) ),
+			new DocumentAddress( DomainCollections.CharacterSlots, DomainKeys.CharacterSlot( new AccountId( (ulong)(20_000 + index) ), 0 ) ),
+			new DocumentAddress( DomainCollections.CharacterLifecycleGuards, DomainKeys.CharacterLifecycleGuard( character ) ),
+			new DocumentAddress( DomainCollections.Inventories, DomainKeys.Inventory( inventory ) ),
+			new DocumentAddress( DomainCollections.OwnerInventories, DomainKeys.OwnerInventory( owner, "main" ) ) );
+	}
+
+	private sealed record IndependentGraphDocumentAddresses(
+		DocumentAddress Character,
+		DocumentAddress Slot,
+		DocumentAddress Guard,
+		DocumentAddress Inventory,
+		DocumentAddress OwnerInventory );
+
 	private static Guid IndexedGuid( int index, byte discriminator )
 	{
 		var bytes = new byte[16];

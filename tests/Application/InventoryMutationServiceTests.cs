@@ -245,6 +245,7 @@ public sealed class InventoryMutationServiceTests
 		InventoryCapability capabilities)
 	{
 		var sessionId = InteractionSessionId.New();
+		environment.OpenConnection(actor.ConnectionId);
 		environment.Access.Grant(new InventoryGrant
 		{
 			ConnectionId = actor.ConnectionId,

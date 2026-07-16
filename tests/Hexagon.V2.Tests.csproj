@@ -34,6 +34,7 @@
     <Compile Include="Networking/**/*.cs" />
     <Compile Include="Client/**/*.cs" />
     <Compile Include="Architecture/**/*.cs" />
+	<Compile Include="Runtime/**/*.cs" />
 	<Compile Include="Infrastructure/**/*.cs" />
     <Compile Include="../Code/V2/Kernel/**/*.cs" Link="Product/Kernel/%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="../Code/V2/Persistence/**/*.cs" Link="Product/Persistence/%(RecursiveDir)%(Filename)%(Extension)" />
@@ -42,6 +43,11 @@
     <Compile Include="../Code/V2/Composition/**/*.cs" Link="Product/Composition/%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="../Code/V2/Networking/**/*.cs" Link="Product/Networking/%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="../Code/V2/Client/**/*.cs" Link="Product/Client/%(RecursiveDir)%(Filename)%(Extension)" />
+	<Compile Include="../Code/V2/Runtime/SpawnSlotAllocator.cs" Link="Product/Runtime/SpawnSlotAllocator.cs" />
+	<Compile Include="../Code/V2/Runtime/PlayerInputAdmission.cs" Link="Product/Runtime/PlayerInputAdmission.cs" />
+	<Compile Include="../Code/V2/Runtime/HostServicePublication.cs" Link="Product/Runtime/HostServicePublication.cs" />
+	<Compile Include="../Code/V2/Runtime/AuthoritativeBodyReplacement.cs" Link="Product/Runtime/AuthoritativeBodyReplacement.cs" />
+	<Compile Include="../Code/V2/Runtime/AuthoritativeBodyRetirement.cs" Link="Product/Runtime/AuthoritativeBodyRetirement.cs" />
 	<Compile Include="../Code/V2/Infrastructure/PrefixedPersistenceStorage.cs" Link="Product/Infrastructure/PrefixedPersistenceStorage.cs" />
   </ItemGroup>
 

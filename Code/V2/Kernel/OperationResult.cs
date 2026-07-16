@@ -33,7 +33,8 @@ public enum ErrorCode
 	InvariantViolation = 20,
 	LeaseUnavailable = 21,
 	StorageLimitExceeded = 22,
-	StaleTransaction = 23
+	StaleTransaction = 23,
+	ReconciliationPending = 24
 }
 
 public sealed record OperationError(

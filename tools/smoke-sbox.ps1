@@ -120,7 +120,12 @@ function Invoke-ProbeRun {
 
     try {
         $http = [System.Net.Http.HttpClient]::new()
-        $http.Timeout = [TimeSpan]::FromSeconds(5)
+		# Tool discovery can legitimately pause while the editor imports assets or
+		# hotloads the freshly generated assemblies. Keep each request bounded, but
+		# give it a share of the probe's overall deadline instead of failing the
+		# entire smoke gate at a fixed five-second transport timeout.
+		$requestTimeoutSeconds = [Math]::Min( 30, [Math]::Max( 5, [int]($TimeoutSeconds / 6) ) )
+		$http.Timeout = [TimeSpan]::FromSeconds( $requestTimeoutSeconds )
         $http.DefaultRequestHeaders.Accept.ParseAdd('application/json, text/event-stream')
         try {
             $initializeBody = [ordered]@{

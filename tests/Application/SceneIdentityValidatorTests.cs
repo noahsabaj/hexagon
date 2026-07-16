@@ -7,6 +7,50 @@ namespace Hexagon.V2.Tests.Application;
 public sealed class SceneIdentityValidatorTests
 {
 	[TestMethod]
+	public void ProvenanceClassifier_TrustsOnlyCapturedNonNetworkComponents()
+	{
+		var authored = Guid.NewGuid();
+		var laterRuntime = Guid.NewGuid();
+		var classifier = new SceneIdentityProvenanceClassifier();
+
+		Assert.AreEqual(
+			SceneIdentityProvenance.RuntimeOrNetwork,
+			classifier.Classify( authored, hasActiveNetworkRoot: false ) );
+
+		classifier.CaptureAuthoredSnapshot( new[] { authored } );
+
+		Assert.IsTrue( classifier.HasAuthoredSnapshot );
+		Assert.AreEqual( 1, classifier.AuthoredComponentCount );
+		Assert.AreEqual(
+			SceneIdentityProvenance.EditorAuthored,
+			classifier.Classify( authored, hasActiveNetworkRoot: false ) );
+		Assert.AreEqual(
+			SceneIdentityProvenance.RuntimeOrNetwork,
+			classifier.Classify( authored, hasActiveNetworkRoot: true ) );
+		Assert.AreEqual(
+			SceneIdentityProvenance.RuntimeOrNetwork,
+			classifier.Classify( laterRuntime, hasActiveNetworkRoot: false ) );
+	}
+
+	[TestMethod]
+	public void ProvenanceClassifier_NewSceneSnapshotReplacesPriorAuthority()
+	{
+		var firstScene = Guid.NewGuid();
+		var secondScene = Guid.NewGuid();
+		var classifier = new SceneIdentityProvenanceClassifier();
+		classifier.CaptureAuthoredSnapshot( new[] { firstScene } );
+
+		classifier.CaptureAuthoredSnapshot( new[] { secondScene } );
+
+		Assert.AreEqual(
+			SceneIdentityProvenance.RuntimeOrNetwork,
+			classifier.Classify( firstScene, hasActiveNetworkRoot: false ) );
+		Assert.AreEqual(
+			SceneIdentityProvenance.EditorAuthored,
+			classifier.Classify( secondScene, hasActiveNetworkRoot: false ) );
+	}
+
+	[TestMethod]
 	public void EditorRepair_FillsMissingAndRepairsOnlyLaterDuplicate()
 	{
 		var duplicate = new SceneEntityId( Guid.Parse( "11111111-1111-1111-1111-111111111111" ) );
@@ -69,7 +113,7 @@ public sealed class SceneIdentityValidatorTests
 	}
 
 	[TestMethod]
-	public void RebuildAfterDynamicDuplicateFailsClosedForBothIdentities()
+	public void RuntimeNetworkDuplicateCannotPoisonEditorAuthoredIdentity()
 	{
 		var duplicate = SceneEntityId.New();
 		var initial = PersistentSceneIdentityIndex.Build( new[]
@@ -81,7 +125,27 @@ public sealed class SceneIdentityValidatorTests
 		var rebuilt = PersistentSceneIdentityIndex.Build( new[]
 		{
 			new SceneIdentityCandidate( "first", duplicate ),
-			new SceneIdentityCandidate( "dynamic", duplicate )
+			new SceneIdentityCandidate(
+				"first", duplicate, SceneIdentityProvenance.RuntimeOrNetwork )
+		} );
+
+		Assert.IsTrue( rebuilt.TryResolveId( duplicate, out var resolved ) );
+		Assert.AreEqual( "first", resolved.StablePath );
+		Assert.IsTrue( rebuilt.Resolutions[0].Enabled );
+		Assert.IsFalse( rebuilt.Resolutions[1].Enabled );
+		Assert.AreEqual( SceneIdentityProvenance.RuntimeOrNetwork, rebuilt.Resolutions[1].Provenance );
+		Assert.IsNull( rebuilt.Resolutions[1].EffectiveId );
+		StringAssert.Contains( rebuilt.Resolutions[1].FatalDiagnostic, "runtime/network root" );
+	}
+
+	[TestMethod]
+	public void TwoEditorAuthoredDuplicatesStillFailClosed()
+	{
+		var duplicate = SceneEntityId.New();
+		var rebuilt = PersistentSceneIdentityIndex.Build( new[]
+		{
+			new SceneIdentityCandidate( "first", duplicate ),
+			new SceneIdentityCandidate( "second", duplicate )
 		} );
 
 		Assert.IsFalse( rebuilt.TryResolveId( duplicate, out _ ) );

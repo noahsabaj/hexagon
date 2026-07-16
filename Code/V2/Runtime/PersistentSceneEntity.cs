@@ -23,9 +23,26 @@ public sealed class PersistentSceneEntity : Component
 	private bool _validatingRuntimeIdentity;
 	private bool _runtimeIdentityApproved;
 	private bool _disabledForIdentity;
+	private Guid _persistentId;
 
 	[Property]
-	public Guid PersistentId { get; set; }
+	public Guid PersistentId
+	{
+		get => _persistentId;
+		set
+		{
+			if ( _persistentId == value ) return;
+			_persistentId = value;
+			InvalidateRuntimeApproval();
+			PersistentSceneIdentityIndexSystem.Current?.Invalidate();
+		}
+	}
+
+	/// <summary>
+	/// The last resolution published by the scene identity index. Consumers must
+	/// require an enabled editor-authored resolution before using the identity.
+	/// </summary>
+	public SceneIdentityResolution? RuntimeResolution { get; private set; }
 
 	public SceneEntityId? Identity => Game.IsPlaying && !_runtimeIdentityApproved
 		? null
@@ -38,20 +55,23 @@ public sealed class PersistentSceneEntity : Component
 	protected override void OnValidate()
 	{
 		base.OnValidate();
+		InvalidateRuntimeApproval();
 		PersistentSceneIdentityIndexSystem.Current?.Invalidate();
 	}
 
 	protected override void OnStart()
 	{
 		base.OnStart();
-		if ( Game.IsPlaying ) PersistentSceneIdentityIndexSystem.Current?.Invalidate();
+		if ( !Game.IsPlaying ) return;
+		InvalidateRuntimeApproval();
+		PersistentSceneIdentityIndexSystem.Current?.Invalidate();
 	}
 
 	protected override void OnEnabled()
 	{
 		base.OnEnabled();
 		if ( !Game.IsPlaying ) return;
-		_runtimeIdentityApproved = false;
+		InvalidateRuntimeApproval();
 		PersistentSceneIdentityIndexSystem.Current?.Invalidate();
 	}
 
@@ -65,15 +85,17 @@ public sealed class PersistentSceneEntity : Component
 	{
 		if ( resolution.Enabled )
 		{
-			_runtimeIdentityApproved = true;
 			if ( _disabledForIdentity )
 			{
 				_disabledForIdentity = false;
 				GameObject.Enabled = true;
 			}
+			RuntimeResolution = resolution;
+			_runtimeIdentityApproved = true;
 			return;
 		}
 		_runtimeIdentityApproved = false;
+		RuntimeResolution = resolution;
 		if ( _validatingRuntimeIdentity || !GameObject.Enabled ) return;
 		_validatingRuntimeIdentity = true;
 		try
@@ -88,6 +110,13 @@ public sealed class PersistentSceneEntity : Component
 		}
 	}
 
+	private void InvalidateRuntimeApproval()
+	{
+		if ( !Game.IsPlaying ) return;
+		_runtimeIdentityApproved = false;
+		RuntimeResolution = null;
+	}
+
 	internal static string StablePath( PersistentSceneEntity component )
 		// The editor-authored GameObject ID is already scene-stable and unique.
 		// Including the local name keeps diagnostics readable without repeatedly
@@ -99,12 +128,15 @@ public sealed class PersistentSceneEntity : Component
 public sealed class PersistentSceneIdentityIndexSystem : GameObjectSystem<PersistentSceneIdentityIndexSystem>
 {
 	private readonly Scene _scene;
+	private readonly SceneIdentityProvenanceClassifier _provenance = new();
 	private bool _dirty = true;
 	private bool _building;
 
 	public PersistentSceneIdentityIndexSystem( Scene scene ) : base( scene )
 	{
 		_scene = scene;
+		Listen( Stage.SceneLoaded, int.MinValue, CaptureAuthoredSnapshot,
+			"Hexagon authored persistent scene identity snapshot" );
 		Listen( Stage.FinishUpdate, 90, ProcessDirty, "Hexagon persistent scene identity index" );
 	}
 
@@ -128,6 +160,10 @@ public sealed class PersistentSceneIdentityIndexSystem : GameObjectSystem<Persis
 			return OperationResult<PersistentSceneIdentityIndex>.Failure(
 				ErrorCode.Conflict,
 				"Persistent scene identity index is already being rebuilt." );
+		if ( !_provenance.HasAuthoredSnapshot )
+			return OperationResult<PersistentSceneIdentityIndex>.Failure(
+				ErrorCode.ConfigurationInvalid,
+				"Persistent scene identities cannot be published before the authored scene snapshot is captured." );
 		if ( _dirty || Index is null ) RebuildRuntime();
 		return Index is not null
 			? OperationResult<PersistentSceneIdentityIndex>.Success( Index )
@@ -145,15 +181,14 @@ public sealed class PersistentSceneIdentityIndexSystem : GameObjectSystem<Persis
 
 	private void RebuildRuntime()
 	{
-		if ( _building ) return;
+		if ( _building || !_provenance.HasAuthoredSnapshot ) return;
 		_building = true;
 		try
 		{
 			var entries = Collect();
 			Index = PersistentSceneIdentityIndex.Build( entries.Select( entry => entry.Candidate ) );
-			var byPath = new Dictionary<string, SceneIdentityResolution>( StringComparer.Ordinal );
-			foreach ( var resolution in Index.Resolutions ) byPath[resolution.StablePath] = resolution;
-			foreach ( var entry in entries ) entry.Component.ApplyRuntimeResolution( byPath[entry.Candidate.StablePath] );
+			for ( var index = 0; index < entries.Count; index++ )
+				entries[index].Component.ApplyRuntimeResolution( Index.Resolutions[index] );
 			_dirty = false;
 		}
 		finally
@@ -169,16 +204,18 @@ public sealed class PersistentSceneIdentityIndexSystem : GameObjectSystem<Persis
 		try
 		{
 			var entries = Collect();
-			var byPath = entries.ToDictionary( entry => entry.Candidate.StablePath, StringComparer.Ordinal );
+			_provenance.CaptureAuthoredSnapshot( entries.Select( entry => entry.Component.Id ) );
 			var repaired = SceneIdentityValidator.RepairForEditor(
 				entries.Select( entry => entry.Candidate ), SceneEntityId.New );
-			foreach ( var resolution in repaired )
+			for ( var index = 0; index < repaired.Count; index++ )
 			{
+				var resolution = repaired[index];
 				if ( resolution.Repaired && resolution.EffectiveId is not null )
-					byPath[resolution.StablePath].Component.PersistentId = resolution.EffectiveId.Value.Value;
+					entries[index].Component.PersistentId = resolution.EffectiveId.Value.Value;
 			}
 			Index = PersistentSceneIdentityIndex.Build( entries.Select( entry =>
-				new SceneIdentityCandidate( entry.Candidate.StablePath, entry.Component.RawIdentity ) ) );
+				new SceneIdentityCandidate(
+					entry.Candidate.StablePath, entry.Component.RawIdentity, entry.Candidate.Provenance ) ) );
 			_dirty = false;
 		}
 		finally
@@ -187,12 +224,26 @@ public sealed class PersistentSceneIdentityIndexSystem : GameObjectSystem<Persis
 		}
 	}
 
-	private IReadOnlyList<IdentityEntry> Collect() => _scene
+	private void CaptureAuthoredSnapshot()
+	{
+		_provenance.CaptureAuthoredSnapshot( EnumerateComponents().Select( component => component.Id ) );
+		Index = null;
+		_dirty = true;
+	}
+
+	private IEnumerable<PersistentSceneEntity> EnumerateComponents() => _scene
 		.GetAllObjects( true )
-		.SelectMany( gameObject => gameObject.GetComponents<PersistentSceneEntity>( true ) )
+		.SelectMany( gameObject => gameObject.GetComponents<PersistentSceneEntity>( true ) );
+
+	private IReadOnlyList<IdentityEntry> Collect() => EnumerateComponents()
 		.Select( component => new IdentityEntry(
 			component,
-			new SceneIdentityCandidate( PersistentSceneEntity.StablePath( component ), component.RawIdentity ) ) )
+			new SceneIdentityCandidate(
+				PersistentSceneEntity.StablePath( component ),
+				component.RawIdentity,
+				Game.IsPlaying
+					? _provenance.Classify( component.Id, component.GameObject.RootNetwork.Active )
+					: SceneIdentityProvenance.EditorAuthored ) ) )
 		.ToArray();
 
 	private sealed record IdentityEntry(

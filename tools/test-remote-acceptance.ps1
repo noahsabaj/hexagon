@@ -128,6 +128,9 @@ try {
         'server-post-restart-log' = 'server-post-restart.log'
         'client-a-log' = 'client-a.log'
         'client-b-log' = 'client-b.log'
+        'server-environment' = 'server-environment.json'
+        'client-a-environment' = 'client-a-environment.json'
+        'client-b-environment' = 'client-b-environment.json'
     }
     foreach ($artifact in $evidence.artifacts) {
         $artifact.path = $paths[[string]$artifact.id]
@@ -141,6 +144,53 @@ try {
         -Encoding utf8
     Set-Content -LiteralPath (Join-Path $evidenceRoot $paths['client-a-log']) -Value 'authenticated remote client A' -Encoding utf8
     Set-Content -LiteralPath (Join-Path $evidenceRoot $paths['client-b-log']) -Value 'authenticated remote client B' -Encoding utf8
+    foreach ($role in @('server', 'client_a', 'client_b')) {
+        $artifactId = if ($role -ceq 'server') { 'server-environment' } else { "$($role.Replace('_', '-'))-environment" }
+        $entryPoint = if ($role -ceq 'server') { 'sbox-server.exe' } else { 'sbox.exe' }
+        $entryHash = if ($role -ceq 'server') { ('a' * 64) -join '' } else { ('b' * 64) -join '' }
+        $runtime = [ordered]@{
+            format = 'hexagon-v2-runtime-environment/1'
+            role = $role
+            captured_at_utc = $captured
+            os = [ordered]@{ description = 'Fixture Windows'; architecture = 'X64' }
+            source = [ordered]@{
+                hexagon_sha = $hexagonSha
+                hl2rp_sha = $schemaSha
+                effective_input_fingerprint = $evidence.source_fingerprint
+            }
+            dotnet = [ordered]@{
+                framework = 'Microsoft.NETCore.App'
+                requested_version = '10.0.0'
+                version = '10.0.9'
+                architecture = 'x64'
+                runtime_config_file_name = if ($role -ceq 'server') {
+                    'sbox-server.runtimeconfig.json'
+                }
+                else {
+                    'sbox.runtimeconfig.json'
+                }
+                runtime_config_sha256 = if ($role -ceq 'server') {
+                    ('1' * 64) -join ''
+                }
+                else {
+                    ('2' * 64) -join ''
+                }
+            }
+            sbox = [ordered]@{
+                steam_app_id = 590830
+                steam_build_id = '12345678'
+                version = 'fixture-version'
+                version_sha256 = ('e' * 64) -join ''
+                files = @(
+                    [ordered]@{ name = 'entry_point'; file_name = $entryPoint; sha256 = $entryHash },
+                    [ordered]@{ name = 'engine2'; file_name = 'engine2.dll'; sha256 = ('c' * 64) -join '' },
+                    [ordered]@{ name = 'sandbox_engine'; file_name = 'Sandbox.Engine.dll'; sha256 = ('d' * 64) -join '' }
+                )
+            }
+        }
+        $runtime | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (
+            Join-Path $evidenceRoot $paths[$artifactId]) -Encoding utf8
+    }
     foreach ($artifactId in $paths.Keys) {
         Set-EvidenceFileHash -Evidence $evidence -ArtifactId $artifactId
     }
@@ -150,6 +200,7 @@ try {
         $observation.notes = "Observed fixture behavior for $($observation.name)."
         $observation.artifact_ids = @('client-a-log')
     }
+    $evidence.observations[0].artifact_ids = @('client-a-log', 'client-b-log')
     $restart = @($evidence.observations | Where-Object { $_.name -ceq 'restart_restores_all_state' })[0]
     $restart.artifact_ids = @('server-pre-shutdown-log', 'server-post-restart-log')
     Save-Evidence -Evidence $evidence
@@ -157,11 +208,65 @@ try {
     Invoke-Verifier
 
     $validEvidenceJson = Get-Content -LiteralPath $evidencePath -Raw
+    $validClientEnvironmentJson = Get-Content -LiteralPath (
+        Join-Path $evidenceRoot $paths['client-a-environment']) -Raw
+
+    $evidence = ConvertFrom-EvidenceJson -Json $validEvidenceJson
+    $clientRuntime = ConvertFrom-EvidenceJson -Json $validClientEnvironmentJson
+    @($clientRuntime.sbox.files | Where-Object { $_.name -ceq 'engine2' })[0].file_name = 'different.dll'
+    $clientRuntime | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (
+        Join-Path $evidenceRoot $paths['client-a-environment']) -Encoding utf8
+    Set-EvidenceFileHash -Evidence $evidence -ArtifactId 'client-a-environment'
+    Save-Evidence -Evidence $evidence
+    Assert-VerifierFailure -ExpectedMessage "must hash exact file 'engine2.dll'" -Action { Invoke-Verifier }
+    Set-Content -LiteralPath (Join-Path $evidenceRoot $paths['client-a-environment']) `
+        -Value $validClientEnvironmentJson -Encoding utf8 -NoNewline
+
+    $evidence = ConvertFrom-EvidenceJson -Json $validEvidenceJson
+    $evidence.format = 'hexagon-v2-manual-remote-acceptance/3'
+    Save-Evidence -Evidence $evidence
+    Assert-VerifierFailure -ExpectedMessage 'not the supported manual-attestation format' -Action { Invoke-Verifier }
+
+    $evidence = ConvertFrom-EvidenceJson -Json $validEvidenceJson
+    $clientRuntime = ConvertFrom-EvidenceJson -Json $validClientEnvironmentJson
+    @($clientRuntime.sbox.files | Where-Object { $_.name -ceq 'engine2' })[0].sha256 = ('f' * 64) -join ''
+    $clientRuntime | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (
+        Join-Path $evidenceRoot $paths['client-a-environment']) -Encoding utf8
+    Set-EvidenceFileHash -Evidence $evidence -ArtifactId 'client-a-environment'
+    Save-Evidence -Evidence $evidence
+    Assert-VerifierFailure -ExpectedMessage 'does not match the server engine/runtime fingerprint' -Action { Invoke-Verifier }
+    Set-Content -LiteralPath (Join-Path $evidenceRoot $paths['client-a-environment']) `
+        -Value $validClientEnvironmentJson -Encoding utf8 -NoNewline
+
+    $evidence = ConvertFrom-EvidenceJson -Json $validEvidenceJson
+    $clientRuntime = ConvertFrom-EvidenceJson -Json $validClientEnvironmentJson
+    $clientRuntime.source.effective_input_fingerprint = ('f' * 64) -join ''
+    $clientRuntime | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (
+        Join-Path $evidenceRoot $paths['client-a-environment']) -Encoding utf8
+    Set-EvidenceFileHash -Evidence $evidence -ArtifactId 'client-a-environment'
+    Save-Evidence -Evidence $evidence
+    Assert-VerifierFailure -ExpectedMessage 'does not match the exact source/effective-input fingerprint' -Action { Invoke-Verifier }
+    Set-Content -LiteralPath (Join-Path $evidenceRoot $paths['client-a-environment']) `
+        -Value $validClientEnvironmentJson -Encoding utf8 -NoNewline
 
     $evidence = ConvertFrom-EvidenceJson -Json $validEvidenceJson
     $evidence.clients[1].account_id = '076561198000000001'
     Save-Evidence -Evidence $evidence
     Assert-VerifierFailure -ExpectedMessage 'after numeric parsing' -Action { Invoke-Verifier }
+
+    $evidence = ConvertFrom-EvidenceJson -Json $validEvidenceJson
+    $extraArtifactPath = Join-Path $evidenceRoot 'unreferenced-observer.log'
+    Set-Content -LiteralPath $extraArtifactPath -Value 'must not be published' -Encoding utf8
+    $evidence.artifacts = @($evidence.artifacts) + [pscustomobject]@{
+        id = 'unreferenced-observer-log'
+        role = 'observer'
+        kind = 'log'
+        path = 'unreferenced-observer.log'
+        sha256 = (Get-FileHash -LiteralPath $extraArtifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        captured_at_utc = $captured
+    }
+    Save-Evidence -Evidence $evidence
+    Assert-VerifierFailure -ExpectedMessage 'artifacts are unreferenced' -Action { Invoke-Verifier }
 
     $evidence = ConvertFrom-EvidenceJson -Json $validEvidenceJson
     $evidence.clients[0].remote = 'false'

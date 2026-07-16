@@ -44,7 +44,9 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 {
 	private readonly Scene _runtimeScene;
 	private readonly Dictionary<Guid, RuntimePlayerSession> _sessions = new();
+	private readonly SpawnSlotAllocator _spawnSlots = new();
 	private readonly CancellationTokenSource _hostLifetime = new();
+	private readonly AsyncOperationRegistry _hostOperations = new();
 	private Task? _hostInitialization;
 	private Task<OperationResult>? _hostShutdown;
 	private Task<OperationResult>? _resourceShutdown;
@@ -149,9 +151,16 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			},
 			bindings.Value.Types,
 			persistenceInvariants );
-		_hostSchema = compiled.Value;
-		_hostServices = CreateHostServices();
 		HostReadiness = HexRuntimeReadiness.Initializing;
+		_hostSchema = compiled.Value;
+		var hostServices = CreateHostServices();
+		if ( hostServices.Failed )
+		{
+			FailHost( hostServices.Error!.Message );
+			_hostInitialization = ShutdownResourcesOnceAsync();
+			return;
+		}
+		_hostServices = hostServices.Value;
 		_hostInitialization = InitializeHostAsync(
 			descriptorResult.Value,
 			compiled.Value,
@@ -226,32 +235,81 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 
 	void Component.INetworkListener.OnActive( Connection connection )
 	{
+		// Project settings establish the default before admission; reassert the
+		// fail-closed policy per remote connection before any identity shell exists.
+		if ( !connection.IsHost )
+		{
+			connection.CanSpawnObjects = false;
+			connection.CanRefreshObjects = false;
+			connection.CanDestroyObjects = false;
+		}
 		if ( _sessions.ContainsKey( connection.Id ) ) return;
-		var spawn = _runtimeScene.GetAll<SpawnPoint>()
+		var spawns = _runtimeScene.GetAll<SpawnPoint>()
+			.Where( candidate => candidate.Active )
 			.OrderBy( candidate => candidate.GameObject.Id )
-			.FirstOrDefault();
-		if ( spawn is null )
+			.ToArray();
+		if ( spawns.Length == 0 )
 		{
 			Log.Error( $"HEXAGON_PLAYER_SPAWN_FAILED connection={connection.Id} reason=no_spawn_point" );
 			return;
 		}
-		var playerObject = new GameObject( true, $"Hexagon Player - {connection.DisplayName}" );
-		playerObject.WorldTransform = spawn.WorldTransform.WithScale( 1 );
-		var player = playerObject.AddComponent<HexPlayerBody>();
-		player.HostSetConnection( connection );
-		playerObject.NetworkSpawn( connection );
-		var session = new RuntimePlayerSession( player, exception =>
-			Log.Error( exception, $"Hexagon command cancellation callback failed for connection '{connection.Id}'." ) );
-		_sessions.Add( connection.Id, session );
-		if ( HostReadiness == HexRuntimeReadiness.Ready ) _ = session.ObserveHostReady();
-		// Application-level connection is delayed until the authenticated caller
-		// proves possession of its freshly generated client nonce.
+
+		var slot = _spawnSlots.Acquire( connection.Id );
+		GameObject? playerObject = null;
+		RuntimePlayerSession? newSession = null;
+		try
+		{
+			var placement = SpawnSlotAllocator.Describe( slot, spawns.Length );
+			var spawn = spawns[placement.SpawnPointIndex];
+			var position = spawn.WorldPosition;
+			if ( placement.Ring > 0 )
+			{
+				var localOffset = new Vector3(
+					(float)(Math.Cos( placement.AngleRadians ) * placement.Radius),
+					(float)(Math.Sin( placement.AngleRadians ) * placement.Radius),
+					0.0f );
+				position += spawn.WorldRotation * localOffset;
+			}
+
+			playerObject = new GameObject( true, $"Hexagon Player - {connection.DisplayName}" );
+			playerObject.WorldTransform = spawn.WorldTransform.WithPosition( position ).WithScale( 1 );
+			var player = playerObject.AddComponent<HexPlayerBody>();
+			player.HostSetConnection( connection );
+			if ( !playerObject.NetworkSpawn( connection ) )
+			{
+				playerObject.Destroy();
+				_spawnSlots.Release( connection.Id );
+				Log.Error( $"HEXAGON_PLAYER_SPAWN_FAILED connection={connection.Id} reason=network_spawn_rejected" );
+				return;
+			}
+
+			newSession = new RuntimePlayerSession( player, exception =>
+				Log.Error( exception, $"Hexagon command cancellation callback failed for connection '{connection.Id}'." ) );
+			_sessions.Add( connection.Id, newSession );
+			player.HostInputAuthenticator = AuthenticatePlayerInput;
+			Log.Info( FormattableString.Invariant(
+				$"HEXAGON_PLAYER_SPAWNED connection={connection.Id} slot={slot} position={position.x:0.###},{position.y:0.###},{position.z:0.###}" ) );
+			if ( HostReadiness == HexRuntimeReadiness.Ready ) _ = newSession.ObserveHostReady();
+			// Application-level connection is delayed until the authenticated caller
+			// proves possession of its freshly generated client nonce.
+		}
+		catch ( Exception exception )
+		{
+			if ( _sessions.Remove( connection.Id, out var registeredSession ) ) registeredSession.Dispose();
+			else newSession?.Dispose();
+			if ( playerObject is not null && playerObject.IsValid() ) playerObject.Destroy();
+			_spawnSlots.Release( connection.Id );
+			Log.Error( exception,
+				$"HEXAGON_PLAYER_SPAWN_FAILED connection={connection.Id} reason=spawn_exception" );
+		}
 	}
 
 	void Component.INetworkListener.OnDisconnected( Connection connection )
 	{
+		_spawnSlots.Release( connection.Id );
 		if ( !_sessions.Remove( connection.Id, out var session ) ) return;
 		var actor = session.IsApplicationConnected ? BuildActor( connection, session, false ) : (RpcActor?)null;
+		session.Player.HostInputAuthenticator = null;
 		session.Disconnect();
 		try
 		{
@@ -287,6 +345,22 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		}
 		player = null!;
 		return false;
+	}
+
+	private bool AuthenticatePlayerInput( HexPlayerBody player, PlayerInputFrame frame )
+	{
+		if ( player.HostConnection is not Connection connection ) return false;
+		var sessionExists = _sessions.TryGetValue( connection.Id, out var session );
+		var character = HostApplication?.FindActiveCharacter( new ConnectionId( connection.Id ) );
+		return PlayerInputSessionAuthentication.IsAuthorized( new PlayerInputAuthenticationState(
+			sessionExists,
+			sessionExists && ReferenceEquals( session!.Player, player ),
+			sessionExists && session!.IsApplicationConnected,
+			character?.Id.Value ?? Guid.Empty,
+			player.CharacterGuid,
+			player.BodyGeneration,
+			frame.BodyGeneration,
+			player.TryGetUsableAuthoritativeBody( out _ ) ) );
 	}
 
 	internal OperationResult<RpcActor> ResolveActor(
@@ -413,6 +487,9 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 				: null );
 	}
 
+	internal bool TryStartHostOperation( string name, Func<Task> operation ) =>
+		_hostOperations.TryStartTask( name, operation );
+
 	/// <summary>
 	/// Explicit awaitable barrier for game-owned scene transition code. s&amp;box's
 	/// synchronous GameObjectSystem.Dispose cannot itself await this result.
@@ -437,6 +514,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		ClientReadiness = HexRuntimeReadiness.Disposed;
 		foreach ( var session in _sessions.Values ) session.Dispose();
 		_sessions.Clear();
+		_spawnSlots.Clear();
 		base.Dispose();
 	}
 
@@ -570,6 +648,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 	{
 		if ( _disposeRequested ) return;
 		_disposeRequested = true;
+		_hostOperations.StopAdmission();
 		if ( !_hostLifetimeDisposed )
 		{
 			try
@@ -614,11 +693,61 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		Exception? firstFailure = null;
 		PersistenceShutdownResult? persistenceShutdown = null;
 		var application = HostApplication;
+		var disconnectActors = new List<RpcActor>();
+		foreach ( var session in _sessions.Values )
+		{
+			session.Player.HostInputAuthenticator = null;
+			if ( session.Player.HostConnection is Connection connection && session.Scope is not null )
+			{
+				try { disconnectActors.Add( BuildActor( connection, session, false ) ); }
+				catch ( Exception exception )
+				{
+					firstFailure ??= exception;
+					Log.Error( exception, $"Could not capture shutdown actor for '{connection.Id}'." );
+				}
+			}
+			session.Disconnect();
+		}
+
+		if ( application is not null )
+		{
+			foreach ( var actor in disconnectActors )
+			{
+				try { application.Disconnected( actor ); }
+				catch ( Exception exception )
+				{
+					firstFailure ??= exception;
+					Log.Error( exception, $"Host application disconnect failed for '{actor.Connection.Id}'." );
+				}
+			}
+		}
+
+		var commandDrain = await _hostOperations.DrainAsync();
+		foreach ( var failure in commandDrain.Failures )
+		{
+			if ( !failure.WasCanceled ) firstFailure ??= failure.Exception;
+			Log.Warning(
+				$"HEXAGON_HOST_OPERATION_FAILED id={failure.OperationId} name={failure.Name} " +
+				$"canceled={failure.WasCanceled} message={failure.Exception.Message}" );
+		}
+
+		var hostServices = _hostServices;
+		_hostServices = null;
+		if ( hostServices is not null )
+		{
+			try
+			{
+				hostServices.Runtime = null;
+				if ( hostServices.GameObject.IsValid() ) hostServices.GameObject.Destroy();
+			}
+			catch ( Exception exception ) { firstFailure ??= exception; }
+		}
+
 		HostApplication = null;
 		if ( application is not null )
 		{
 			var disposedApplication = await RuntimeAsyncOperation.Capture( application.DisposeAsync );
-			if ( !disposedApplication.Succeeded ) firstFailure = disposedApplication.Exception;
+			if ( !disposedApplication.Succeeded ) firstFailure ??= disposedApplication.Exception;
 		}
 
 		var persistence = _persistence;
@@ -640,16 +769,28 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			if ( !disposedPersistence.Succeeded ) firstFailure ??= disposedPersistence.Exception;
 		}
 
+		try { DisposeHostLifetime(); }
+		catch ( Exception exception ) { firstFailure ??= exception; }
+
+		if ( firstFailure is null && application is not null && persistenceShutdown?.IsClean == true )
+		{
+			try
+			{
+				var finalized = application.CompleteQuiescedShutdown( persistenceShutdown );
+				if ( finalized.Failed )
+					firstFailure = new InvalidOperationException( finalized.Error!.Message );
+			}
+			catch ( Exception exception ) { firstFailure = exception; }
+		}
+
 		if ( firstFailure is not null )
 		{
-			DisposeHostLifetime();
 			HostReadiness = HexRuntimeReadiness.Failed;
 			Log.Error( firstFailure, "HEXAGON_DRAIN_FAILED host resources did not close cleanly." );
 			return OperationResult.Failure( ErrorCode.InternalError, "Host resources did not close cleanly." );
 		}
 
 		if ( HostReadiness != HexRuntimeReadiness.Failed ) HostReadiness = HexRuntimeReadiness.Disposed;
-		DisposeHostLifetime();
 		if ( persistenceShutdown is not null && persistenceShutdown.IsClean )
 		{
 			Log.Info( "HEXAGON_DRAINED host" );
@@ -668,13 +809,31 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		return OperationResult.Success();
 	}
 
-	private HexHostServicesComponent CreateHostServices()
+	private OperationResult<HexHostServicesComponent> CreateHostServices()
 	{
-		var servicesObject = new GameObject( true, "Hexagon v2 Host Services" );
-		var services = servicesObject.AddComponent<HexHostServicesComponent>();
-		services.Runtime = this;
-		servicesObject.NetworkSpawn();
-		return services;
+		GameObject? servicesObject = null;
+		try
+		{
+			servicesObject = new GameObject( true, "Hexagon v2 Host Services" );
+			var services = servicesObject.AddComponent<HexHostServicesComponent>();
+			services.Runtime = this;
+			return HostServicePublication.RequirePublished(
+				services,
+				servicesObject.NetworkSpawn,
+				() =>
+				{
+					services.Runtime = null;
+					if ( servicesObject.IsValid() ) servicesObject.Destroy();
+				} );
+		}
+		catch ( Exception exception )
+		{
+			try { if ( servicesObject is not null && servicesObject.IsValid() ) servicesObject.Destroy(); }
+			catch ( Exception ) { }
+			return OperationResult<HexHostServicesComponent>.Failure(
+				ErrorCode.InternalError,
+				$"Hexagon host services could not be created: {exception.Message}" );
+		}
 	}
 
 	private void ReportClientBootstrapFailure(

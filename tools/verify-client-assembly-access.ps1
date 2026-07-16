@@ -25,6 +25,7 @@ $ErrorActionPreference = 'Stop'
 
 $schemaRootPath = (Resolve-Path -LiteralPath $SchemaRoot).Path
 $generatedProject = Join-Path $schemaRootPath 'Code\hl2rp.csproj'
+$generatedProjectDirectory = Split-Path -Parent $generatedProject
 $managedRoot = Join-Path $SboxRoot 'bin\managed'
 $generatedOutput = Join-Path $SboxRoot '.vs\output'
 $accessAssemblyPath = Join-Path $managedRoot 'Sandbox.Access.dll'
@@ -36,7 +37,6 @@ foreach ($requiredPath in @(
     $generatedProject,
     $accessAssemblyPath,
     $cecilAssemblyPath,
-    $hexagonAssemblyPath,
     $baseLibraryAssemblyPath
 )) {
     if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
@@ -57,6 +57,32 @@ if (-not $temporaryRoot.StartsWith(
 }
 
 try {
+    [xml] $generatedProjectXml = Get-Content -LiteralPath $generatedProject -Raw
+    $hexagonProjects = @(
+        foreach ($reference in @($generatedProjectXml.SelectNodes("//*[local-name()='ProjectReference']"))) {
+            $include = $reference.GetAttribute('Include')
+            if ([string]::IsNullOrWhiteSpace($include)) { continue }
+            $candidate = [System.IO.Path]::GetFullPath((Join-Path $generatedProjectDirectory $include))
+            if ([System.IO.Path]::GetFileName($candidate) -eq 'hexagon.csproj') { $candidate }
+        }
+    )
+    if ($hexagonProjects.Count -ne 1) {
+        throw "Client assembly access verification requires exactly one generated Hexagon project reference."
+    }
+    & dotnet build $hexagonProjects[0] `
+        --configuration Release `
+        --no-restore `
+        --nologo `
+        --disable-build-servers `
+        -m:1 `
+        --warnaserror
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release Hexagon dependency build failed with exit code $LASTEXITCODE."
+    }
+    if (-not (Test-Path -LiteralPath $hexagonAssemblyPath -PathType Leaf)) {
+        throw "Release Hexagon dependency build did not produce '$hexagonAssemblyPath'."
+    }
+
     $arguments = @(
         'build',
         $generatedProject,
@@ -133,8 +159,8 @@ try {
         $result = $access.VerifyAssembly($assemblyStream, [ref]$trustedStream, $false)
         if (-not $result.Success) {
             $messages = [System.Collections.Generic.List[string]]::new()
-            foreach ($error in $result.Errors) {
-                $messages.Add("access error: $error")
+            foreach ($accessError in $result.Errors) {
+                $messages.Add("access error: $accessError")
             }
             foreach ($violation in $result.WhitelistErrors) {
                 $messages.Add("whitelist violation: $($violation.Item1)")

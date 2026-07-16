@@ -18,6 +18,7 @@ namespace Hexagon.V2.Tests.Application;
 
 internal sealed class ApplicationServiceTestEnvironment : IAsyncDisposable
 {
+	private readonly HashSet<ConnectionId> _openConnections = new();
 	public const string StateTypeId = "test.character-state";
 	public const string ItemDefinitionId = "test.item";
 	public const string BagDefinitionId = "test.bag";
@@ -120,6 +121,7 @@ internal sealed class ApplicationServiceTestEnvironment : IAsyncDisposable
 		InventoryId inventoryId,
 		InventoryCapability capabilities)
 	{
+		OpenConnection(actor.ConnectionId);
 		Access.Grant(new InventoryGrant
 		{
 			ConnectionId = actor.ConnectionId,
@@ -128,6 +130,11 @@ internal sealed class ApplicationServiceTestEnvironment : IAsyncDisposable
 			Capabilities = capabilities,
 			Kind = InventoryGrantKind.Character
 		});
+	}
+
+	public void OpenConnection(ConnectionId connectionId)
+	{
+		if (_openConnections.Add(connectionId)) Access.OpenConnection(connectionId);
 	}
 
 	public static InventoryActor Actor() => new(ConnectionId.New(), new AccountId(101), CharacterId.New());

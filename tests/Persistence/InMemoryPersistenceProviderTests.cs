@@ -206,4 +206,110 @@ public sealed class InMemoryPersistenceProviderTests
 		Assert.AreEqual( PersistenceErrorCode.RevisionConflict, conflict.Error!.Code );
 		Assert.AreEqual( 2, repository.Find( "alyx" )!.Value.Score );
 	}
+
+	[TestMethod]
+	public async Task IncrementalInvariantPublishesOnlyAfterCommittedStateIsVisible()
+	{
+		var invariants = new RecordingIncrementalInvariantSet();
+		await using var provider = new InMemoryPersistenceProvider(
+			PersistenceTestSupport.CreateRegistry(),
+			invariants );
+		await provider.InitializeAsync();
+		var repository = provider.Repository<CollectionTestDocument>( "characters" );
+		invariants.ProviderStateIsPublished = () => repository.Find( "alyx" ) is not null;
+
+		await using var create = provider.BeginUnitOfWork();
+		create.Create( repository, "alyx", new CollectionTestDocument { Name = "Alyx" } );
+		var result = await create.CommitAsync();
+
+		Assert.IsTrue( result.Succeeded, result.Error?.Message );
+		Assert.AreEqual( 1, invariants.FullValidationCalls );
+		Assert.AreEqual( 1, invariants.RebuildCalls );
+		Assert.AreEqual( 1, invariants.PrepareCalls );
+		Assert.AreEqual( 1, invariants.PublishCalls );
+		Assert.IsTrue( invariants.ProviderStateWasPublished );
+	}
+
+	[TestMethod]
+	public async Task IncrementalInvariantRejectionDoesNotPublishOrExposeCandidateState()
+	{
+		var invariants = new RecordingIncrementalInvariantSet { RejectPreparation = true };
+		await using var provider = new InMemoryPersistenceProvider(
+			PersistenceTestSupport.CreateRegistry(),
+			invariants );
+		await provider.InitializeAsync();
+		var repository = provider.Repository<CollectionTestDocument>( "characters" );
+
+		await using var create = provider.BeginUnitOfWork();
+		create.Create( repository, "alyx", new CollectionTestDocument { Name = "Alyx" } );
+		var result = await create.CommitAsync();
+
+		Assert.IsFalse( result.Succeeded );
+		Assert.AreEqual( PersistenceErrorCode.InvariantViolation, result.Error!.Code );
+		Assert.AreEqual( 1, invariants.PrepareCalls );
+		Assert.AreEqual( 0, invariants.PublishCalls );
+		Assert.IsNull( repository.Find( "alyx" ) );
+		Assert.AreEqual( PersistenceProviderState.Ready, provider.State );
+	}
+
+	[TestMethod]
+	public async Task IncrementalInvariantPublishFailureFaultsProviderAfterDurableCommit()
+	{
+		var invariants = new RecordingIncrementalInvariantSet { ThrowOnPublish = true };
+		await using var provider = new InMemoryPersistenceProvider(
+			PersistenceTestSupport.CreateRegistry(),
+			invariants );
+		await provider.InitializeAsync();
+		var repository = provider.Repository<CollectionTestDocument>( "characters" );
+
+		await using var create = provider.BeginUnitOfWork();
+		create.Create( repository, "alyx", new CollectionTestDocument { Name = "Alyx" } );
+		var result = await create.CommitAsync();
+
+		Assert.IsFalse( result.Succeeded );
+		Assert.AreEqual( PersistenceErrorCode.DurabilityFailed, result.Error!.Code );
+		Assert.AreEqual( 1, invariants.PrepareCalls );
+		Assert.AreEqual( 1, invariants.PublishCalls );
+		Assert.AreEqual( PersistenceProviderState.Faulted, provider.State );
+		Assert.AreEqual( PersistenceHealthStatus.Fatal, provider.Health.Status );
+	}
+
+	private sealed class RecordingIncrementalInvariantSet : IIncrementalPersistenceInvariantSet
+	{
+		public bool RejectPreparation { get; init; }
+		public bool ThrowOnPublish { get; init; }
+		public Func<bool>? ProviderStateIsPublished { get; set; }
+		public bool ProviderStateWasPublished { get; private set; }
+		public int FullValidationCalls { get; private set; }
+		public int RebuildCalls { get; private set; }
+		public int PrepareCalls { get; private set; }
+		public int PublishCalls { get; private set; }
+
+		public IReadOnlyList<PersistenceInvariantIssue> Validate( PersistenceInvariantContext context )
+		{
+			FullValidationCalls++;
+			return Array.Empty<PersistenceInvariantIssue>();
+		}
+
+		public PersistenceInvariantPreparation Prepare( PersistenceInvariantContext context )
+		{
+			PrepareCalls++;
+			return RejectPreparation
+				? new PersistenceInvariantPreparation(
+					[new PersistenceInvariantIssue( "test.reject", "characters/alyx", "Rejected for testing." )] )
+				: new PersistenceInvariantPreparation( Array.Empty<PersistenceInvariantIssue>(), new object() );
+		}
+
+		public void Publish( PersistenceInvariantPreparation preparation )
+		{
+			PublishCalls++;
+			ProviderStateWasPublished = ProviderStateIsPublished?.Invoke() ?? false;
+			if ( ThrowOnPublish ) throw new InvalidOperationException( "Incremental invariant publication failed." );
+		}
+
+		public void Rebuild( PersistenceInvariantContext context )
+		{
+			RebuildCalls++;
+		}
+	}
 }
