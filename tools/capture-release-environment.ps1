@@ -11,6 +11,16 @@ param(
     [string] $SboxRoot = 'C:\Program Files (x86)\Steam\steamapps\common\sbox',
 
     [Parameter()]
+    [ValidateSet('steam', 'source_build')]
+    [string] $RuntimeDistribution = 'steam',
+
+    [Parameter()]
+    [string] $EngineSourceSha = '',
+
+    [Parameter()]
+    [string] $SteamContextRoot = '',
+
+    [Parameter()]
     [string] $HexagonRoot = (Split-Path -Parent $PSScriptRoot),
 
     [Parameter(Mandatory)]
@@ -109,6 +119,25 @@ function Get-DotNetRuntimeRecord {
 }
 
 $sboxRootPath = (Resolve-Path -LiteralPath $SboxRoot).Path
+$steamContextRootPath = if ([string]::IsNullOrWhiteSpace($SteamContextRoot)) {
+    $sboxRootPath
+}
+else {
+    (Resolve-Path -LiteralPath $SteamContextRoot).Path
+}
+if ($RuntimeDistribution -ceq 'source_build') {
+    if ($EngineSourceSha -cnotmatch '^[a-f0-9]{40}$') {
+        throw 'A source-built runtime requires -EngineSourceSha as a lowercase full Git SHA.'
+    }
+}
+elseif (-not [string]::IsNullOrWhiteSpace($EngineSourceSha)) {
+    throw 'A Steam runtime must not declare an engine source SHA.'
+}
+elseif (-not $sboxRootPath.Equals(
+    $steamContextRootPath,
+    [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'A Steam runtime must use its own root as the Steam metadata context.'
+}
 $hexagonRootPath = (Resolve-Path -LiteralPath $HexagonRoot).Path
 $schemaRootPath = (Resolve-Path -LiteralPath $SchemaRoot).Path
 $sourceInputs = Get-EffectiveReleaseInputs -Repositories @(
@@ -122,9 +151,9 @@ if ([string]$lock.commit -cne $hexagonSha) {
     throw "HL2RP is not locked to the captured Hexagon source SHA '$hexagonSha'."
 }
 
-$versionPath = Join-Path $sboxRootPath '.version'
+$versionPath = Join-Path $steamContextRootPath '.version'
 $versionContent = (Get-Content -LiteralPath $versionPath -Raw).Trim()
-$steamAppsRoot = Split-Path -Parent (Split-Path -Parent $sboxRootPath)
+$steamAppsRoot = Split-Path -Parent (Split-Path -Parent $steamContextRootPath)
 $appManifestPath = Join-Path $steamAppsRoot 'appmanifest_590830.acf'
 $appManifest = Get-Content -LiteralPath $appManifestPath -Raw
 $buildMatch = [regex]::Match($appManifest, '"buildid"\s+"(?<id>[0-9]+)"')
@@ -146,7 +175,7 @@ $dotnetRuntime = Get-DotNetRuntimeRecord `
     -DotNetInfo $dotnetInfo
 
 $record = [ordered]@{
-    format = 'hexagon-v2-runtime-environment/1'
+    format = 'hexagon-v2-runtime-environment/2'
     role = $Role
     captured_at_utc = [DateTimeOffset]::UtcNow.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
     os = [ordered]@{
@@ -160,10 +189,14 @@ $record = [ordered]@{
     }
     dotnet = $dotnetRuntime
     sbox = [ordered]@{
-        steam_app_id = 590830
-        steam_build_id = $buildMatch.Groups['id'].Value
-        version = $versionContent
-        version_sha256 = (Get-FileHash -LiteralPath $versionPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        distribution = $RuntimeDistribution
+        engine_source_sha = if ($RuntimeDistribution -ceq 'source_build') { $EngineSourceSha } else { '' }
+        compatibility = [ordered]@{
+            steam_app_id = 590830
+            steam_build_id = $buildMatch.Groups['id'].Value
+            version = $versionContent
+            version_sha256 = (Get-FileHash -LiteralPath $versionPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
         files = @(
             Get-RequiredFileRecord -Name 'entry_point' -Path (Join-Path $sboxRootPath $entryPoint)
             Get-RequiredFileRecord -Name 'engine2' -Path (Join-Path $sboxRootPath 'bin/win64/engine2.dll')

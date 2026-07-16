@@ -299,7 +299,7 @@ foreach ($role in @('server', 'client_a', 'client_b')) {
     else {
         $runtimeJson | ConvertFrom-Json
     }
-    if ([string]$runtime.format -cne 'hexagon-v2-runtime-environment/1' -or
+    if ([string]$runtime.format -cne 'hexagon-v2-runtime-environment/2' -or
         [string]$runtime.role -cne $role) {
         throw "Runtime environment artifact '$artifactId' has an unsupported format or role."
     }
@@ -309,6 +309,13 @@ foreach ($role in @('server', 'client_a', 'client_b')) {
         $runtimeCaptured -lt $started -or $runtimeCaptured -gt $completed -or
         $runtimeCaptured -gt $maximumAcceptedFutureTimestamp) {
         throw "Runtime environment artifact '$artifactId' was not captured during the attested run."
+    }
+    $distribution = [string]$runtime.sbox.distribution
+    $engineSourceSha = [string]$runtime.sbox.engine_source_sha
+    if ($distribution -cnotin @('steam', 'source_build') -or
+        ($distribution -ceq 'source_build' -and $engineSourceSha -cnotmatch '^[a-f0-9]{40}$') -or
+        ($distribution -ceq 'steam' -and -not [string]::IsNullOrWhiteSpace($engineSourceSha))) {
+        throw "Runtime environment artifact '$artifactId' has inconsistent runtime distribution provenance."
     }
     if ([string]::IsNullOrWhiteSpace([string]$runtime.os.description) -or
         [string]::IsNullOrWhiteSpace([string]$runtime.os.architecture) -or
@@ -321,10 +328,10 @@ foreach ($role in @('server', 'client_a', 'client_b')) {
         [string]::IsNullOrWhiteSpace([string]$runtime.dotnet.architecture) -or
         [string]::IsNullOrWhiteSpace([string]$runtime.dotnet.runtime_config_file_name) -or
         [string]$runtime.dotnet.runtime_config_sha256 -cnotmatch '^[a-f0-9]{64}$' -or
-        [int]$runtime.sbox.steam_app_id -ne 590830 -or
-        [string]$runtime.sbox.steam_build_id -cnotmatch '^[0-9]+$' -or
-        [string]::IsNullOrWhiteSpace([string]$runtime.sbox.version) -or
-        [string]$runtime.sbox.version_sha256 -cnotmatch '^[a-f0-9]{64}$') {
+        [int]$runtime.sbox.compatibility.steam_app_id -ne 590830 -or
+        [string]$runtime.sbox.compatibility.steam_build_id -cnotmatch '^[0-9]+$' -or
+        [string]::IsNullOrWhiteSpace([string]$runtime.sbox.compatibility.version) -or
+        [string]$runtime.sbox.compatibility.version_sha256 -cnotmatch '^[a-f0-9]{64}$') {
         throw "Runtime environment artifact '$artifactId' is incomplete."
     }
     if ([string]$runtime.source.hexagon_sha -cne $HexagonSha -or
@@ -363,8 +370,14 @@ function Get-RuntimeFileHash {
 $referenceRuntime = $runtimeEnvironments['server']
 foreach ($role in @('client_a', 'client_b')) {
     $runtime = $runtimeEnvironments[$role]
-    foreach ($property in @('steam_build_id', 'version', 'version_sha256')) {
+    foreach ($property in @('distribution', 'engine_source_sha')) {
         if ([string]$runtime.sbox.$property -cne [string]$referenceRuntime.sbox.$property) {
+            throw "Runtime environment role '$role' does not match the server s&box fingerprint."
+        }
+    }
+    foreach ($property in @('steam_build_id', 'version', 'version_sha256')) {
+        if ([string]$runtime.sbox.compatibility.$property -cne
+            [string]$referenceRuntime.sbox.compatibility.$property) {
             throw "Runtime environment role '$role' does not match the server s&box fingerprint."
         }
     }

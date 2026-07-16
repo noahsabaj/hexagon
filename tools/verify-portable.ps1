@@ -48,6 +48,9 @@ Invoke-CheckedCommand -Description 'Running Hexagon neutral tests' -FilePath 'do
 Write-Host '==> Running remote-acceptance verifier contract tests' -ForegroundColor Cyan
 & (Join-Path $PSScriptRoot 'test-remote-acceptance.ps1')
 
+Write-Host '==> Running release-environment capture contract tests' -ForegroundColor Cyan
+& (Join-Path $PSScriptRoot 'test-release-environment.ps1')
+
 Write-Host '==> Running release-input contract tests' -ForegroundColor Cyan
 & (Join-Path $PSScriptRoot 'test-release-inputs.ps1')
 

@@ -105,11 +105,15 @@ public sealed class LayerBoundaryTests
 		var source = SourceWithoutComments( playerBody );
 		var onDestroy = source.IndexOf( "protected override void OnDestroy()", StringComparison.Ordinal );
 		var preparedCleanup = source.IndexOf( "_preparedBody?.Dispose()", onDestroy, StringComparison.Ordinal );
-		var activeCleanup = source.IndexOf( "DestroyAuthoritativeBody()", preparedCleanup, StringComparison.Ordinal );
+		var activeCleanup = source.IndexOf(
+			"DestroyAuthoritativeBody( publishRemoval: false )", preparedCleanup, StringComparison.Ordinal );
 
 		Assert.IsGreaterThanOrEqualTo( 0, onDestroy );
 		Assert.IsGreaterThan( onDestroy, preparedCleanup );
 		Assert.IsGreaterThan( preparedCleanup, activeCleanup );
+		StringAssert.Contains( source, "var publishRemoval = !Game.IsClosing" );
+		StringAssert.Contains( source, "if ( publishRemoval )" );
+		StringAssert.Contains( source, "try { GameObject.Network.Refresh(); }" );
 	}
 
 	[TestMethod]
@@ -164,12 +168,16 @@ public sealed class LayerBoundaryTests
 
 		var shutdown = runtime.IndexOf( "private async Task<OperationResult> ShutdownHostAsync()", StringComparison.Ordinal );
 		var commandDrain = runtime.IndexOf( "_hostOperations.DrainAsync()", shutdown, StringComparison.Ordinal );
+		var pairedDisconnectLoop = runtime.IndexOf( "foreach ( var disconnect in disconnects )", shutdown, StringComparison.Ordinal );
+		var sessionDisconnect = runtime.IndexOf( "disconnect.Session.Disconnect()", pairedDisconnectLoop, StringComparison.Ordinal );
 		var disconnect = runtime.IndexOf( "application.Disconnected", shutdown, StringComparison.Ordinal );
 		var applicationDrain = runtime.IndexOf( "application.DisposeAsync", shutdown, StringComparison.Ordinal );
 		var persistenceDrain = runtime.IndexOf( "persistence.ShutdownAsync", shutdown, StringComparison.Ordinal );
 		var persistenceDispose = runtime.IndexOf( "persistence.DisposeAsync", shutdown, StringComparison.Ordinal );
 		var quiescedEvidence = runtime.IndexOf( "application.CompleteQuiescedShutdown", shutdown, StringComparison.Ordinal );
 		Assert.IsGreaterThanOrEqualTo( 0, shutdown );
+		Assert.IsLessThan( disconnect, sessionDisconnect,
+			"Each client session must be revoked immediately before its application disconnect callback." );
 		Assert.IsLessThan( commandDrain, disconnect, "Disconnect callbacks must revoke sessions before RPC dispatch drains." );
 		Assert.IsLessThan( applicationDrain, commandDrain, "RPC dispatch must finish before application disposal." );
 		Assert.IsLessThan( persistenceDrain, applicationDrain, "Application disposal must finish before persistence shutdown." );

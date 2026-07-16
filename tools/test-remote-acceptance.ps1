@@ -149,7 +149,7 @@ try {
         $entryPoint = if ($role -ceq 'server') { 'sbox-server.exe' } else { 'sbox.exe' }
         $entryHash = if ($role -ceq 'server') { ('a' * 64) -join '' } else { ('b' * 64) -join '' }
         $runtime = [ordered]@{
-            format = 'hexagon-v2-runtime-environment/1'
+            format = 'hexagon-v2-runtime-environment/2'
             role = $role
             captured_at_utc = $captured
             os = [ordered]@{ description = 'Fixture Windows'; architecture = 'X64' }
@@ -177,10 +177,14 @@ try {
                 }
             }
             sbox = [ordered]@{
-                steam_app_id = 590830
-                steam_build_id = '12345678'
-                version = 'fixture-version'
-                version_sha256 = ('e' * 64) -join ''
+                distribution = 'source_build'
+                engine_source_sha = ('8' * 40) -join ''
+                compatibility = [ordered]@{
+                    steam_app_id = 590830
+                    steam_build_id = '12345678'
+                    version = 'fixture-version'
+                    version_sha256 = ('e' * 64) -join ''
+                }
                 files = @(
                     [ordered]@{ name = 'entry_point'; file_name = $entryPoint; sha256 = $entryHash },
                     [ordered]@{ name = 'engine2'; file_name = 'engine2.dll'; sha256 = ('c' * 64) -join '' },
@@ -226,6 +230,39 @@ try {
     $evidence.format = 'hexagon-v2-manual-remote-acceptance/3'
     Save-Evidence -Evidence $evidence
     Assert-VerifierFailure -ExpectedMessage 'not the supported manual-attestation format' -Action { Invoke-Verifier }
+
+    $evidence = ConvertFrom-EvidenceJson -Json $validEvidenceJson
+    $clientRuntime = ConvertFrom-EvidenceJson -Json $validClientEnvironmentJson
+    $clientRuntime.format = 'hexagon-v2-runtime-environment/1'
+    $clientRuntime | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (
+        Join-Path $evidenceRoot $paths['client-a-environment']) -Encoding utf8
+    Set-EvidenceFileHash -Evidence $evidence -ArtifactId 'client-a-environment'
+    Save-Evidence -Evidence $evidence
+    Assert-VerifierFailure -ExpectedMessage 'has an unsupported format or role' -Action { Invoke-Verifier }
+    Set-Content -LiteralPath (Join-Path $evidenceRoot $paths['client-a-environment']) `
+        -Value $validClientEnvironmentJson -Encoding utf8 -NoNewline
+
+    $evidence = ConvertFrom-EvidenceJson -Json $validEvidenceJson
+    $clientRuntime = ConvertFrom-EvidenceJson -Json $validClientEnvironmentJson
+    $clientRuntime.sbox.engine_source_sha = ('9' * 40) -join ''
+    $clientRuntime | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (
+        Join-Path $evidenceRoot $paths['client-a-environment']) -Encoding utf8
+    Set-EvidenceFileHash -Evidence $evidence -ArtifactId 'client-a-environment'
+    Save-Evidence -Evidence $evidence
+    Assert-VerifierFailure -ExpectedMessage 'does not match the server s&box fingerprint' -Action { Invoke-Verifier }
+    Set-Content -LiteralPath (Join-Path $evidenceRoot $paths['client-a-environment']) `
+        -Value $validClientEnvironmentJson -Encoding utf8 -NoNewline
+
+    $evidence = ConvertFrom-EvidenceJson -Json $validEvidenceJson
+    $clientRuntime = ConvertFrom-EvidenceJson -Json $validClientEnvironmentJson
+    $clientRuntime.sbox.distribution = 'steam'
+    $clientRuntime | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (
+        Join-Path $evidenceRoot $paths['client-a-environment']) -Encoding utf8
+    Set-EvidenceFileHash -Evidence $evidence -ArtifactId 'client-a-environment'
+    Save-Evidence -Evidence $evidence
+    Assert-VerifierFailure -ExpectedMessage 'has inconsistent runtime distribution provenance' -Action { Invoke-Verifier }
+    Set-Content -LiteralPath (Join-Path $evidenceRoot $paths['client-a-environment']) `
+        -Value $validClientEnvironmentJson -Encoding utf8 -NoNewline
 
     $evidence = ConvertFrom-EvidenceJson -Json $validEvidenceJson
     $clientRuntime = ConvertFrom-EvidenceJson -Json $validClientEnvironmentJson

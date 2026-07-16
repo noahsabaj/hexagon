@@ -693,25 +693,27 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		Exception? firstFailure = null;
 		PersistenceShutdownResult? persistenceShutdown = null;
 		var application = HostApplication;
-		var disconnectActors = new List<RpcActor>();
+		var disconnects = new List<(RuntimePlayerSession Session, RpcActor? Actor)>();
 		foreach ( var session in _sessions.Values )
 		{
 			session.Player.HostInputAuthenticator = null;
+			RpcActor? actor = null;
 			if ( session.Player.HostConnection is Connection connection && session.Scope is not null )
 			{
-				try { disconnectActors.Add( BuildActor( connection, session, false ) ); }
+				try { actor = BuildActor( connection, session, false ); }
 				catch ( Exception exception )
 				{
 					firstFailure ??= exception;
 					Log.Error( exception, $"Could not capture shutdown actor for '{connection.Id}'." );
 				}
 			}
-			session.Disconnect();
+			disconnects.Add( (session, actor) );
 		}
 
-		if ( application is not null )
+		foreach ( var disconnect in disconnects )
 		{
-			foreach ( var actor in disconnectActors )
+			disconnect.Session.Disconnect();
+			if ( application is not null && disconnect.Actor is RpcActor actor )
 			{
 				try { application.Disconnected( actor ); }
 				catch ( Exception exception )

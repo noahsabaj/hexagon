@@ -89,7 +89,8 @@ raw logs from all three processes and record distinct process-instance labels
 and UTC start, capture, completion, and attestation times.
 
 On each machine, capture the runtime environment during the attested run and
-use the resulting JSON as the matching `environment` artifact:
+use the resulting format-v2 JSON as the matching `environment` artifact. For
+an unmodified Steam runtime, use:
 
 ```powershell
 ./tools/capture-release-environment.ps1 -SchemaRoot ../hl2rp-hexagon -Role server   -OutputPath "$evidence\server-environment.json"
@@ -97,14 +98,32 @@ use the resulting JSON as the matching `environment` artifact:
 ./tools/capture-release-environment.ps1 -SchemaRoot ../hl2rp-hexagon -Role client_b -OutputPath "$evidence\client-b-environment.json"
 ```
 
+For a source-built runtime, identify it explicitly and use the installed Steam
+copy only as the app-build/version compatibility context. The executable and
+DLL hashes always come from `-SboxRoot`:
+
+```powershell
+./tools/capture-release-environment.ps1 `
+  -SchemaRoot ../hl2rp-hexagon `
+  -Role <server|client_a|client_b> `
+  -OutputPath <role-environment.json> `
+  -SboxRoot <source-built-game-directory> `
+  -RuntimeDistribution source_build `
+  -EngineSourceSha <lowercase-40-character-engine-sha> `
+  -SteamContextRoot 'C:\Program Files (x86)\Steam\steamapps\common\sbox'
+```
+
 Run each command on the machine for that role from clean checkouts of the exact
 source pair used by its game process. The capture binds the role to both source
 SHAs and the effective-input fingerprint, the resolved .NET runtime contract
-from the matching s&box runtime config, OS/runtime architecture, Steam app 590830
-build, s&box `.version`, role entry point, `engine2.dll`, and
+from the matching s&box runtime config, OS/runtime architecture, runtime
+distribution and engine source SHA, Steam app 590830 compatibility build, s&box
+compatibility `.version`, role entry point, `engine2.dll`, and
 `Sandbox.Engine.dll`. All three roles must have the exact source/effective-input
-fingerprint and one engine/runtime fingerprint; the two clients must also have
-the same client executable hash.
+fingerprint, distribution, source provenance, and engine/runtime fingerprint;
+the two clients must also have the same client executable hash. A Steam runtime
+cannot use a separate metadata root or claim an engine source SHA, and a
+source-built runtime cannot omit its engine source SHA.
 
 Exercise every observation in the template. For each one, record a concrete
 description of what was observed and reference at least one contemporaneous

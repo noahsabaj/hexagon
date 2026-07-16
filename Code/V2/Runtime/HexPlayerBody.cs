@@ -213,6 +213,7 @@ public sealed class HexPlayerBody : Component, ICameraModifier
 	{
 		if ( !Sandbox.Networking.IsHost )
 			return OperationResult.Failure( ErrorCode.Unauthorized, "Only the host can strip an authoritative body." );
+		var publishRemoval = !Game.IsClosing;
 		if ( _preparedBody is not null )
 		{
 			_stripRequestedDuringPreparation = true;
@@ -221,7 +222,7 @@ public sealed class HexPlayerBody : Component, ICameraModifier
 				if ( AuthoritativeBody is not null && AuthoritativeBody.IsValid() )
 				{
 					AuthoritativeBody.Enabled = false;
-					AuthoritativeBody.Network.Refresh();
+					if ( publishRemoval ) AuthoritativeBody.Network.Refresh();
 				}
 				return OperationResult.Success();
 			}
@@ -232,7 +233,7 @@ public sealed class HexPlayerBody : Component, ICameraModifier
 					ErrorCode.InternalError, "The authoritative body could not be disabled while replacement was pending." );
 			}
 		}
-		return DestroyAuthoritativeBody();
+		return DestroyAuthoritativeBody( publishRemoval );
 	}
 
 	protected override void OnUpdate()
@@ -613,7 +614,7 @@ public sealed class HexPlayerBody : Component, ICameraModifier
 		if ( body.IsValid() && !_retiredBodies.Contains( body ) ) _retiredBodies.Add( body );
 	}
 
-	private void CleanupRetiredBodies()
+	private void CleanupRetiredBodies( bool publishRemoval = true )
 	{
 		for ( var index = _retiredBodies.Count - 1; index >= 0; index-- )
 		{
@@ -623,7 +624,7 @@ public sealed class HexPlayerBody : Component, ICameraModifier
 				() =>
 				{
 					body.Enabled = false;
-					body.Network.Refresh();
+					if ( publishRemoval ) body.Network.Refresh();
 				},
 				body.Destroy,
 				() => { } );
@@ -633,7 +634,7 @@ public sealed class HexPlayerBody : Component, ICameraModifier
 		}
 	}
 
-	private OperationResult DestroyAuthoritativeBody()
+	private OperationResult DestroyAuthoritativeBody( bool publishRemoval )
 	{
 		var previous = AuthoritativeBody;
 		AuthoritativeBodyRetirementResult? retirement = null;
@@ -644,7 +645,7 @@ public sealed class HexPlayerBody : Component, ICameraModifier
 				() =>
 				{
 					previous.Enabled = false;
-					previous.Network.Refresh();
+					if ( publishRemoval ) previous.Network.Refresh();
 				},
 				previous.Destroy,
 				() =>
@@ -658,8 +659,11 @@ public sealed class HexPlayerBody : Component, ICameraModifier
 		AdvanceBodyGeneration();
 		ResetHostInput();
 		Exception? publicationFailure = null;
-		try { GameObject.Network.Refresh(); }
-		catch ( Exception exception ) { publicationFailure = exception; }
+		if ( publishRemoval )
+		{
+			try { GameObject.Network.Refresh(); }
+			catch ( Exception exception ) { publicationFailure = exception; }
+		}
 		if ( retirement?.IsClean != false && publicationFailure is null ) return OperationResult.Success();
 		if ( publicationFailure is not null )
 			Log.Error( publicationFailure, "Hexagon could not publish authoritative body removal." );
@@ -715,8 +719,8 @@ public sealed class HexPlayerBody : Component, ICameraModifier
 			_preparedBody?.Dispose();
 			_preparedBody = null;
 			_stripRequestedDuringPreparation = false;
-			_ = DestroyAuthoritativeBody();
-			CleanupRetiredBodies();
+			_ = DestroyAuthoritativeBody( publishRemoval: false );
+			CleanupRetiredBodies( publishRemoval: false );
 		}
 		base.OnDestroy();
 	}
@@ -851,7 +855,7 @@ public sealed class HexPlayerBody : Component, ICameraModifier
 			_failure = new OperationError(
 				ErrorCode.Conflict, "The authoritative body replacement was aborted." );
 			_owner.DestroyOrRetain( _candidate, "aborted replacement" );
-			if ( completeDeferredStrip ) _ = _owner.DestroyAuthoritativeBody();
+			if ( completeDeferredStrip ) _ = _owner.DestroyAuthoritativeBody( !Game.IsClosing );
 		}
 	}
 
