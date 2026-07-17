@@ -24,6 +24,18 @@ public sealed class CurrencyAndCharacterRulesTests
 	}
 
 	[TestMethod]
+	public void SlotAllocatorReturnsMinusOneWhenEverySlotIsOccupied()
+	{
+		var characters = Enumerable.Range( 0, CharacterRules.MaximumSlots )
+			.Select( slot => CreateCharacter( 0 ) with { Slot = slot } )
+			.ToArray();
+		Assert.AreEqual( -1, CharacterRules.FindLowestFreeSlot( characters ) );
+
+		var oneFree = characters.Where( character => character.Slot != CharacterRules.MaximumSlots - 1 ).ToArray();
+		Assert.AreEqual( CharacterRules.MaximumSlots - 1, CharacterRules.FindLowestFreeSlot( oneFree ) );
+	}
+
+	[TestMethod]
 	public void CreationRejectsUnregisteredFields()
 	{
 		var request = new CharacterCreationRequest

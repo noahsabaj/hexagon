@@ -21,6 +21,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 	private readonly object _stateLock = new();
 	private Dictionary<DocumentAddress, CommittedState> _documents = new();
 	private Dictionary<string, HashSet<DocumentAddress>> _liveCollectionIndex = new( StringComparer.Ordinal );
+	private readonly Dictionary<string, object> _allSnapshotCache = new( StringComparer.Ordinal );
 	private PersistenceInvariantDocumentIndex _invariantDocumentIndex = new();
 	private Dictionary<string, Type> _collectionTypes = new( StringComparer.Ordinal );
 	private readonly Dictionary<string, object> _repositories = new( StringComparer.Ordinal );
@@ -411,17 +412,24 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		EnsureRepository( repository );
 		lock ( _stateLock )
 		{
+			// The sorted materialization is cached per collection and invalidated by the
+			// sole mutation site (Publish), so repeated listings between commits stop
+			// paying an ordinal re-sort under the provider-global state lock.
+			if ( _allSnapshotCache.TryGetValue( repository.Collection, out var cached ) )
+				return (IReadOnlyList<DocumentSnapshot<T>>)cached;
 			if ( !_liveCollectionIndex.TryGetValue( repository.Collection, out var addresses ) )
 			{
 				return Array.Empty<DocumentSnapshot<T>>();
 			}
 
-			return addresses
+			var snapshot = addresses
 				.OrderBy( address => address.Key, StringComparer.Ordinal )
 				.Select( address => _documents[address] )
 				.Where( state => !state.IsDeleted )
 				.Select( state => new DocumentSnapshot<T>( state.Address.Key, state.Revision, (T)state.Value! ) )
 				.ToArray();
+			_allSnapshotCache[repository.Collection] = snapshot;
+			return snapshot;
 		}
 	}
 
@@ -740,6 +748,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		lock ( _stateLock )
 		{
 			_documents = documents;
+			_allSnapshotCache.Clear();
 			_liveCollectionIndex = liveIndex;
 			_invariantDocumentIndex = new PersistenceInvariantDocumentIndex( recoveredCandidates.Values );
 			_collectionTypes = collectionTypes;
@@ -1119,6 +1128,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 	{
 		BindCollectionType( state.Address.Collection, state.Codec.ClrType );
 		_documents[state.Address] = state;
+		_allSnapshotCache.Remove( state.Address.Collection );
 
 		if ( !_liveCollectionIndex.TryGetValue( state.Address.Collection, out var index ) )
 		{

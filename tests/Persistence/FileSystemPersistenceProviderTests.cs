@@ -298,6 +298,47 @@ public sealed class FileSystemPersistenceProviderTests
 	}
 
 	[TestMethod]
+	public async Task AllReturnsACachedSnapshotUntilTheCollectionMutates()
+	{
+		var storage = new FaultInjectingStorage();
+		await using var provider = PersistenceTestSupport.CreateFileProvider( storage );
+		await provider.InitializeAsync();
+		var characters = provider.Repository<TestDocument>( "characters" );
+		var items = provider.Repository<CollectionTestDocument>( "items" );
+		await using ( var seed = provider.BeginUnitOfWork() )
+		{
+			seed.Create( characters, "alyx", new TestDocument( "Alyx", 1 ) );
+			seed.Create( items, "crowbar", new CollectionTestDocument { Name = "crowbar" } );
+			Assert.IsTrue( (await seed.CommitAsync()).Succeeded );
+		}
+
+		var first = characters.All();
+		Assert.AreSame( first, characters.All(),
+			"Repeated listings between commits must reuse the cached snapshot." );
+
+		await using ( var unrelated = provider.BeginUnitOfWork() )
+		{
+			var editor = unrelated.Edit( items, items.Find( "crowbar" )! )!;
+			editor.Replace( editor.Value with { Name = "stunstick" } );
+			unrelated.Save( editor );
+			Assert.IsTrue( (await unrelated.CommitAsync()).Succeeded );
+		}
+		Assert.AreSame( first, characters.All(),
+			"A commit to an unrelated collection must not invalidate this collection's snapshot." );
+
+		await using ( var update = provider.BeginUnitOfWork() )
+		{
+			var editor = update.Edit( characters, characters.Find( "alyx" )! )!;
+			editor.Replace( editor.Value with { Score = 2 } );
+			update.Save( editor );
+			Assert.IsTrue( (await update.CommitAsync()).Succeeded );
+		}
+		var second = characters.All();
+		Assert.AreNotSame( first, second );
+		Assert.AreEqual( 2, second[0].Value.Score );
+	}
+
+	[TestMethod]
 	public async Task ScheduledAutomaticCheckpointDoesNotRunOnTheCommittingCaller()
 	{
 		var storage = new FaultInjectingStorage();

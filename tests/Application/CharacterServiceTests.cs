@@ -126,6 +126,51 @@ public sealed class CharacterServiceTests
 	}
 
 	[TestMethod]
+	public async Task ListForAccountProbesSlotsInOrderWithoutScanningTheCharacterTable()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var account = new AccountId(7656122);
+		var high = ApplicationServiceTestEnvironment.Character(account, CharacterRules.MaximumSlots - 1);
+		var middle = ApplicationServiceTestEnvironment.Character(account, 5);
+		var zero = ApplicationServiceTestEnvironment.Character(account, 0);
+		var otherAccount = ApplicationServiceTestEnvironment.Character(new AccountId(999), 1);
+		await environment.SeedAsync(unitOfWork =>
+		{
+			SeedCharacter(unitOfWork, environment, high);
+			SeedCharacter(unitOfWork, environment, middle);
+			SeedCharacter(unitOfWork, environment, zero);
+			SeedCharacter(unitOfWork, environment, otherAccount);
+		});
+		var service = environment.CreateCharacterService();
+
+		var listed = service.ListForAccount(account);
+
+		CollectionAssert.AreEqual(
+			new[] { 0, 5, CharacterRules.MaximumSlots - 1 },
+			listed.Select(character => character.Slot).ToArray());
+		Assert.AreEqual(0, environment.Provider.AllCallCount(DomainCollections.Characters),
+			"Account listing must use keyed slot probes, never a character-table scan.");
+	}
+
+	[TestMethod]
+	public async Task CreateConflictsWhenEverySlotIsOccupied()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var account = new AccountId(7656123);
+		await environment.SeedAsync(unitOfWork =>
+		{
+			for (var slot = 0; slot < CharacterRules.MaximumSlots; slot++)
+				SeedCharacter(unitOfWork, environment, ApplicationServiceTestEnvironment.Character(account, slot));
+		});
+		var service = environment.CreateCharacterService();
+
+		var created = await service.CreateAsync(account, ApplicationServiceTestEnvironment.Request());
+
+		Assert.AreEqual(ErrorCode.Conflict, created.Error!.Code);
+		Assert.HasCount(CharacterRules.MaximumSlots, service.ListForAccount(account));
+	}
+
+	[TestMethod]
 	public async Task CreationFieldsAreStrictlyAllowlistedRequiredAndTyped()
 	{
 		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();

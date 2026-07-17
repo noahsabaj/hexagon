@@ -14,6 +14,13 @@ public static class CharacterRules
 	public const int MaximumDescriptionLength = 512;
 	public const int MinimumDescriptionLength = 16;
 
+	/// <summary>
+	/// Hard per-account slot cap. Slots are dense in 0..MaximumSlots-1 (commit-time
+	/// invariant), which lets account listings run as bounded keyed slot probes
+	/// instead of scanning every character ever created.
+	/// </summary>
+	public const int MaximumSlots = 64;
+
 	public static OperationResult ValidateCreationRequest( CharacterCreationRequest request, IReadOnlySet<string> allowedFields )
 	{
 		if ( request.Name.Trim().Length is < MinimumNameLength or > MaximumNameLength )
@@ -31,11 +38,15 @@ public static class CharacterRules
 		return OperationResult.Success();
 	}
 
+	/// <summary>
+	/// Lowest unoccupied slot for the account, or -1 when all
+	/// <see cref="MaximumSlots"/> slots are occupied.
+	/// </summary>
 	public static int FindLowestFreeSlot( IEnumerable<CharacterRecord> characters )
 	{
 		var occupied = characters.Select( character => character.Slot ).Where( slot => slot >= 0 ).ToHashSet();
 		var slot = 0;
 		while ( occupied.Contains( slot ) ) slot++;
-		return slot;
+		return slot < MaximumSlots ? slot : -1;
 	}
 }

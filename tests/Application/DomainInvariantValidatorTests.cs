@@ -79,6 +79,44 @@ public sealed class DomainInvariantValidatorTests
 	}
 
 	[TestMethod]
+	public async Task OutOfRangeCharacterSlotIsRejected()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var account = new AccountId(9003);
+		var character = ApplicationServiceTestEnvironment.Character(account, CharacterRules.MaximumSlots);
+		await environment.SeedAsync(unitOfWork =>
+		{
+			unitOfWork.Create(environment.Repositories.Characters, DomainKeys.Character(character.Id), character);
+			unitOfWork.Create(
+				environment.Repositories.CharacterLifecycleGuards,
+				DomainKeys.CharacterLifecycleGuard(character.Id),
+				new CharacterLifecycleGuardRecord { CharacterId = character.Id, ReferenceRevision = 0 });
+			unitOfWork.Create(
+				environment.Repositories.CharacterSlots,
+				DomainKeys.CharacterSlot(account, CharacterRules.MaximumSlots),
+				new CharacterSlotRecord
+				{
+					AccountId = account,
+					Slot = CharacterRules.MaximumSlots,
+					CharacterId = character.Id
+				});
+		});
+		var report = new DomainInvariantValidator(
+			environment.Repositories,
+			environment.Schema,
+			new SchemaItemShapeCatalog(environment.Schema, environment.Repositories),
+			environment.PersistenceProfile).Validate();
+
+		Assert.IsFalse(report.IsValid);
+		Assert.IsTrue(report.Issues.Any(issue =>
+			issue.Path.StartsWith("character-slot/", StringComparison.Ordinal) &&
+			issue.Message.Contains("outside 0..", StringComparison.Ordinal)));
+		Assert.IsTrue(report.Issues.Any(issue =>
+			issue.Path == $"character/{character.Id}" &&
+			issue.Message.Contains("outside 0..", StringComparison.Ordinal)));
+	}
+
+	[TestMethod]
 	public async Task DuplicateLogicalAggregateIdsUnderForgedOuterKeysAreReportedWithoutThrowing()
 	{
 		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();

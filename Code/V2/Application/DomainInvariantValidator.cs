@@ -418,6 +418,11 @@ public sealed class DomainInvariantValidator : IIncrementalPersistenceInvariantS
 		foreach ( var document in slots )
 		{
 			var slot = document.Value;
+			if ( slot.Slot is < 0 or >= CharacterRules.MaximumSlots )
+				issues.Add( new DomainInvariantIssue(
+					ErrorCode.InvalidArgument,
+					$"character-slot/{document.Key}",
+					$"Owner-slot guard slot {slot.Slot} is outside 0..{CharacterRules.MaximumSlots - 1}." ) );
 			if ( !logicalSlots.Add( (slot.AccountId, slot.Slot) ) )
 				issues.Add( new DomainInvariantIssue(
 					ErrorCode.Conflict,
@@ -441,6 +446,11 @@ public sealed class DomainInvariantValidator : IIncrementalPersistenceInvariantS
 
 		foreach ( var character in characters )
 		{
+			if ( character.Slot is < 0 or >= CharacterRules.MaximumSlots )
+				issues.Add( new DomainInvariantIssue(
+					ErrorCode.InvalidArgument,
+					$"character/{character.Id}",
+					$"Character slot {character.Slot} is outside 0..{CharacterRules.MaximumSlots - 1}." ) );
 			var matching = slotMatchCounts.GetValueOrDefault(
 				(character.AccountId, character.Slot, character.Id) );
 			if ( matching != 1 )

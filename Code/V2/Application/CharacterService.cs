@@ -76,12 +76,22 @@ public sealed class CharacterService
 		_inventoryHeight = inventoryHeight;
 	}
 
-	public IReadOnlyList<CharacterRecord> ListForAccount( AccountId accountId ) =>
-		_repositories.Characters.All()
-			.Select( document => document.Value )
-			.Where( character => character.AccountId == accountId )
-			.OrderBy( character => character.Slot )
-			.ToArray();
+	public IReadOnlyList<CharacterRecord> ListForAccount( AccountId accountId )
+	{
+		// Bounded keyed probes over the dense slot key space; O(1) in store size and
+		// slot-ordered by construction, replacing a full character-table scan and sort.
+		var characters = new List<CharacterRecord>();
+		for ( var slot = 0; slot < CharacterRules.MaximumSlots; slot++ )
+		{
+			var slotDocument = _repositories.CharacterSlots.Find( DomainKeys.CharacterSlot( accountId, slot ) );
+			if ( slotDocument is null ) continue;
+			var character = _repositories.Characters.Find(
+				DomainKeys.Character( slotDocument.Value.CharacterId ) );
+			if ( character is not null ) characters.Add( character.Value );
+		}
+
+		return characters;
+	}
 
 	public ValueTask<OperationResult<CharacterCreationReceipt>> CreateAsync(
 		AccountId authenticatedAccount,
@@ -249,6 +259,10 @@ public sealed class CharacterService
 		};
 		var ownedCharacters = ListForAccount( authenticatedAccount );
 		var slot = CharacterRules.FindLowestFreeSlot( ownedCharacters );
+		if ( slot < 0 )
+			return OperationResult<CharacterCreationReceipt>.Failure(
+				ErrorCode.Conflict,
+				$"All {CharacterRules.MaximumSlots} character slots are occupied for this account." );
 		var now = _clock.UtcNow;
 		var context = new CharacterCreationContext( authenticatedAccount, normalizedRequest, slot, now );
 		var policy = _creationPolicy.Evaluate( context );
