@@ -248,3 +248,66 @@ The 2026-07-16 64-agent adversarial audit retained 28 findings (its candidate le
 - `hl2rp-hexagon/hexagon.lock.json` is bumped to the final hexagon head in the commit after this one, after which the plain hl2rp portable profile passes with the default locked banner.
 - The two-client acceptance evidence and the pending `sbox / release-evidence` contexts are unchanged by this register.
 - Post-push, the hosted `hexagon / neutral` job exposed a runner-only divergence that predated this campaign (the identical failure occurred on the pre-remediation head): the ignored-release-material walk's glob pathspecs (`Code/**`, `*.cs`) matched nothing on the runner while literal pathspecs matched, so its contract cases saw the gate pass vacuously. Local git 2.55 (Windows), 2.43, and a from-source 2.54.0 build (Linux) all matched correctly, so the walk no longer depends on pathspec semantics at all: it enumerates bare `ls-files --others --ignored --exclude-standard` output and filters relevance in-process, and a per-process probe repository must prove git reports a planted ignored file before the gate is trusted — an enumeration that goes quiet now fails loudly instead of passing silently. The hl2rp lock advanced to the repaired head.
+
+## 2026-07-17 whitelist-safe storage unification (publish-route blocker)
+
+Pre-flight for the two-client acceptance run surfaced an engine constraint the prior
+registers did not account for: publishing to sbox.game requires `IsStandaloneOnly: false`,
+and once that flag is off, s&box access control applies to the streamed game assembly on
+**every** host — including the dedicated server loading its own package (`PackageLoader`
+enforces the whitelist for all non-local packages, with no server-specific rule set in
+`Sandbox.Access/Rules`). The raw-OS dedicated-server storage
+(`HL2RPPhysicalPersistenceStorageCore.Server.cs`: `File`/`Directory`/`SafeFileHandle`/
+`FileOptions.WriteThrough`) is not whitelisted, so the posture TEST-04 and RC-1 recorded —
+standalone-only game owning a raw OS adapter — was structurally incompatible with
+publication. Those historical entries stand as written; this register supersedes the
+posture they describe.
+
+Resolution — one whitelist-safe storage path for every host shape:
+
+- `HL2RPDurableStorageCore` (engine-neutral, test-compiled) now carries the whole durable
+  storage protocol over `IHL2RPStorageFileSystem`, the exact whitelist-safe
+  `Sandbox.BaseFileSystem` surface. The bodies are the verbatim staged-verify-copy and
+  exclusive-lease implementations previously proven in the editor adapter, whose behavior
+  the `IPersistenceStorage` contract and the ARCH-05 torn-tail recovery closure already
+  cover. `HL2RPPersistenceStorageFactory` binds it to the engine filesystem with no
+  compilation-boundary fork; the retired `HL2RPPhysicalPersistenceStorage*.Server.cs` and
+  `HL2RPSandboxPersistenceStorage.cs` twins are deleted.
+- The lease remains process-exclusive: `BaseFileSystem.OpenWrite` opens the physical
+  backing file with no shared writer (Zio `PhysicalFileSystem` default share), and the
+  held stream is the lease resource.
+- **Durability trade, stated plainly:** whitelist-safe code cannot flush past the
+  operating-system cache and has no atomic rename. Process-crash durability, the
+  single-writer lease, staged+verified publication, and fail-closed recovery are
+  unchanged; durability against power loss is now bounded by the OS cache, and a crash in
+  the short final-copy window can leave one torn artifact at the final name — exactly the
+  per-metadata-class torn-tail case ARCH-05 closed with dedicated recovery tokens.
+- `hl2rp.sbproj` flips `IsStandaloneOnly` to `false` and `Metadata.Compiler.Whitelist` to
+  `true`, so the engine compiler now enforces the whitelist at build time in the editor,
+  in `verify.ps1`'s generated builds, and in the smoke boot. `validate-project.ps1`,
+  `validate-framework-portable.ps1`, and the hexagon layout pins
+  (`GameUsesOneWhitelistSafeStoragePathForEveryHost`,
+  `GameOwnsAResolvableStartupScene`) now fail closed on any return of raw OS access or a
+  silent whitelist downgrade.
+- `docs/testing.md`'s immutable-release enablement command is corrected from `PATCH` with
+  a body to a bare `PUT` (the PATCH form 404s; PUT verified against the live repository
+  on 2026-07-17).
+
+### Evidence boundary for this register
+
+- Neutral Release suites at these heads: **Hexagon 381/381**, **HL2RP 298/298** (the four
+  physical-core tests were ported, not dropped: `DurableStorageCoreTests` executes the
+  production core — lease conflict, absent-or-complete publication with no visible
+  staging, traversal rejection, and the full provider commit→shutdown→recovery round
+  trip — through a physical boundary implementation encoding the no-shared-writer
+  contract).
+- The source-bound `tools/verify.ps1 -SchemaRoot ../hl2rp-hexagon -SkipRemoteAcceptance`
+  run (editor closed) passed end to end at these heads, including three generated
+  warnings-as-errors builds (0/0), and — decisive for this register — the
+  client-equivalent assembly passed the installed `Sandbox.Access` verifier with the
+  unified storage compiled in. Because the server source shape now equals the client
+  shape, that gate is authoritative for every host. The headless commit → drain → exact
+  recovery smoke ran through the new core.
+- Still open, unchanged: organization identities in both `.sbproj` manifests (`local` →
+  the owner's sbox.game org), package publication, and the two-client acceptance run with
+  its `sbox / release-evidence` contexts.

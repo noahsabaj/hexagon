@@ -129,7 +129,7 @@ function Test-ProjectManifest {
     if ($ExpectedType -eq 'library') {
         if ($isStandaloneOnly -or
             $null -eq $compilerWhitelistProperty -or $compilerWhitelistProperty.Value -ne $true) {
-            Add-Failure "'$manifestPath' must remain platform-whitelisted; raw OS persistence belongs to the consuming standalone game."
+            Add-Failure "'$manifestPath' must remain platform-whitelisted; no package in the pair may carry raw OS access."
         }
         if ($null -ne $startupProperty) {
             Add-Failure "Library package '$manifestPath' must not declare Metadata.StartupScene."
@@ -142,9 +142,9 @@ function Test-ProjectManifest {
         return
     }
 
-    if (-not $isStandaloneOnly -or
-        $null -eq $compilerWhitelistProperty -or $compilerWhitelistProperty.Value -ne $false) {
-        Add-Failure "'$manifestPath' must remain standalone-only with its API whitelist disabled because it owns the OS-level persistence adapter."
+    if ($isStandaloneOnly -or
+        $null -eq $compilerWhitelistProperty -or $compilerWhitelistProperty.Value -ne $true) {
+        Add-Failure "'$manifestPath' must compile under the API whitelist and must not be standalone-only: streamed assemblies are access-controlled on every host, and standalone-only projects cannot publish."
     }
 
     if ($null -eq $startupProperty -or [string]::IsNullOrWhiteSpace([string]$startupProperty.Value)) {

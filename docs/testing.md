@@ -221,7 +221,7 @@ available, enable immutable releases once on the HL2RP evidence repository if
 the repository administrator has not already done so:
 
 ```powershell
-gh api --method PATCH repos/noahsabaj/hl2rp-hexagon/immutable-releases -F enabled=true
+gh api --method PUT repos/noahsabaj/hl2rp-hexagon/immutable-releases
 ```
 
 Then publish the protected release context with:

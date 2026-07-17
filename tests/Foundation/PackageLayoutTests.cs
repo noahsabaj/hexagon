@@ -133,14 +133,16 @@ public sealed class PackageLayoutTests
 		using var manifest = JsonDocument.Parse( File.ReadAllText( Path.Combine( roots.Hl2Rp, "hl2rp.sbproj" ) ) );
 
 		Assert.AreEqual( "game", manifest.RootElement.GetProperty( "Type" ).GetString() );
-		Assert.IsTrue( manifest.RootElement.GetProperty( "IsStandaloneOnly" ).GetBoolean() );
+		Assert.IsFalse(
+			manifest.RootElement.GetProperty( "IsStandaloneOnly" ).GetBoolean(),
+			"Publication to sbox.game requires non-standalone compilation; the engine silently skips Publish() for standalone-only projects." );
 		Assert.IsFalse(
 			manifest.RootElement.TryGetProperty( "IsWhitelistDisabled", out _ ),
-			"Standalone game compilation is selected by IsStandaloneOnly and Metadata.Compiler.Whitelist." );
-		Assert.IsFalse(
+			"Whitelist compilation is selected by Metadata.Compiler.Whitelist." );
+		Assert.IsTrue(
 			manifest.RootElement.GetProperty( "Metadata" ).GetProperty( "Compiler" )
 				.GetProperty( "Whitelist" ).GetBoolean(),
-			"The game owns the production OS persistence adapter and must remain standalone-only." );
+			"Every streamed assembly is access-controlled on every host, so the compile-time whitelist gate must stay on." );
 		var startupScene = manifest.RootElement.GetProperty( "Metadata" ).GetProperty( "StartupScene" ).GetString();
 		var dedicatedScene = manifest.RootElement.GetProperty( "Metadata" ).GetProperty( "DedicatedServerStartupScene" ).GetString();
 		Assert.IsFalse( string.IsNullOrWhiteSpace( startupScene ) );
@@ -160,70 +162,74 @@ public sealed class PackageLayoutTests
 
 	[TestMethod]
 	[TestCategory( "CrossRepository" )]
-	public void GameKeepsPhysicalPersistenceOutsideTheClientArchive()
+	public void GameUsesOneWhitelistSafeStoragePathForEveryHost()
 	{
 		var roots = RepositoryRoots.FindPair();
 		var runtime = Path.Combine( roots.Hl2Rp, "Code", "Runtime" );
-		var legacyPhysicalPath = Path.Combine( runtime, "HL2RPPhysicalPersistenceStorage.cs" );
-		var serverPhysicalPath = Path.Combine( runtime, "HL2RPPhysicalPersistenceStorage.Server.cs" );
-		var serverCorePath = Path.Combine( runtime, "HL2RPPhysicalPersistenceStorageCore.Server.cs" );
-		var sandboxPath = Path.Combine( runtime, "HL2RPSandboxPersistenceStorage.cs" );
+		var corePath = Path.Combine( runtime, "HL2RPDurableStorageCore.cs" );
 		var factoryPath = Path.Combine( runtime, "HL2RPPersistenceStorageFactory.cs" );
 
-		Assert.IsFalse(
-			File.Exists( legacyPhysicalPath ),
-			"Raw operating-system persistence must not be compiled into the client-visible game archive." );
+		foreach ( var retired in new[]
+		{
+			"HL2RPPhysicalPersistenceStorage.cs",
+			"HL2RPPhysicalPersistenceStorage.Server.cs",
+			"HL2RPPhysicalPersistenceStorageCore.Server.cs",
+			"HL2RPSandboxPersistenceStorage.cs"
+		} )
+			Assert.IsFalse(
+				File.Exists( Path.Combine( runtime, retired ) ),
+				$"Raw operating-system persistence was retired for whitelist-safe storage; '{retired}' must not return." );
+
 		Assert.IsTrue(
-			File.Exists( serverPhysicalPath ),
-			"The durable physical adapter must remain under s&box's .Server.cs archive boundary." );
-		Assert.IsTrue(
-			File.Exists( serverCorePath ),
-			"The storage core must remain under s&box's .Server.cs archive boundary while staying test-compiled." );
-		Assert.IsTrue(
-			File.Exists( sandboxPath ),
-			"Editor-hosted and client-visible compilation requires a sandbox-compatible storage adapter." );
+			File.Exists( corePath ),
+			"The durable storage protocol must live in the engine-neutral, test-compiled core." );
 		Assert.IsTrue(
 			File.Exists( factoryPath ),
-			"Storage selection must remain explicit at the server/client compilation boundary." );
+			"Storage binding to the engine filesystem must remain explicit in the factory." );
 
-		var serverPhysical = File.ReadAllText( serverPhysicalPath );
-		StringAssert.Contains( serverPhysical, "class HL2RPPhysicalPersistenceStorage" );
-		StringAssert.Contains( serverPhysical, "HL2RPPhysicalPersistenceStorageCore" );
-		StringAssert.Contains( serverPhysical, "fileSystem.GetFullPath" );
+		var core = File.ReadAllText( corePath );
+		StringAssert.Contains( core, "class HL2RPDurableStorageCore" );
+		StringAssert.Contains( core, "interface IHL2RPStorageFileSystem" );
+		StringAssert.Contains( core, ": IPersistenceStorage" );
 
-		// The FileShare.None evidence is anchored to the lease-acquisition block of the
-		// core: the literal also appears in the staged-write path, so a whole-file scan
-		// would keep passing if only the lease site were weakened.
-		var serverCore = File.ReadAllText( serverCorePath );
-		StringAssert.Contains( serverCore, "class HL2RPPhysicalPersistenceStorageCore" );
-		var leaseAcquire = serverCore.IndexOf(
-			"public static IPersistenceLease Acquire(", StringComparison.Ordinal );
+		// The single-writer evidence is anchored to the lease-acquisition block: the
+		// held OpenOrCreate stream is what excludes a second writer, so a whole-file
+		// scan would keep passing if only the lease site were weakened.
+		var leaseAcquire = core.IndexOf(
+			"public ValueTask<IPersistenceLease> AcquireExclusiveLeaseAsync(", StringComparison.Ordinal );
 		Assert.IsGreaterThanOrEqualTo( 0, leaseAcquire );
-		var leaseBlockEnd = serverCore.IndexOf(
-			"private sealed record PhysicalLeaseResource", leaseAcquire, StringComparison.Ordinal );
+		var leaseBlockEnd = core.IndexOf(
+			"public ValueTask<bool> ExistsAsync(", leaseAcquire, StringComparison.Ordinal );
 		Assert.IsGreaterThanOrEqualTo( 0, leaseBlockEnd );
-		var leaseBlock = serverCore[leaseAcquire..leaseBlockEnd];
-		StringAssert.Contains( leaseBlock, "FileShare.None" );
-		StringAssert.Contains( leaseBlock, "FileOptions.WriteThrough" );
+		var leaseBlock = core[leaseAcquire..leaseBlockEnd];
+		StringAssert.Contains( leaseBlock, "FileMode.OpenOrCreate" );
+		StringAssert.Contains( leaseBlock, "HL2RPRetryablePersistenceLease<Stream>" );
+		StringAssert.Contains( leaseBlock, "PersistenceLeaseUnavailableException" );
 
-		var sandbox = File.ReadAllText( sandboxPath );
-		StringAssert.Contains( sandbox, "class HL2RPSandboxPersistenceStorage" );
-		StringAssert.Contains( sandbox, ": IPersistenceStorage" );
+		// Immutable publication evidence is anchored the same way: stage, verify,
+		// then CreateNew-copy to the final name.
+		var publish = core.IndexOf(
+			"public ValueTask<bool> TryWriteImmutableAsync(", StringComparison.Ordinal );
+		Assert.IsGreaterThanOrEqualTo( 0, publish );
+		var publishEnd = core.IndexOf( "private byte[] ReadAllBytes(", publish, StringComparison.Ordinal );
+		Assert.IsGreaterThanOrEqualTo( 0, publishEnd );
+		var publishBlock = core[publish..publishEnd];
+		StringAssert.Contains( publishBlock, ".staging" );
+		StringAssert.Contains( publishBlock, "SequenceEqual" );
+		StringAssert.Contains( publishBlock, "FileMode.CreateNew" );
 
 		var factory = File.ReadAllText( factoryPath );
-		AssertInOrder(
-			factory,
-			"#if SERVER",
-			"return new HL2RPPhysicalPersistenceStorage",
-			"#else",
-			"return new HL2RPSandboxPersistenceStorage",
-			"#endif" );
+		StringAssert.Contains( factory, "new HL2RPDurableStorageCore( new SandboxStorageFileSystem( fileSystem ) )" );
+		StringAssert.Contains( factory, ": IHL2RPStorageFileSystem" );
+		Assert.IsFalse(
+			factory.Contains( "#if", StringComparison.Ordinal ),
+			"Storage no longer forks on a compilation boundary; every host uses the whitelist-safe path." );
 
 		var schemaSource = File.ReadAllText( Path.Combine( runtime, "HL2RPSchemaSourceSystem.cs" ) );
 		StringAssert.Contains( schemaSource, "HL2RPPersistenceStorageFactory.Create" );
 		Assert.IsFalse(
-			schemaSource.Contains( "new HL2RPPhysicalPersistenceStorage", StringComparison.Ordinal ),
-			"The schema source must not directly bind client-visible compilation to the physical adapter." );
+			schemaSource.Contains( "new HL2RPDurableStorageCore", StringComparison.Ordinal ),
+			"The schema source must bind storage through the factory, not construct the core directly." );
 	}
 
 	[TestMethod]
@@ -451,20 +457,6 @@ public sealed class PackageLayoutTests
 
 	private static int GetLineNumber( string source, int index ) =>
 		source.Take( index ).Count( character => character == '\n' ) + 1;
-
-	private static void AssertInOrder( string source, params string[] markers )
-	{
-		var previous = -1;
-		foreach ( var marker in markers )
-		{
-			var index = source.IndexOf( marker, previous + 1, StringComparison.Ordinal );
-			Assert.IsGreaterThanOrEqualTo(
-				0,
-				index,
-				$"Expected '{marker}' after the preceding storage-factory marker." );
-			previous = index;
-		}
-	}
 
 	private static void CollectGuids( JsonElement element, HashSet<string> ids, string scenePath )
 	{

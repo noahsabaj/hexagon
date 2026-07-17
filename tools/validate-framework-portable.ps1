@@ -34,7 +34,7 @@ if ($null -ne $legacyWhitelistProperty) {
 }
 if ($isStandaloneOnly -or
     $null -eq $compilerWhitelistProperty -or $compilerWhitelistProperty.Value -ne $true) {
-    throw 'Hexagon must remain platform-whitelisted; the consuming standalone game owns raw OS persistence.'
+    throw 'Hexagon must remain platform-whitelisted; no package in the pair may carry raw OS access.'
 }
 if ($null -ne $startupProperty -or $null -ne $dedicatedStartupProperty) {
     throw 'The Hexagon library must not own a startup scene.'
