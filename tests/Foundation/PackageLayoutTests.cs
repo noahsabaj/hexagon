@@ -91,6 +91,7 @@ public sealed class PackageLayoutTests
 		var runtime = Path.Combine( roots.Hl2Rp, "Code", "Runtime" );
 		var legacyPhysicalPath = Path.Combine( runtime, "HL2RPPhysicalPersistenceStorage.cs" );
 		var serverPhysicalPath = Path.Combine( runtime, "HL2RPPhysicalPersistenceStorage.Server.cs" );
+		var serverCorePath = Path.Combine( runtime, "HL2RPPhysicalPersistenceStorageCore.Server.cs" );
 		var sandboxPath = Path.Combine( runtime, "HL2RPSandboxPersistenceStorage.cs" );
 		var factoryPath = Path.Combine( runtime, "HL2RPPersistenceStorageFactory.cs" );
 
@@ -101,6 +102,9 @@ public sealed class PackageLayoutTests
 			File.Exists( serverPhysicalPath ),
 			"The durable physical adapter must remain under s&box's .Server.cs archive boundary." );
 		Assert.IsTrue(
+			File.Exists( serverCorePath ),
+			"The storage core must remain under s&box's .Server.cs archive boundary while staying test-compiled." );
+		Assert.IsTrue(
 			File.Exists( sandboxPath ),
 			"Editor-hosted and client-visible compilation requires a sandbox-compatible storage adapter." );
 		Assert.IsTrue(
@@ -109,8 +113,23 @@ public sealed class PackageLayoutTests
 
 		var serverPhysical = File.ReadAllText( serverPhysicalPath );
 		StringAssert.Contains( serverPhysical, "class HL2RPPhysicalPersistenceStorage" );
-		StringAssert.Contains( serverPhysical, "FileStream" );
-		StringAssert.Contains( serverPhysical, "FileShare.None" );
+		StringAssert.Contains( serverPhysical, "HL2RPPhysicalPersistenceStorageCore" );
+		StringAssert.Contains( serverPhysical, "fileSystem.GetFullPath" );
+
+		// The FileShare.None evidence is anchored to the lease-acquisition block of the
+		// core: the literal also appears in the staged-write path, so a whole-file scan
+		// would keep passing if only the lease site were weakened.
+		var serverCore = File.ReadAllText( serverCorePath );
+		StringAssert.Contains( serverCore, "class HL2RPPhysicalPersistenceStorageCore" );
+		var leaseAcquire = serverCore.IndexOf(
+			"public static IPersistenceLease Acquire(", StringComparison.Ordinal );
+		Assert.IsGreaterThanOrEqualTo( 0, leaseAcquire );
+		var leaseBlockEnd = serverCore.IndexOf(
+			"private sealed record PhysicalLeaseResource", leaseAcquire, StringComparison.Ordinal );
+		Assert.IsGreaterThanOrEqualTo( 0, leaseBlockEnd );
+		var leaseBlock = serverCore[leaseAcquire..leaseBlockEnd];
+		StringAssert.Contains( leaseBlock, "FileShare.None" );
+		StringAssert.Contains( leaseBlock, "FileOptions.WriteThrough" );
 
 		var sandbox = File.ReadAllText( sandboxPath );
 		StringAssert.Contains( sandbox, "class HL2RPSandboxPersistenceStorage" );
