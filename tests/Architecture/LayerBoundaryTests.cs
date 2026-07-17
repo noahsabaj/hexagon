@@ -148,9 +148,18 @@ public sealed class LayerBoundaryTests
 		{
 			"\"ClientsCanSpawnObjects\": false",
 			"\"ClientsCanRefreshObjects\": false",
-			"\"ClientsCanDestroyObjects\": false"
+			"\"ClientsCanDestroyObjects\": false",
+			// Host migration would hand authority to a machine with no host application,
+			// no domain services, and no persistence lease; both flags must stay closed.
+			"\"DestroyLobbyWhenHostLeaves\": true",
+			"\"AutoSwitchToBestHost\": false"
 		} ) StringAssert.Contains( networking, permission );
 		StringAssert.Contains( networking, "\"UpdateRate\": 30" );
+
+		var runtime = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.cs" ) );
+		StringAssert.Contains( runtime, "void Component.INetworkListener.OnBecameHost( Connection previousHost )" );
+		StringAssert.Contains( runtime, "HEXAGON_HOST_MIGRATION_REFUSED" );
+		StringAssert.Contains( runtime, "Networking.Disconnect()" );
 		var collision = File.ReadAllText( Path.Combine( ProductRoot(), "ProjectSettings", "Collision.config" ) );
 		StringAssert.Contains( collision, "\"b\": \"prediction\"" );
 		StringAssert.Contains( collision, "\"r\": \"Ignore\"" );
@@ -187,6 +196,26 @@ public sealed class LayerBoundaryTests
 		var services = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexHostServicesComponent.cs" ) );
 		StringAssert.Contains( services, "runtime.TryStartHostOperation" );
 		Assert.IsFalse( services.Contains( "_ = DispatchAsync", StringComparison.Ordinal ) );
+	}
+
+	[TestMethod]
+	public void ClientStateSyncShellAppliesOnlyAfterScopeCaptureAndEncodeAborts()
+	{
+		var services = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexHostServicesComponent.cs" ) );
+		var send = services.IndexOf( "public void SendClientState(", StringComparison.Ordinal );
+		Assert.IsGreaterThanOrEqualTo( 0, send );
+		var scopeCapture = services.IndexOf( "runtime.CaptureClientScope( recipient )", send, StringComparison.Ordinal );
+		var encodeAbort = services.IndexOf( "LogSnapshotWireFailure( \"ENCODE\", \"client-state\"", send, StringComparison.Ordinal );
+		var applyShell = services.IndexOf( "player.HostApplyPublicSnapshot( publicSnapshot )", send, StringComparison.Ordinal );
+		var wireSend = services.IndexOf( "ReceiveClientState( scope.Value, encoded.Value )", send, StringComparison.Ordinal );
+		Assert.IsGreaterThanOrEqualTo( 0, applyShell );
+		Assert.IsGreaterThanOrEqualTo( 0, wireSend );
+		Assert.IsLessThan( applyShell, scopeCapture,
+			"The scope-capture abort must run before the replicated [Sync] shell is mutated." );
+		Assert.IsLessThan( applyShell, encodeAbort,
+			"The wire-encode abort must run before the replicated [Sync] shell is mutated." );
+		Assert.IsLessThan( wireSend, applyShell,
+			"The [Sync] shell mutation must sit immediately before the send, after every abort exit." );
 	}
 
 	[TestMethod]
