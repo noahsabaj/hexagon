@@ -608,7 +608,7 @@ public sealed class DomainInvariantValidator : IIncrementalPersistenceInvariantS
 		{
 			var mainInventories = characterInventoryCounts.GetValueOrDefault( character.Id.Value );
 			var mainIndexes = logicalIndexes.Contains(
-				DomainKeys.OwnerInventory( InventoryOwner.Character( character.Id ), "main" ) ) ? 1 : 0;
+				DomainKeys.OwnerInventory( InventoryOwner.Character( character.Id ), InventoryRoles.Main ) ) ? 1 : 0;
 			if ( mainInventories != 1 || mainIndexes != 1 )
 				issues.Add( new DomainInvariantIssue(
 					ErrorCode.Conflict,
@@ -800,9 +800,9 @@ public sealed class DomainInvariantValidator : IIncrementalPersistenceInvariantS
 
 	private static string ExpectedInventoryRole( InventoryOwnerKind kind ) => kind switch
 	{
-		InventoryOwnerKind.Character => "main",
-		InventoryOwnerKind.ParentItem => "bag",
-		InventoryOwnerKind.SceneEntity => "storage",
+		InventoryOwnerKind.Character => InventoryRoles.Main,
+		InventoryOwnerKind.ParentItem => InventoryRoles.Bag,
+		InventoryOwnerKind.SceneEntity => InventoryRoles.Storage,
 		_ => throw new ArgumentOutOfRangeException( nameof(kind), kind, null )
 	};
 

@@ -188,6 +188,17 @@ internal sealed class ApplicationServiceTestEnvironment : IAsyncDisposable
 		Definition = new DefinitionId(definition)
 	};
 
+	/// <summary>
+	/// Canonical owner index record for an inventory, matching the commit-time invariant
+	/// production enforces (one record per inventory under the owner-kind's canonical role).
+	/// </summary>
+	public static OwnerInventoryRecord OwnerIndex(InventoryRecord inventory, string role) => new()
+	{
+		Role = role,
+		Owner = inventory.Owner,
+		InventoryId = inventory.Id
+	};
+
 	public static WorldTransformRecord Transform() => new()
 	{
 		PositionX = 10,
@@ -310,6 +321,7 @@ internal sealed class TestCharacterInitializer : ICharacterInitializer
 internal sealed class FaultInjectingPersistenceProvider : IPersistenceProvider
 {
 	private readonly IPersistenceProvider _inner;
+	private readonly Dictionary<string, int> _allCalls = new(StringComparer.Ordinal);
 	private bool _failNextCommit;
 	private Action? _beforeNextCommit;
 
@@ -336,7 +348,21 @@ internal sealed class FaultInjectingPersistenceProvider : IPersistenceProvider
 		_inner.InitializeAsync(cancellationToken);
 
 	public IPersistenceRepository<T> Repository<T>(string collection) where T : class =>
-		_inner.Repository<T>(collection);
+		new CountingRepository<T>(this, _inner.Repository<T>(collection));
+
+	/// <summary>
+	/// Number of full-collection All() enumerations issued so far, for asserting that
+	/// keyed-probe code paths never fall back to store scans.
+	/// </summary>
+	public int AllCallCount(string collection)
+	{
+		lock (_allCalls) return _allCalls.GetValueOrDefault(collection);
+	}
+
+	private void RecordAllCall(string collection)
+	{
+		lock (_allCalls) _allCalls[collection] = _allCalls.GetValueOrDefault(collection) + 1;
+	}
 
 	public IUnitOfWork BeginUnitOfWork() => new FaultInjectingUnitOfWork(this, _inner.BeginUnitOfWork());
 
@@ -359,6 +385,30 @@ internal sealed class FaultInjectingPersistenceProvider : IPersistenceProvider
 
 	private Action? ConsumeBeforeCommit() => Interlocked.Exchange(ref _beforeNextCommit, null);
 
+	private static IPersistenceRepository<T> Unwrap<T>(IPersistenceRepository<T> repository) where T : class =>
+		repository is CountingRepository<T> counting ? counting.Inner : repository;
+
+	private sealed class CountingRepository<T> : IPersistenceRepository<T> where T : class
+	{
+		private readonly FaultInjectingPersistenceProvider _provider;
+
+		public CountingRepository(FaultInjectingPersistenceProvider provider, IPersistenceRepository<T> inner)
+		{
+			_provider = provider;
+			Inner = inner;
+		}
+
+		public IPersistenceRepository<T> Inner { get; }
+		public string Collection => Inner.Collection;
+		public DocumentSnapshot<T>? Find(string key) => Inner.Find(key);
+
+		public IReadOnlyList<DocumentSnapshot<T>> All()
+		{
+			_provider.RecordAllCall(Inner.Collection);
+			return Inner.All();
+		}
+	}
+
 	private sealed class FaultInjectingUnitOfWork : IUnitOfWork
 	{
 		private readonly FaultInjectingPersistenceProvider _provider;
@@ -373,21 +423,21 @@ internal sealed class FaultInjectingPersistenceProvider : IPersistenceProvider
 		}
 
 		public DocumentEditor<T>? Edit<T>(IPersistenceRepository<T> repository, DocumentSnapshot<T> observed) where T : class =>
-			_inner.Edit(repository, observed);
+			_inner.Edit(Unwrap(repository), observed);
 
 		public void RequireUnchanged<T>(IPersistenceRepository<T> repository, DocumentSnapshot<T> observed) where T : class =>
-			_inner.RequireUnchanged(repository, observed);
+			_inner.RequireUnchanged(Unwrap(repository), observed);
 
 		public void Create<T>(IPersistenceRepository<T> repository, string key, T value) where T : class =>
-			_inner.Create(repository, key, value);
+			_inner.Create(Unwrap(repository), key, value);
 
 		public void Put<T>(IPersistenceRepository<T> repository, string key, T value) where T : class =>
-			_inner.Put(repository, key, value);
+			_inner.Put(Unwrap(repository), key, value);
 
 		public void Save<T>(DocumentEditor<T> editor) where T : class => _inner.Save(editor);
 
 		public void Delete<T>(IPersistenceRepository<T> repository, DocumentSnapshot<T> observed) where T : class =>
-			_inner.Delete(repository, observed);
+			_inner.Delete(Unwrap(repository), observed);
 
 		public void Require(ICommitPrecondition precondition) => _inner.Require(precondition);
 

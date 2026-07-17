@@ -34,6 +34,8 @@ public sealed class InventoryMutationServiceTests
 		Assert.AreEqual(
 			new InventoryPlacement(item.Id, 2, 1),
 			Find(environment, target.Id).Find(item.Id));
+		Assert.AreEqual(0, environment.Provider.AllCallCount(DomainCollections.Inventories),
+			"A character-to-character move must not scan the inventory store.");
 	}
 
 	[TestMethod]
@@ -139,6 +141,14 @@ public sealed class InventoryMutationServiceTests
 			foreach (var inventory in new[]
 				{ selfSource, selfTarget, descendantSource, outerInventory, descendantTarget })
 				unitOfWork.Create(environment.Repositories.Inventories, DomainKeys.Inventory(inventory.Id), inventory);
+			foreach (var bagInventory in new[] { selfTarget, outerInventory, descendantTarget })
+			{
+				var index = ApplicationServiceTestEnvironment.OwnerIndex(bagInventory, InventoryRoles.Bag);
+				unitOfWork.Create(
+					environment.Repositories.OwnerInventories,
+					DomainKeys.OwnerInventory(index.Owner, index.Role),
+					index);
+			}
 		});
 		GrantTransfer(environment, actor, selfSource.Id, selfTarget.Id);
 		GrantTransfer(environment, actor, descendantSource.Id, descendantTarget.Id);
@@ -155,6 +165,8 @@ public sealed class InventoryMutationServiceTests
 		Assert.IsNotNull(Find(environment, descendantSource.Id).Find(outerBag.Id));
 		Assert.IsEmpty(Find(environment, selfTarget.Id).Placements);
 		Assert.IsEmpty(Find(environment, descendantTarget.Id).Placements);
+		Assert.AreEqual(0, environment.Provider.AllCallCount(DomainCollections.Inventories),
+			"Bag-cycle detection must use keyed owner-index probes, never a store scan.");
 	}
 
 	[TestMethod]

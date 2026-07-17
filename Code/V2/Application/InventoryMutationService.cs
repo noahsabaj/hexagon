@@ -190,21 +190,29 @@ public sealed class InventoryMutationService
 
 	private bool WouldCreateBagCycle( ItemId movingItem, InventoryRecord destination )
 	{
-		var containingInventoryByItem = new Dictionary<ItemId, InventoryRecord>();
-		foreach ( var inventory in _repositories.Inventories.All().Select( document => document.Value ) )
-		{
-			foreach ( var placement in inventory.Placements )
-				containingInventoryByItem.TryAdd( placement.ItemId, inventory );
-		}
+		// Only a bag inventory can sit inside the moving item's subtree; character and
+		// scene-entity inventories are roots and can never close a cycle.
+		if ( destination.Owner.Kind != InventoryOwnerKind.ParentItem ) return false;
 
-		var current = destination;
-		var visited = new HashSet<InventoryId>();
-		while ( visited.Add( current.Id ) && current.Owner.Kind == InventoryOwnerKind.ParentItem )
+		// A cycle arises exactly when the destination lies in the moving item's own bag
+		// subtree, so descend from the moving item with keyed owner-index probes (one
+		// canonical owner record per inventory) instead of scanning the whole store to
+		// walk ancestors upward.
+		var pendingContainers = new Stack<ItemId>();
+		pendingContainers.Push( movingItem );
+		var visited = new HashSet<ItemId>();
+		while ( pendingContainers.Count > 0 )
 		{
-			var parentItem = new ItemId( current.Owner.OwnerId );
-			if ( parentItem == movingItem ) return true;
-			if ( !containingInventoryByItem.TryGetValue( parentItem, out var parentInventory ) ) break;
-			current = parentInventory;
+			var containerItem = pendingContainers.Pop();
+			if ( !visited.Add( containerItem ) ) continue;
+			var ownerIndex = _repositories.OwnerInventories.Find( DomainKeys.OwnerInventory(
+				InventoryOwner.ParentItem( containerItem ), InventoryRoles.Bag ) );
+			if ( ownerIndex is null ) continue;
+			if ( ownerIndex.Value.InventoryId == destination.Id ) return true;
+			var bag = _repositories.Inventories.Find( DomainKeys.Inventory( ownerIndex.Value.InventoryId ) );
+			if ( bag is null ) continue;
+			foreach ( var placement in bag.Value.Placements )
+				pendingContainers.Push( placement.ItemId );
 		}
 
 		return false;

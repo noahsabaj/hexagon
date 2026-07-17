@@ -396,13 +396,12 @@ public sealed class ItemActionService
 		}
 		if ( plan.DeletedItems.Any( id => !context.InventoryItems.ContainsKey( id ) ) )
 			return OperationResult.Failure( ErrorCode.InvalidArgument, "Action attempted to delete an item outside the proven inventory." );
-		if ( plan.DeletedItems.Count > 0 )
+		foreach ( var deleted in plan.DeletedItems )
 		{
-			var containerItems = _repositories.Inventories.All()
-				.Where( document => document.Value.Owner.Kind == InventoryOwnerKind.ParentItem )
-				.Select( document => new ItemId( document.Value.Owner.OwnerId ) )
-				.ToHashSet();
-			if ( plan.DeletedItems.Any( containerItems.Contains ) )
+			// Exactly one canonical owner record exists per inventory (commit-time invariant),
+			// so a keyed probe per deleted item replaces the former full-store inventory scan.
+			if ( _repositories.OwnerInventories.Find( DomainKeys.OwnerInventory(
+				InventoryOwner.ParentItem( deleted ), InventoryRoles.Bag ) ) is not null )
 				return OperationResult.Failure( ErrorCode.InvalidArgument, "Action cannot delete a container item without an explicit cascade operation." );
 		}
 		var finalInventory = plan.UpdatedInventory ?? context.Inventory;

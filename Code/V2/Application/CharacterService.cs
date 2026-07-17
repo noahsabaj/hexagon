@@ -20,8 +20,8 @@ namespace Hexagon.V2.Application;
 /// </summary>
 public sealed class CharacterService
 {
-	private const string MainInventoryRole = "main";
-	private const string BagInventoryRole = "bag";
+	private const string MainInventoryRole = InventoryRoles.Main;
+	private const string BagInventoryRole = InventoryRoles.Bag;
 	private const string ClassCapacityReservationNamespace = "hexagon.class-capacity";
 
 	private readonly DomainRepositories _repositories;

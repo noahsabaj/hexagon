@@ -284,6 +284,74 @@ public sealed class ItemActionServiceTests
 		Assert.AreEqual( 0, events.Count );
 	}
 
+	[TestMethod]
+	public async Task ContainerItemDeletionIsRejectedWithoutACascadeOperation()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var actor = ApplicationServiceTestEnvironment.Actor();
+		var character = ApplicationServiceTestEnvironment.Character( actor.AccountId, 1, actor.CharacterId );
+		var item = ApplicationServiceTestEnvironment.Item();
+		var bag = ApplicationServiceTestEnvironment.Item( ApplicationServiceTestEnvironment.BagDefinitionId );
+		var inventory = ApplicationServiceTestEnvironment.Inventory(
+			InventoryOwner.Character( actor.CharacterId ),
+			new[]
+			{
+				new InventoryPlacement( item.Id, 0, 0 ),
+				new InventoryPlacement( bag.Id, 1, 0 )
+			} );
+		var bagInventory = ApplicationServiceTestEnvironment.Inventory( InventoryOwner.ParentItem( bag.Id ) );
+		await SeedAsync( environment, character, new[] { item, bag }, new[] { inventory, bagInventory } );
+		await environment.SeedAsync( unitOfWork =>
+		{
+			var index = ApplicationServiceTestEnvironment.OwnerIndex( bagInventory, InventoryRoles.Bag );
+			unitOfWork.Create(
+				environment.Repositories.OwnerInventories,
+				DomainKeys.OwnerInventory( index.Owner, index.Role ),
+				index );
+		} );
+		GrantUse( environment, actor, inventory.Id );
+		var handler = new RecordingActionHandler(
+			ExecuteAction,
+			_ => OperationResult<ItemActionPlan>.Success( new ItemActionPlan
+			{
+				DeletedItems = new HashSet<ItemId> { bag.Id }
+			} ) );
+		var service = CreateService( environment, CompileSchema(), handler );
+
+		var result = await service.ExecuteAsync(
+			actor, inventory.Id, item.Id, new ActionId( ExecuteAction ) );
+
+		Assert.AreEqual( ErrorCode.InvalidArgument, result.Error!.Code );
+		Assert.IsNotNull( environment.Repositories.Items.Find( DomainKeys.Item( bag.Id ) ) );
+		Assert.IsNotNull( FindInventory( environment, inventory.Id ).Find( bag.Id ) );
+		Assert.AreEqual( 0, environment.Provider.AllCallCount( DomainCollections.Inventories ),
+			"Container-delete detection must use keyed owner-index probes, never a store scan." );
+	}
+
+	[TestMethod]
+	public async Task NonContainerItemDeletionCommitsWithoutScanningTheInventoryStore()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var seeded = await SeedSingleAsync( environment );
+		GrantUse( environment, seeded.Actor, seeded.Inventory.Id );
+		var handler = new RecordingActionHandler(
+			ExecuteAction,
+			_ => OperationResult<ItemActionPlan>.Success( new ItemActionPlan
+			{
+				DeletedItems = new HashSet<ItemId> { seeded.Item.Id }
+			} ) );
+		var service = CreateService( environment, CompileSchema(), handler );
+
+		var result = await service.ExecuteAsync(
+			seeded.Actor, seeded.Inventory.Id, seeded.Item.Id, new ActionId( ExecuteAction ) );
+
+		Assert.IsTrue( result.Succeeded, result.Error?.Message );
+		Assert.IsNull( environment.Repositories.Items.Find( DomainKeys.Item( seeded.Item.Id ) ) );
+		Assert.IsNull( FindInventory( environment, seeded.Inventory.Id ).Find( seeded.Item.Id ) );
+		Assert.AreEqual( 0, environment.Provider.AllCallCount( DomainCollections.Inventories ),
+			"A delete-bearing action must not enumerate the inventory store." );
+	}
+
 	private static ItemActionService CreateService(
 		ApplicationServiceTestEnvironment environment,
 		CompiledSchema schema,
