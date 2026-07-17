@@ -172,7 +172,7 @@ public sealed class InteractionAuthorityService
 			return OperationResult<InteractionOpened>.Failure( validated.Error!.Code, validated.Error.Message );
 		var interactable = validated.Value.Interactable;
 		var context = validated.Value.Context;
-		var authorized = interactable.Authorize( context );
+		var authorized = AuthorizeFailClosed( interactable, context );
 		if ( authorized.Failed )
 			return OperationResult<InteractionOpened>.Failure( authorized.Error!.Code, authorized.Error.Message );
 
@@ -226,7 +226,7 @@ public sealed class InteractionAuthorityService
 		if ( validated.Failed )
 			return OperationResult<ServerInteractionContext>.Failure(
 				validated.Error!.Code, validated.Error.Message );
-		var authorized = validated.Value.Interactable.Authorize( validated.Value.Context );
+		var authorized = AuthorizeFailClosed( validated.Value.Interactable, validated.Value.Context );
 		return authorized.Succeeded
 			? OperationResult<ServerInteractionContext>.Success( validated.Value.Context )
 			: OperationResult<ServerInteractionContext>.Failure(
@@ -248,7 +248,7 @@ public sealed class InteractionAuthorityService
 			_sessions.Revoke( sessionId, "validation_failed" );
 			return OperationResult<InteractionSession>.Failure( validated.Error!.Code, validated.Error.Message );
 		}
-		var authorized = validated.Value.Interactable.Authorize( validated.Value.Context );
+		var authorized = AuthorizeFailClosed( validated.Value.Interactable, validated.Value.Context );
 		if ( authorized.Failed )
 		{
 			_sessions.Revoke( sessionId, "authorization_changed" );
@@ -281,7 +281,7 @@ public sealed class InteractionAuthorityService
 		var validated = Validate( connectionId, accountId, characterId, target );
 		if ( validated.Failed )
 			return OperationResult<TimedActionTicket>.Failure( validated.Error!.Code, validated.Error.Message );
-		var authorized = validated.Value.Interactable.Authorize( validated.Value.Context );
+		var authorized = AuthorizeFailClosed( validated.Value.Interactable, validated.Value.Context );
 		if ( authorized.Failed )
 			return OperationResult<TimedActionTicket>.Failure( authorized.Error!.Code, authorized.Error.Message );
 		var startedAt = _clock.UtcNow;
@@ -329,7 +329,7 @@ public sealed class InteractionAuthorityService
 		var validated = Validate( connectionId, accountId, characterId, ticket.Target );
 		if ( validated.Failed )
 			return OperationResult<ServerInteractionContext>.Failure( validated.Error!.Code, validated.Error.Message );
-		var authorized = validated.Value.Interactable.Authorize( validated.Value.Context );
+		var authorized = AuthorizeFailClosed( validated.Value.Interactable, validated.Value.Context );
 		return authorized.Succeeded
 			? OperationResult<ServerInteractionContext>.Success( validated.Value.Context )
 			: OperationResult<ServerInteractionContext>.Failure( authorized.Error!.Code, authorized.Error.Message );
@@ -363,12 +363,25 @@ public sealed class InteractionAuthorityService
 			// Account identity is deliberately not recoverable from a session. The host
 			// integration supplies the authenticated account during regular Continue calls;
 			// scheduled validation uses the directory/world's connection binding.
-			var hasTarget = _directory.TryResolve( session.Target, out var interactable ) &&
-				interactable.Target == session.Target;
-			if ( !hasTarget || !_world.TryBuildContext(
-				session.ConnectionId, session.CharacterId, session.Target, out var context ) ||
-				ValidateContext( context, interactable.Policy ).Failed ||
-				interactable.Authorize( context ).Failed )
+			bool valid;
+			try
+			{
+				valid = _directory.TryResolve( session.Target, out var interactable ) &&
+					interactable.Target == session.Target &&
+					_world.TryBuildContext(
+						session.ConnectionId, session.CharacterId, session.Target, out var context ) &&
+					ValidateContext( context, interactable.Policy ).Succeeded &&
+					interactable.Authorize( context ) is { Succeeded: true };
+			}
+			catch ( Exception )
+			{
+				// A throwing interactable must not starve the whole maintenance loop, and a
+				// session whose own validation cannot run is revoked fail-closed instead of
+				// surviving unvalidated.
+				if ( _sessions.Revoke( session.Id, "scheduled_validation_threw" ) ) revoked++;
+				continue;
+			}
+			if ( !valid )
 			{
 				if ( _sessions.Revoke( session.Id, "scheduled_validation_failed" ) ) revoked++;
 			}
@@ -409,16 +422,44 @@ public sealed class InteractionAuthorityService
 		CharacterId characterId,
 		InteractionTarget target )
 	{
-		if ( !_directory.TryResolve( target, out var interactable ) || interactable.Target != target )
-			return OperationResult<(IHexInteractable, ServerInteractionContext)>.Failure( ErrorCode.NotFound, "Interaction target is unavailable." );
-		if ( !_world.TryBuildContext( connectionId, characterId, target, out var context ) ||
-			context.AccountId != accountId )
-			return OperationResult<(IHexInteractable, ServerInteractionContext)>.Failure( ErrorCode.Unauthorized, "Authoritative actor or target state is unavailable." );
-		var contextValidation = ValidateContext( context, interactable.Policy );
-		if ( contextValidation.Failed )
+		// Directory, world, and interactable members are game-supplied; a throw from any of
+		// them denies the interaction instead of escaping into the caller (mirrors
+		// PolicyPipeline's fail-closed treatment of throwing policies).
+		try
+		{
+			if ( !_directory.TryResolve( target, out var interactable ) || interactable.Target != target )
+				return OperationResult<(IHexInteractable, ServerInteractionContext)>.Failure( ErrorCode.NotFound, "Interaction target is unavailable." );
+			if ( !_world.TryBuildContext( connectionId, characterId, target, out var context ) ||
+				context.AccountId != accountId )
+				return OperationResult<(IHexInteractable, ServerInteractionContext)>.Failure( ErrorCode.Unauthorized, "Authoritative actor or target state is unavailable." );
+			var contextValidation = ValidateContext( context, interactable.Policy );
+			if ( contextValidation.Failed )
+				return OperationResult<(IHexInteractable, ServerInteractionContext)>.Failure(
+					contextValidation.Error!.Code, contextValidation.Error.Message );
+			return OperationResult<(IHexInteractable, ServerInteractionContext)>.Success( (interactable, context) );
+		}
+		catch ( Exception exception )
+		{
 			return OperationResult<(IHexInteractable, ServerInteractionContext)>.Failure(
-				contextValidation.Error!.Code, contextValidation.Error.Message );
-		return OperationResult<(IHexInteractable, ServerInteractionContext)>.Success( (interactable, context) );
+				ErrorCode.InternalError,
+				$"Interaction validation failed closed: {exception.GetType().Name}: {exception.Message}" );
+		}
+	}
+
+	private static OperationResult<InteractionOffer> AuthorizeFailClosed(
+		IHexInteractable interactable,
+		ServerInteractionContext context )
+	{
+		try
+		{
+			return interactable.Authorize( context );
+		}
+		catch ( Exception exception )
+		{
+			return OperationResult<InteractionOffer>.Failure(
+				ErrorCode.InternalError,
+				$"Interactable authorization failed closed: {exception.GetType().Name}: {exception.Message}" );
+		}
 	}
 
 	private OperationResult ValidateContext( ServerInteractionContext context, InteractionPolicy? interactionPolicy )

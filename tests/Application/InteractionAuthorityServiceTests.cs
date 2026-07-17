@@ -379,6 +379,65 @@ public sealed class InteractionAuthorityServiceTests
 		Assert.IsEmpty( fixture.Sessions.ActiveSessions );
 	}
 
+	[TestMethod]
+	public void ThrowingInteractableIsRevokedByScheduledValidationWithoutStarvingTheLoop()
+	{
+		var fixture = new InteractionFixture();
+		var inventoryId = InventoryId.New();
+		fixture.SetGrant( inventoryId );
+		fixture.BeginSession();
+		fixture.Clock.Advance( InteractionAuthorityService.RevalidationInterval );
+		fixture.Interactable.AuthorizeThrows = true;
+
+		var revoked = fixture.Service.RevalidateActiveSessions();
+
+		Assert.AreEqual( 1, revoked, "A throwing interactable must revoke its own session, not abort the pass." );
+		Assert.IsEmpty( fixture.Sessions.ActiveSessions );
+		Assert.IsFalse( fixture.HasGrant( inventoryId ) );
+
+		// The next pass runs cleanly: the offender is gone and nothing escaped the loop.
+		Assert.AreEqual( 0, fixture.Service.RevalidateActiveSessions() );
+	}
+
+	[TestMethod]
+	public void ThrowingInteractableFailsClosedOnEveryAuthorizationPath()
+	{
+		var fixture = new InteractionFixture();
+		fixture.Interactable.AuthorizeThrows = true;
+
+		var begin = fixture.Service.Begin(
+			fixture.Actor.ConnectionId, fixture.Actor.AccountId, fixture.Actor.CharacterId, fixture.Target );
+		var oneShot = fixture.Service.AuthorizeOneShot(
+			fixture.Actor.ConnectionId, fixture.Actor.AccountId, fixture.Actor.CharacterId, fixture.Target );
+		var timedBegin = fixture.Service.BeginTimedAction(
+			fixture.Actor.ConnectionId, fixture.Actor.AccountId, fixture.Actor.CharacterId,
+			fixture.Target, TimeSpan.FromSeconds( 1 ) );
+
+		Assert.AreEqual( ErrorCode.InternalError, begin.Error!.Code );
+		Assert.AreEqual( ErrorCode.InternalError, oneShot.Error!.Code );
+		Assert.AreEqual( ErrorCode.InternalError, timedBegin.Error!.Code );
+		Assert.IsEmpty( fixture.Sessions.ActiveSessions );
+
+		fixture.Interactable.AuthorizeThrows = false;
+		var session = fixture.BeginSession();
+		var ticket = fixture.Service.BeginTimedAction(
+			fixture.Actor.ConnectionId, fixture.Actor.AccountId, fixture.Actor.CharacterId,
+			fixture.Target, TimeSpan.FromSeconds( 1 ) );
+		Assert.IsTrue( ticket.Succeeded, ticket.Error?.Message );
+		fixture.Clock.Advance( TimeSpan.FromSeconds( 1 ) );
+		fixture.Interactable.AuthorizeThrows = true;
+
+		var continued = fixture.Service.Continue(
+			session.Id, fixture.Actor.ConnectionId, fixture.Actor.AccountId,
+			fixture.Actor.CharacterId, fixture.Target );
+		var completed = fixture.Service.CompleteTimedAction(
+			ticket.Value.Id, fixture.Actor.ConnectionId, fixture.Actor.AccountId, fixture.Actor.CharacterId );
+
+		Assert.AreEqual( ErrorCode.InternalError, continued.Error!.Code );
+		Assert.IsEmpty( fixture.Sessions.ActiveSessions, "A throwing interactable must revoke the continued session." );
+		Assert.AreEqual( ErrorCode.InternalError, completed.Error!.Code );
+	}
+
 	private sealed class InteractionFixture
 	{
 		public InteractionFixture()
@@ -530,10 +589,12 @@ public sealed class InteractionAuthorityServiceTests
 			SessionKind = InteractionSessionKind.Storage
 		};
 		public int AuthorizeCount { get; private set; }
+		public bool AuthorizeThrows { get; set; }
 
 		public OperationResult<InteractionOffer> Authorize( ServerInteractionContext context )
 		{
 			AuthorizeCount++;
+			if ( AuthorizeThrows ) throw new InvalidOperationException( "Interactable authorization threw." );
 			return OperationResult<InteractionOffer>.Success( Offer );
 		}
 	}
