@@ -54,7 +54,10 @@ function Get-RepositoryHead {
 
 function Get-SourceFingerprint {
     param([Parameter(Mandatory)][object[]] $Repositories)
-    return (Get-EffectiveReleaseInputs -Repositories $Repositories).Fingerprint
+    # Evidence fingerprints always require clean checkouts: a dirty-tree fingerprint
+    # would honestly hash modified bytes while the evidence attributes them to a
+    # commit SHA (2026-07-16 audit, DEPL-02).
+    return (Get-EffectiveReleaseInputs -Repositories $Repositories -RequireClean).Fingerprint
 }
 
 function Get-FileSha256 {

@@ -51,6 +51,40 @@ public sealed class PackageLayoutTests
 	}
 
 	[TestMethod]
+	public void DependencySourcesArePinnedWithAuditSources()
+	{
+		AssertPinnedNuGetConfiguration( Path.Combine( RepositoryRoots.FindHexagon(), "NuGet.config" ) );
+	}
+
+	[TestMethod]
+	[TestCategory( "CrossRepository" )]
+	public void GameDependencySourcesArePinnedWithAuditSources()
+	{
+		AssertPinnedNuGetConfiguration( Path.Combine( RepositoryRoots.FindPair().Hl2Rp, "NuGet.config" ) );
+	}
+
+	private static void AssertPinnedNuGetConfiguration( string path )
+	{
+		// The <auditSources> declaration is what makes the NuGet vulnerability gates
+		// fail closed: without it, a reachable source lacking vulnerability data makes
+		// both the audited restore and the package-list gate silently vacuous.
+		Assert.IsTrue( File.Exists( path ), $"Pinned NuGet.config is missing: {path}" );
+		var document = System.Xml.Linq.XDocument.Load( path );
+		foreach ( var section in new[] { "packageSources", "auditSources" } )
+		{
+			var element = document.Root!.Element( section );
+			Assert.IsNotNull( element, $"NuGet.config must declare <{section}>." );
+			Assert.IsNotNull( element!.Element( "clear" ), $"<{section}> must clear inherited sources." );
+			var sources = element.Elements( "add" ).ToArray();
+			Assert.HasCount( 1, sources, $"<{section}> must pin exactly one source." );
+			Assert.AreEqual(
+				"https://api.nuget.org/v3/index.json",
+				sources[0].Attribute( "value" )?.Value,
+				$"<{section}> must pin api.nuget.org." );
+		}
+	}
+
+	[TestMethod]
 	[TestCategory( "CrossRepository" )]
 	public void GameOwnsAResolvableStartupScene()
 	{
