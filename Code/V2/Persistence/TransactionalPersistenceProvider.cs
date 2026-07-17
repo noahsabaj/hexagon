@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Hexagon.V2.Kernel;
 
 namespace Hexagon.V2.Persistence;
 
@@ -89,7 +90,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 				return;
 			}
 
-			var apply = CaptureSynchronous( () => CompleteInitialization( recovery.Value! ) );
+			var apply = AsyncOperation.CaptureSynchronous( () => CompleteInitialization( recovery.Value! ) );
 			if ( !apply.Succeeded )
 			{
 				var exception = await FaultInitializationAsync( apply.Exception! );
@@ -173,7 +174,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			ApplySuccessfulCommitMetadataRepair();
 		}
 
-		var snapshotCapture = CaptureSynchronous( CaptureCheckpointSnapshot );
+		var snapshotCapture = AsyncOperation.CaptureSynchronous( CaptureCheckpointSnapshot );
 		if ( !snapshotCapture.Succeeded )
 		{
 			var exception = snapshotCapture.Exception!;
@@ -279,7 +280,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			if ( priorState == PersistenceProviderState.Ready && _health.Status != PersistenceHealthStatus.Fatal &&
 				metadataRepairFailure is null )
 			{
-				var snapshotCapture = CaptureSynchronous( CaptureCheckpointSnapshot );
+				var snapshotCapture = AsyncOperation.CaptureSynchronous( CaptureCheckpointSnapshot );
 				if ( !snapshotCapture.Succeeded )
 				{
 					var exception = snapshotCapture.Exception!;
@@ -506,7 +507,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			return PersistenceResult<CommitReceipt>.Failure( validationError );
 		}
 
-		var preparation = CaptureSynchronous( () => stagedChanges.Count == 0
+		var preparation = AsyncOperation.CaptureSynchronous( () => stagedChanges.Count == 0
 			? new PreparedCommit(
 				new WalCommitBatch
 				{
@@ -526,7 +527,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		}
 
 		var prepared = preparation.Value!;
-		var candidateCapture = CaptureSynchronous( () => BuildInvariantContext(
+		var candidateCapture = AsyncOperation.CaptureSynchronous( () => BuildInvariantContext(
 			prepared.States,
 			prepared.Batch.Sequence,
 			_compactionGeneration ) );
@@ -631,7 +632,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		}
 
 		var durabilityOutcome = durability.Value!;
-		var publication = CaptureSynchronous( () => PublishCommit(
+		var publication = AsyncOperation.CaptureSynchronous( () => PublishCommit(
 			prepared, incrementalInvariants, invariantPreparation ) );
 		if ( !publication.Succeeded )
 		{
@@ -673,7 +674,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 				// checkpoint may be in flight; a scheduler refusal (or throw) re-arms the latch
 				// so a later threshold-crossing commit retries. Shutdown still takes its own
 				// final checkpoint, so a refused automatic checkpoint is never data loss.
-				var scheduled = CaptureSynchronous( () => scheduler( RunScheduledCheckpointAsync ) );
+				var scheduled = AsyncOperation.CaptureSynchronous( () => scheduler( RunScheduledCheckpointAsync ) );
 				if ( !scheduled.Succeeded || !scheduled.Value )
 					Interlocked.Exchange( ref _backgroundCheckpointScheduled, 0 );
 			}
@@ -864,31 +865,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		{
 			CompactionGeneration = _compactionGeneration
 		};
-	}
-
-	private static OperationOutcome CaptureSynchronous( Action operation )
-	{
-		try
-		{
-			operation();
-			return OperationOutcome.Success();
-		}
-		catch ( Exception exception )
-		{
-			return OperationOutcome.Failure( exception );
-		}
-	}
-
-	private static OperationOutcome<T> CaptureSynchronous<T>( Func<T> operation )
-	{
-		try
-		{
-			return OperationOutcome<T>.Success( operation() );
-		}
-		catch ( Exception exception )
-		{
-			return OperationOutcome<T>.Failure( exception );
-		}
 	}
 
 	private PersistenceError? ValidateExpectedRevisions(

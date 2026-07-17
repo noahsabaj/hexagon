@@ -541,7 +541,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		var previousDrain = SceneShutdownBarrier.Previous( persistenceRoot );
 		if ( previousDrain is not null )
 		{
-			var previousOutcome = await RuntimeAsyncOperation.Capture(
+			var previousOutcome = await AsyncOperation.Capture(
 				() => new ValueTask<OperationResult>( previousDrain ) );
 			SceneShutdownBarrier.Clear( persistenceRoot, previousDrain );
 			if ( !previousOutcome.Succeeded || previousOutcome.Value.Failed )
@@ -559,7 +559,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			return;
 		}
 
-		var recovered = await RuntimeAsyncOperation.Capture(
+		var recovered = await AsyncOperation.Capture(
 			() => persistence.InitializeAsync( _hostLifetime.Token ) );
 		if ( !recovered.Succeeded )
 		{
@@ -592,7 +592,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			return;
 		}
 		var configuration = new TypedConfigurationStore( persistence, persistenceBindings.PersistenceConfigs );
-		var initializedConfiguration = await RuntimeAsyncOperation.Capture(
+		var initializedConfiguration = await AsyncOperation.Capture(
 			() => configuration.InitializeAsync( _hostLifetime.Token ) );
 		if ( !initializedConfiguration.Succeeded )
 		{
@@ -615,7 +615,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			services,
 			persistenceRoot,
 			verificationProbe );
-		var created = await RuntimeAsyncOperation.Capture(
+		var created = await AsyncOperation.Capture(
 			() => ValueTask.FromResult( descriptor.CreateHostApplication( context ) ) );
 		if ( !created.Succeeded || created.Value is null )
 		{
@@ -625,7 +625,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		}
 
 		HostApplication = created.Value;
-		var initialized = await RuntimeAsyncOperation.Capture(
+		var initialized = await AsyncOperation.Capture(
 			() => HostApplication.InitializeAsync( _hostLifetime.Token ) );
 		if ( !initialized.Succeeded )
 		{
@@ -691,7 +691,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 	private async Task<OperationResult> CoordinateShutdownAsync( Task? initialization )
 	{
 		if ( initialization is not null )
-			_ = await RuntimeAsyncOperation.Capture( () => new ValueTask( initialization ) );
+			_ = await AsyncOperation.Capture( () => new ValueTask( initialization ) );
 		return await ShutdownResourcesOnceAsync();
 	}
 
@@ -758,7 +758,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		HostApplication = null;
 		if ( application is not null )
 		{
-			var disposedApplication = await RuntimeAsyncOperation.Capture( application.DisposeAsync );
+			var disposedApplication = await AsyncOperation.Capture( application.DisposeAsync );
 			if ( !disposedApplication.Succeeded ) firstFailure ??= disposedApplication.Exception;
 		}
 
@@ -767,7 +767,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		_hostSchema = null;
 		if ( persistence is not null )
 		{
-			var drained = await RuntimeAsyncOperation.Capture( () => persistence.ShutdownAsync() );
+			var drained = await AsyncOperation.Capture( () => persistence.ShutdownAsync() );
 			if ( !drained.Succeeded ) firstFailure ??= drained.Exception;
 			else
 			{
@@ -777,7 +777,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 					firstFailure ??= new InvalidOperationException(
 						shutdown.Detail ?? "Persistence shutdown is not recoverable." );
 			}
-			var disposedPersistence = await RuntimeAsyncOperation.Capture( persistence.DisposeAsync );
+			var disposedPersistence = await AsyncOperation.Capture( persistence.DisposeAsync );
 			if ( !disposedPersistence.Succeeded ) firstFailure ??= disposedPersistence.Exception;
 		}
 

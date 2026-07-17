@@ -305,7 +305,7 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 		if ( requestId.Value == Guid.Empty )
 		{
 			CompleteDispatch( runtime, actor, requestId,
-				RuntimeOperationOutcome<OperationResult>.Success(
+				OperationOutcome<OperationResult>.Success(
 					OperationResult.Failure( ErrorCode.InvalidArgument, "The command request ID is empty." ) ) );
 			return;
 		}
@@ -321,14 +321,14 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 		{
 			Log.Warning( exception, "Hexagon rejected a malformed client command payload." );
 			CompleteDispatch( runtime, actor, requestId,
-				RuntimeOperationOutcome<OperationResult>.Success(
+				OperationOutcome<OperationResult>.Success(
 					OperationResult.Failure( ErrorCode.InvalidArgument, "The command payload is malformed." ) ) );
 			return;
 		}
 		if ( payload.Failed )
 		{
 			CompleteDispatch( runtime, actor, requestId,
-				RuntimeOperationOutcome<OperationResult>.Success( payload ) );
+				OperationOutcome<OperationResult>.Success( payload ) );
 			return;
 		}
 		if ( RequiresStableCharacter( command ) )
@@ -337,7 +337,7 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 			if ( stableActor.Failed )
 			{
 				CompleteDispatch( runtime, actor, requestId,
-					RuntimeOperationOutcome<OperationResult>.Success(
+					OperationOutcome<OperationResult>.Success(
 						OperationResult.Failure( stableActor.Error!.Code, stableActor.Error.Message ) ) );
 				return;
 			}
@@ -351,7 +351,7 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 				runtime,
 				actor,
 				requestId,
-				RuntimeOperationOutcome<OperationResult>.Success(
+				OperationOutcome<OperationResult>.Success(
 					OperationResult.Failure( ErrorCode.Conflict, "The host is draining and no longer accepts commands." ) ) );
 		}
 	}
@@ -368,7 +368,7 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 				runtime,
 				actor,
 				requestId,
-				RuntimeOperationOutcome<OperationResult>.Success(
+				OperationOutcome<OperationResult>.Success(
 					OperationResult.Failure(
 						ErrorCode.Unauthorized,
 						"The connection or active character changed before command execution." ) ) );
@@ -382,12 +382,12 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 				runtime,
 				actor,
 				requestId,
-				RuntimeOperationOutcome<OperationResult>.Success(
+				OperationOutcome<OperationResult>.Success(
 					OperationResult.Failure( ErrorCode.InternalError, "Host application is not ready." ) ) );
 			return;
 		}
 
-		var outcome = await RuntimeAsyncOperation.Capture(
+		var outcome = await AsyncOperation.Capture(
 			() => application.HandleCommandAsync( actor, command, actor.CancellationToken ) );
 		CompleteDispatch( runtime, actor, requestId, outcome, executionStarted: true );
 	}
@@ -396,7 +396,7 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 		HexagonRuntimeSystem runtime,
 		RpcActor actor,
 		CommandRequestId requestId,
-		RuntimeOperationOutcome<OperationResult> outcome,
+		OperationOutcome<OperationResult> outcome,
 		bool executionStarted = false )
 	{
 		try
