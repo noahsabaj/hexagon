@@ -354,7 +354,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		Log.Error(
 			$"HEXAGON_HOST_MIGRATION_REFUSED previous_host={previousHost?.Id.ToString() ?? "unknown"} " +
 			"detail=\"Hexagon sessions cannot outlive their prepared host; disconnecting.\"" );
-		Networking.Disconnect();
+		Sandbox.Networking.Disconnect();
 	}
 
 	public bool TryGetPlayer( Guid connectionId, out HexPlayerBody player )
