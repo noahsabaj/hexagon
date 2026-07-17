@@ -28,7 +28,7 @@ public sealed class InMemoryPersistenceProvider : TransactionalPersistenceProvid
 			0,
 			0,
 			Array.Empty<PersistedMutation>(),
-			false,
+			0,
 			false,
 			null ) );
 	}

@@ -363,6 +363,11 @@ public sealed class ImmutableWalPersistenceProviderTests
 		await recovered.InitializeAsync();
 		Assert.IsEmpty( await storage.ListAsync( Frames ) );
 		Assert.IsNull( recovered.Repository<TestDocument>( "documents" ).Find( "one" ) );
+		Assert.AreEqual( 1, recovered.Health.DiscardedUnacknowledgedFrames );
+		Assert.AreEqual(
+			PersistenceHealthStatus.Healthy,
+			recovered.Health.Status,
+			"Discarding an unacknowledged frame is normal crash recovery, not a degraded store." );
 	}
 
 	[TestMethod]

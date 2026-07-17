@@ -207,7 +207,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			_sequence,
 			_checkpointSequence,
 			!checkpointOutcome.CleanupSucceeded,
-			_health.RepairedPartialWalTail,
+			_health.DiscardedUnacknowledgedFrames,
 			_health.RecoveredFromCheckpointFallback,
 			checkpointOutcome.Detail,
 			DateTimeOffset.UtcNow );
@@ -248,7 +248,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 					_sequence,
 					_checkpointSequence,
 					!pending.Checkpoint.Succeeded,
-					_health.RepairedPartialWalTail,
+					_health.DiscardedUnacknowledgedFrames,
 					_health.RecoveredFromCheckpointFallback,
 					retriedDetail,
 					DateTimeOffset.UtcNow );
@@ -302,7 +302,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 								_sequence,
 								_checkpointSequence,
 								true,
-								_health.RepairedPartialWalTail,
+								_health.DiscardedUnacknowledgedFrames,
 								_health.RecoveredFromCheckpointFallback,
 								checkpointCleanup.Detail,
 								DateTimeOffset.UtcNow );
@@ -355,7 +355,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 				_sequence,
 				_checkpointSequence,
 				!checkpoint.Succeeded,
-				_health.RepairedPartialWalTail,
+				_health.DiscardedUnacknowledgedFrames,
 				_health.RecoveredFromCheckpointFallback,
 				detail,
 				DateTimeOffset.UtcNow );
@@ -721,13 +721,15 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			_checkpointSequence = recovered.CheckpointSequence;
 		}
 
-		var recoveredWithRepair = recovered.RepairedPartialWalTail || recovered.RecoveredFromCheckpointFallback;
+		// Discarded unacknowledged frames are normal crash recovery (the transactions were never
+		// acknowledged), so only a checkpoint-fallback recovery degrades the store.
+		var recoveredDegraded = recovered.RecoveredFromCheckpointFallback;
 		_health = new PersistenceHealth(
-			recoveredWithRepair ? PersistenceHealthStatus.Degraded : PersistenceHealthStatus.Healthy,
+			recoveredDegraded ? PersistenceHealthStatus.Degraded : PersistenceHealthStatus.Healthy,
 			_sequence,
 			_checkpointSequence,
-			recoveredWithRepair,
-			recovered.RepairedPartialWalTail,
+			recoveredDegraded,
+			recovered.DiscardedUnacknowledgedFrames,
 			recovered.RecoveredFromCheckpointFallback,
 			recovered.Detail,
 			DateTimeOffset.UtcNow );
@@ -766,7 +768,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		_sequence,
 		_checkpointSequence,
 		true,
-		_health.RepairedPartialWalTail,
+		_health.DiscardedUnacknowledgedFrames,
 		_health.RecoveredFromCheckpointFallback,
 		$"{(final ? "Final checkpoint failed" : "Checkpoint failed and will be retried")}: {exception.Message}",
 		DateTimeOffset.UtcNow );
@@ -776,7 +778,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		_sequence,
 		_checkpointSequence,
 		_health.CheckpointRetryPending,
-		_health.RepairedPartialWalTail,
+		_health.DiscardedUnacknowledgedFrames,
 		_health.RecoveredFromCheckpointFallback,
 		$"Commit durability or publication failed; restart is required before more writes: {exception.Message}",
 		DateTimeOffset.UtcNow );
@@ -792,8 +794,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 
 	private void ApplySuccessfulCommitMetadataRepair()
 	{
-		var remainsDegraded = _health.CheckpointRetryPending ||
-			_health.RepairedPartialWalTail || _health.RecoveredFromCheckpointFallback;
+		var remainsDegraded = _health.CheckpointRetryPending || _health.RecoveredFromCheckpointFallback;
 		_health = _health with
 		{
 			Status = remainsDegraded ? PersistenceHealthStatus.Degraded : PersistenceHealthStatus.Healthy,
@@ -1192,7 +1193,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		_sequence,
 		_checkpointSequence,
 		false,
-		false,
+		0,
 		false,
 		detail,
 		DateTimeOffset.UtcNow );

@@ -282,6 +282,6 @@ internal sealed record RecoveryState(
 	long Sequence,
 	long CheckpointSequence,
 	IReadOnlyList<PersistedMutation> Documents,
-	bool RepairedPartialWalTail,
+	int DiscardedUnacknowledgedFrames,
 	bool RecoveredFromCheckpointFallback,
 	string? Detail );

@@ -242,8 +242,12 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 		}
 
 		var framePaths = await _storage.ListAsync( _framePrefix, cancellationToken );
+		var discardedUnacknowledgedFrames = 0;
 		foreach ( var orphan in framePaths.Where( path => !referencedFrames.Contains( path ) ) )
+		{
 			await _storage.DeleteAsync( orphan, cancellationToken );
+			discardedUnacknowledgedFrames++;
+		}
 		if ( pendingPrune is not null )
 			await ApplyPruneIntentAsync( pendingPrune, cancellationToken );
 
@@ -272,7 +276,7 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 				.OrderBy( mutation => mutation.Collection, StringComparer.Ordinal )
 				.ThenBy( mutation => mutation.Key, StringComparer.Ordinal )
 				.ToArray(),
-			false,
+			discardedUnacknowledgedFrames,
 			checkpoint.RecoveredFromFallback,
 			detail );
 	}

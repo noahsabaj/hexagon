@@ -399,14 +399,17 @@ public enum PersistenceHealthStatus
 /// <summary>
 /// Observable persistence status. A checkpoint or redundant commit-head failure is degraded and
 /// retryable. A failure before a verified acknowledgement is fatal because the caller cannot safely
-/// infer a durable transaction from a frame alone.
+/// infer a durable transaction from a frame alone. <see cref="DiscardedUnacknowledgedFrames"/> counts
+/// frames swept during recovery because no acknowledgement referenced them (interrupted commits and
+/// interrupted checkpoint prunes); those transactions were never acknowledged, so their discard is
+/// normal crash recovery, not data loss, and does not degrade the store.
 /// </summary>
 public sealed record PersistenceHealth(
 	PersistenceHealthStatus Status,
 	long Sequence,
 	long CheckpointSequence,
 	bool CheckpointRetryPending,
-	bool RepairedPartialWalTail,
+	int DiscardedUnacknowledgedFrames,
 	bool RecoveredFromCheckpointFallback,
 	string? Detail,
 	DateTimeOffset ObservedAtUtc )

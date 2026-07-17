@@ -561,7 +561,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		var health = persistence.Health;
 		Log.Info(
 			$"HEXAGON_RECOVERED schema={schema.Id} sequence={health.Sequence} checkpoint={health.CheckpointSequence} " +
-			$"wal_tail_repaired={health.RepairedPartialWalTail} checkpoint_fallback={health.RecoveredFromCheckpointFallback} root={persistenceRoot}" );
+			$"orphan_frames_discarded={health.DiscardedUnacknowledgedFrames} checkpoint_fallback={health.RecoveredFromCheckpointFallback} root={persistenceRoot}" );
 		if ( _disposeRequested )
 		{
 			_ = await ShutdownResourcesOnceAsync();
