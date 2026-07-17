@@ -147,7 +147,17 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			storage,
 			new FileSystemPersistenceOptions( compiled.Value.Id )
 			{
-				Log = message => Log.Info( message )
+				Log = message => Log.Info( message ),
+				// Threshold checkpoints must not stall the committing command or the main
+				// thread; the registry-tracked task is drained by shutdown before the
+				// provider's own final checkpoint runs.
+				ScheduleBackgroundCheckpoint = work => TryStartHostOperation(
+					"persistence:automatic-checkpoint",
+					async () =>
+					{
+						await GameTask.WorkerThread();
+						await work();
+					} )
 			},
 			bindings.Value.Types,
 			persistenceInvariants );

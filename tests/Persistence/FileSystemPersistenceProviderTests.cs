@@ -298,6 +298,102 @@ public sealed class FileSystemPersistenceProviderTests
 	}
 
 	[TestMethod]
+	public async Task ScheduledAutomaticCheckpointDoesNotRunOnTheCommittingCaller()
+	{
+		var storage = new FaultInjectingStorage();
+		var scheduled = new List<Func<Task>>();
+		await using var provider = new FileSystemPersistenceProvider(
+			storage,
+			new FileSystemPersistenceOptions( "test-schema" )
+			{
+				CheckpointEveryCommits = 1,
+				ScheduleBackgroundCheckpoint = work =>
+				{
+					scheduled.Add( work );
+					return true;
+				}
+			},
+			PersistenceTestSupport.CreateRegistry() );
+		await provider.InitializeAsync();
+		var repository = provider.Repository<TestDocument>( "characters" );
+
+		await using ( var create = provider.BeginUnitOfWork() )
+		{
+			create.Create( repository, "alyx", new TestDocument( "Alyx", 1 ) );
+			Assert.IsTrue( (await create.CommitAsync()).Succeeded );
+		}
+
+		Assert.HasCount( 1, scheduled );
+		Assert.AreEqual( 0L, provider.Health.CheckpointSequence );
+		Assert.IsEmpty(
+			await storage.ListAsync( CompletionPrefix ),
+			"The threshold-crossing commit must return without awaiting checkpoint I/O." );
+
+		await using ( var update = provider.BeginUnitOfWork() )
+		{
+			var editor = update.Edit( repository, repository.Find( "alyx" )! )!;
+			editor.Replace( editor.Value with { Score = 2 } );
+			update.Save( editor );
+			Assert.IsTrue( (await update.CommitAsync()).Succeeded );
+		}
+		Assert.HasCount( 1, scheduled, "One background checkpoint may be in flight at a time." );
+
+		await scheduled[0]();
+		Assert.AreEqual( 2L, provider.Health.CheckpointSequence );
+		Assert.HasCount( 1, await storage.ListAsync( CompletionPrefix ) );
+
+		await using ( var final = provider.BeginUnitOfWork() )
+		{
+			var editor = final.Edit( repository, repository.Find( "alyx" )! )!;
+			editor.Replace( editor.Value with { Score = 3 } );
+			final.Save( editor );
+			Assert.IsTrue( (await final.CommitAsync()).Succeeded );
+		}
+		Assert.HasCount( 2, scheduled, "A completed checkpoint re-arms the scheduling latch." );
+	}
+
+	[TestMethod]
+	public async Task RefusedAutomaticCheckpointScheduleRearmsOnTheNextCommit()
+	{
+		var storage = new FaultInjectingStorage();
+		var attempts = 0;
+		await using var provider = new FileSystemPersistenceProvider(
+			storage,
+			new FileSystemPersistenceOptions( "test-schema" )
+			{
+				CheckpointEveryCommits = 1,
+				ScheduleBackgroundCheckpoint = _ =>
+				{
+					attempts++;
+					return false;
+				}
+			},
+			PersistenceTestSupport.CreateRegistry() );
+		await provider.InitializeAsync();
+		var repository = provider.Repository<TestDocument>( "characters" );
+
+		await using ( var create = provider.BeginUnitOfWork() )
+		{
+			create.Create( repository, "alyx", new TestDocument( "Alyx", 1 ) );
+			Assert.IsTrue( (await create.CommitAsync()).Succeeded );
+		}
+		await using ( var update = provider.BeginUnitOfWork() )
+		{
+			var editor = update.Edit( repository, repository.Find( "alyx" )! )!;
+			editor.Replace( editor.Value with { Score = 2 } );
+			update.Save( editor );
+			Assert.IsTrue( (await update.CommitAsync()).Succeeded );
+		}
+
+		Assert.AreEqual( 2, attempts, "A refused schedule re-arms so the next commit retries." );
+		Assert.AreEqual( 0L, provider.Health.CheckpointSequence );
+
+		var shutdown = await provider.ShutdownAsync();
+		Assert.IsTrue( shutdown.IsClean, "Shutdown takes its own final checkpoint regardless of scheduling." );
+		Assert.AreEqual( 2L, shutdown.CheckpointSequence );
+	}
+
+	[TestMethod]
 	public async Task CheckpointRetryIsIdempotentAfterManifestWasAlreadyWritten()
 	{
 		var storage = new FaultInjectingStorage();

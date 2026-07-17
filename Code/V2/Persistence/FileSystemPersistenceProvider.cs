@@ -28,6 +28,16 @@ public sealed record FileSystemPersistenceOptions
 	public int MaximumRetainedCommits { get; init; } = 1_024;
 	public Action<string>? Log { get; init; }
 
+	/// <summary>
+	/// Optional scheduler for threshold-triggered automatic checkpoints. When set, the
+	/// threshold-crossing commit returns immediately and the checkpoint runs as the scheduled
+	/// work (the host composition tracks it and may move it off the main thread); returning
+	/// false refuses the work and a later commit re-attempts scheduling. When null, the
+	/// checkpoint is awaited inline on the committing caller, which keeps single-threaded
+	/// tests deterministic. Shutdown always takes its own final checkpoint either way.
+	/// </summary>
+	public Func<Func<Task>, bool>? ScheduleBackgroundCheckpoint { get; init; }
+
 	internal void Validate()
 	{
 		if ( CheckpointEveryCommits < 0 ) throw new ArgumentOutOfRangeException( nameof( CheckpointEveryCommits ) );
@@ -104,6 +114,8 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 
 	protected override int AutomaticCheckpointCommitInterval => _options.CheckpointEveryCommits;
 	protected override bool ShouldCheckpointForStoragePressure => _retainedWalBytes >= _options.SoftCheckpointBytes;
+	private protected override Func<Func<Task>, bool>? BackgroundCheckpointScheduler =>
+		_options.ScheduleBackgroundCheckpoint;
 	protected override bool LeaseIsReleased => _lease is null || _lease.IsReleased;
 	protected override string DurableAckHash => _lastAckHash;
 

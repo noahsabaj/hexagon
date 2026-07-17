@@ -35,6 +35,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 	private long _sequence;
 	private long _checkpointSequence;
 	private long _compactionGeneration;
+	private int _backgroundCheckpointScheduled;
 
 	protected TransactionalPersistenceProvider(
 		PersistedTypeRegistry? types = null,
@@ -62,6 +63,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 
 	protected virtual int AutomaticCheckpointCommitInterval => 0;
 	protected virtual bool ShouldCheckpointForStoragePressure => false;
+	private protected virtual Func<Func<Task>, bool>? BackgroundCheckpointScheduler => null;
 
 	public async ValueTask InitializeAsync( CancellationToken cancellationToken = default )
 	{
@@ -660,10 +662,36 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 
 		if ( shouldCheckpoint )
 		{
-			_ = await CheckpointAsync( CancellationToken.None );
+			var scheduler = BackgroundCheckpointScheduler;
+			if ( scheduler is null )
+			{
+				_ = await CheckpointAsync( CancellationToken.None );
+			}
+			else if ( Interlocked.CompareExchange( ref _backgroundCheckpointScheduled, 1, 0 ) == 0 )
+			{
+				// The committing caller must not pay for checkpoint I/O. Exactly one background
+				// checkpoint may be in flight; a scheduler refusal (or throw) re-arms the latch
+				// so a later threshold-crossing commit retries. Shutdown still takes its own
+				// final checkpoint, so a refused automatic checkpoint is never data loss.
+				var scheduled = CaptureSynchronous( () => scheduler( RunScheduledCheckpointAsync ) );
+				if ( !scheduled.Succeeded || !scheduled.Value )
+					Interlocked.Exchange( ref _backgroundCheckpointScheduled, 0 );
+			}
 		}
 
 		return PersistenceResult<CommitReceipt>.Success( receipt );
+	}
+
+	private async Task RunScheduledCheckpointAsync()
+	{
+		try
+		{
+			_ = await CheckpointAsync( CancellationToken.None );
+		}
+		finally
+		{
+			Interlocked.Exchange( ref _backgroundCheckpointScheduled, 0 );
+		}
 	}
 
 	private void CompleteInitialization( RecoveryState recovered )
@@ -976,26 +1004,38 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 
 	private CheckpointSnapshot CaptureCheckpointSnapshot()
 	{
+		CommittedState[] states;
+		long sequence;
+		Guid storeId;
+		long compactionGeneration;
 		lock ( _stateLock )
 		{
-			var reclaimsTombstones = _documents.Values.Any( state => state.IsDeleted );
-			return new CheckpointSnapshot
-			{
-				FormatVersion = CheckpointSnapshot.CurrentFormatVersion,
-				Sequence = _sequence,
-				StoreId = _storeId,
-				CompactionGeneration = reclaimsTombstones
-					? checked(_compactionGeneration + 1)
-					: _compactionGeneration,
-				LastAckHash = DurableAckHash,
-				Documents = _documents.Values
-					.Where( state => !state.IsDeleted )
-					.OrderBy( state => state.Address.Collection, StringComparer.Ordinal )
-					.ThenBy( state => state.Address.Key, StringComparer.Ordinal )
-					.Select( ToMutation )
-					.ToArray()
-			};
+			states = _documents.Values.ToArray();
+			sequence = _sequence;
+			storeId = _storeId;
+			compactionGeneration = _compactionGeneration;
 		}
+
+		// Committed states are immutable and the commit gate is held for the whole capture, so
+		// the tombstone scan, sort, and payload clones can run outside _stateLock without
+		// blocking keyed reads.
+		var reclaimsTombstones = states.Any( state => state.IsDeleted );
+		return new CheckpointSnapshot
+		{
+			FormatVersion = CheckpointSnapshot.CurrentFormatVersion,
+			Sequence = sequence,
+			StoreId = storeId,
+			CompactionGeneration = reclaimsTombstones
+				? checked(compactionGeneration + 1)
+				: compactionGeneration,
+			LastAckHash = DurableAckHash,
+			Documents = states
+				.Where( state => !state.IsDeleted )
+				.OrderBy( state => state.Address.Collection, StringComparer.Ordinal )
+				.ThenBy( state => state.Address.Key, StringComparer.Ordinal )
+				.Select( ToMutation )
+				.ToArray()
+		};
 	}
 
 	private void ApplySuccessfulCheckpoint( CheckpointSnapshot snapshot )
