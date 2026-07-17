@@ -134,6 +134,13 @@ ProjectSettings/Platform.config
     }
     Remove-Item -LiteralPath (Join-Path $sourceRoot 'Code/Evil.generated.cs') -Force
 
+    # An ignored file outside the release-relevant scope (no Code/Assets/
+    # ProjectSettings prefix, not a .cs source) must stay tolerated.
+    'scratch' | Set-Content -LiteralPath (
+        Join-Path $sourceRoot 'scratch.generated.txt') -Encoding utf8
+    [void](Get-EffectiveReleaseInputs -Repositories $repositories -RequireClean)
+    Remove-Item -LiteralPath (Join-Path $sourceRoot 'scratch.generated.txt') -Force
+
     [void](New-Item -ItemType Directory -Path (Join-Path $sourceRoot 'tests') -Force)
     'internal static class IgnoredTestSource { }' |
         Set-Content -LiteralPath (Join-Path $sourceRoot 'tests/Ignored.cs') -Encoding utf8

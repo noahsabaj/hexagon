@@ -34,6 +34,49 @@ function Test-IsAllowedIgnoredReleaseInput {
         $path -cmatch '^Assets/.+(?:_c|\.vpk|\.los)$'
 }
 
+function Test-IsReleaseRelevantIgnoredPath {
+    param([Parameter(Mandatory)][string] $RelativePath)
+
+    $path = $RelativePath.Replace('\', '/')
+    return $path -cmatch '^(?:Code|Assets|ProjectSettings)/' -or $path -cmatch '\.cs$'
+}
+
+$script:IgnoredEnumerationVerified = $false
+
+function Assert-IgnoredEnumerationContract {
+    # The ignored-release-material gate is only as strong as git's willingness to
+    # report ignored files. Prove once per process, against a throwaway repository,
+    # that a bare 'ls-files --others --ignored --exclude-standard' surfaces a known
+    # ignored file — a git build or environment that suppresses the listing must
+    # fail this gate loudly instead of letting the material check pass vacuously.
+    if ($script:IgnoredEnumerationVerified) { return }
+    $probeRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
+        'hexagon-ignored-enumeration-probe-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        [void](New-Item -ItemType Directory -Path (Join-Path $probeRoot 'Code') -Force)
+        [void](Invoke-ReleaseInputGit -Root $probeRoot -Arguments @('init', '-q'))
+        '*.generated.*' | Set-Content -LiteralPath (Join-Path $probeRoot '.gitignore') -Encoding utf8
+        'probe' | Set-Content -LiteralPath (
+            Join-Path $probeRoot 'Code/Probe.generated.cs') -Encoding utf8
+        $reported = @(Invoke-ReleaseInputGit -Root $probeRoot -Arguments @(
+            'ls-files', '--others', '--ignored', '--exclude-standard') |
+            ForEach-Object { $_.Replace('\', '/') })
+        if (@($reported | Where-Object { $_ -ceq 'Code/Probe.generated.cs' }).Count -ne 1) {
+            $gitVersion = (Invoke-ReleaseInputGit -Root $probeRoot -Arguments @('--version')) -join ' '
+            $reportedText = if ($reported.Count -ne 0) { $reported -join ', ' } else { '<nothing>' }
+            throw ("git failed the ignored-file enumeration contract " +
+                "($gitVersion reported: $reportedText); " +
+                'refusing to trust the ignored-release-material gate.')
+        }
+        $script:IgnoredEnumerationVerified = $true
+    }
+    finally {
+        if (Test-Path -LiteralPath $probeRoot) {
+            Remove-Item -LiteralPath $probeRoot -Recurse -Force
+        }
+    }
+}
+
 function Add-ReleaseInputLength {
     param(
         [Parameter(Mandatory)][System.Security.Cryptography.IncrementalHash] $Hash,
@@ -222,18 +265,16 @@ function Get-RepositoryReleaseInputSet {
         throw "Release inputs require a clean checkout: '$resolved'."
     }
 
-    $ignoredCandidates = @(
-        Invoke-ReleaseInputGit -Root $resolved -Arguments @(
-            'ls-files', '--others', '--ignored', '--exclude-standard', '--',
-            'Code/**', 'Assets/**', 'ProjectSettings/**')
-        Invoke-ReleaseInputGit -Root $resolved -Arguments @(
-            'ls-files', '--others', '--ignored', '--exclude-standard', '--', '*.cs') |
-            Where-Object { $_.Replace('\', '/') -cmatch '\.cs$' }
-    )
+    # No pathspecs here: glob pathspec matching for the ignored-file walk proved
+    # environment-sensitive (a hosted runner returned nothing for 'Code/**'/'*.cs'
+    # while literal pathspecs matched), so relevance is filtered in-process instead.
+    Assert-IgnoredEnumerationContract
     $ignoredMaterial = @(
-        $ignoredCandidates |
+        Invoke-ReleaseInputGit -Root $resolved -Arguments @(
+            'ls-files', '--others', '--ignored', '--exclude-standard') |
             ForEach-Object { $_.Replace('\', '/') } |
-            Where-Object { -not (Test-IsAllowedIgnoredReleaseInput -RelativePath $_) } |
+            Where-Object { (Test-IsReleaseRelevantIgnoredPath -RelativePath $_) -and
+                -not (Test-IsAllowedIgnoredReleaseInput -RelativePath $_) } |
             Sort-Object -Unique
     )
     if ($ignoredMaterial.Count -ne 0) {
