@@ -213,7 +213,11 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 
 		var clientObject = new GameObject( true, "Hexagon v2 Client" );
 		_clientRoot = clientObject.AddComponent<HexClientRootComponent>();
-		ClientStore = new HexClientStore();
+		ClientStore = new HexClientStore
+		{
+			SubscriberFailureDiagnostic = exception => Log.Warning(
+				exception, "HEXAGON_CLIENT_SUBSCRIBER_FAILED store change subscriber threw." )
+		};
 		var clientNonce = ClientSessionNonce.New();
 		ClientStore.PrepareSession( clientNonce );
 		ClientTransport = new SandboxClientCommandTransport( Scene, ClientStore, clientNonce );

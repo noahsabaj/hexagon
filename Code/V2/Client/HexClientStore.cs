@@ -43,6 +43,15 @@ public sealed class HexClientStore
 
 	public event Action<ClientStoreChange>? Changed;
 
+	/// <summary>
+	/// Observes exceptions swallowed by the guarded <see cref="Changed"/> fan-out. The
+	/// composition root wires this to host logging; failures inside the callback itself
+	/// are ignored so diagnostics can never turn a guarded publish into a throw.
+	/// </summary>
+	public Action<Exception>? SubscriberFailureDiagnostic { get; set; }
+
+	public int SubscriberFailureCount { get; private set; }
+
 	public long Version { get; private set; }
 	public ClientLifecycleState Lifecycle => !_connected
 		? ClientLifecycleState.Disconnected
@@ -232,6 +241,30 @@ public sealed class HexClientStore
 	private void Publish(ClientStoreChangeKind kind)
 	{
 		Version = checked(Version + 1);
-		Changed?.Invoke(new ClientStoreChange(kind, Version));
+		var subscribers = Changed;
+		if (subscribers is null) return;
+		var change = new ClientStoreChange(kind, Version);
+		// Store state is already committed when subscribers run; one throwing subscriber
+		// must not skip later subscribers or leak into engine RPC dispatch (mirrors
+		// PostCommitEventBus's guarded fan-out).
+		foreach (var subscriber in subscribers.GetInvocationList())
+		{
+			try
+			{
+				((Action<ClientStoreChange>)subscriber).Invoke(change);
+			}
+			catch (Exception exception)
+			{
+				SubscriberFailureCount = checked(SubscriberFailureCount + 1);
+				try
+				{
+					SubscriberFailureDiagnostic?.Invoke(exception);
+				}
+				catch
+				{
+					// Diagnostics must never turn a guarded fan-out into a throw.
+				}
+			}
+		}
 	}
 }

@@ -12,6 +12,25 @@ namespace Hexagon.V2.Tests.Client;
 public sealed class HexClientStoreTests
 {
 	[TestMethod]
+	public void ThrowingSubscriberDoesNotSkipLaterSubscribersOrEscapeThePublish()
+	{
+		var store = new HexClientStore();
+		var diagnostics = new List<Exception>();
+		store.SubscriberFailureDiagnostic = diagnostics.Add;
+		var received = new List<ClientStoreChange>();
+		store.Changed += _ => throw new InvalidOperationException( "first subscriber threw" );
+		store.Changed += received.Add;
+
+		store.PrepareSession( ClientSessionNonce.New() );
+
+		Assert.HasCount( 1, received, "The second subscriber must still observe the change." );
+		Assert.AreEqual( ClientStoreChangeKind.SessionStarted, received[0].Kind );
+		Assert.AreEqual( 1, store.SubscriberFailureCount );
+		Assert.HasCount( 1, diagnostics );
+		Assert.IsInstanceOfType<InvalidOperationException>( diagnostics[0] );
+	}
+
+	[TestMethod]
 	public void CompleteStatePublicationAtomicallyTransitionsAndUnloadsCharacter()
 	{
 		var store = new HexClientStore();
