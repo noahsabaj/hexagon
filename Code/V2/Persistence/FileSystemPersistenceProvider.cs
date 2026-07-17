@@ -140,8 +140,16 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 		var previousAckHash = checkpoint.Snapshot?.LastAckHash ?? string.Empty;
 		if ( checkpoint.Snapshot is not null ) LoadCheckpointDocuments( checkpoint.Snapshot, documents );
 
-		var acknowledgements = await ReadAcknowledgementFilesAsync( cancellationToken );
-		var commitHeads = await ReadCommitHeadFilesAsync( cancellationToken );
+		var commitHeadLoad = await ReadCommitHeadFilesAsync( cancellationToken );
+		var commitHeads = commitHeadLoad.Heads;
+		var acknowledgementLoad = await ReadAcknowledgementFilesAsync( commitHeads, cancellationToken );
+		var acknowledgements = acknowledgementLoad.Entries;
+		var tornDetail = await ResolveTornTailArtifactsAsync(
+			commitHeadLoad,
+			acknowledgementLoad,
+			checkpointSequence,
+			pendingPrune,
+			cancellationToken );
 		var acknowledgementsBySequence = acknowledgements.ToDictionary(
 			entry => entry.Acknowledgement.Sequence );
 		foreach ( var head in commitHeads.Values )
@@ -257,6 +265,7 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 		await RecalculateWalUsageAsync( cancellationToken );
 
 		var detail = checkpoint.Detail;
+		if ( tornDetail is not null ) detail = detail is null ? tornDetail : $"{detail} {tornDetail}";
 		var legacyFiles = await _storage.ListAsync( LegacyRootPath, cancellationToken );
 		if ( legacyFiles.Count > 0 )
 		{
@@ -279,6 +288,61 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 			discardedUnacknowledgedFrames,
 			checkpoint.RecoveredFromFallback,
 			detail );
+	}
+
+	/// <summary>
+	/// Applies the torn-tail tolerance for storage adapters that cannot finalize writes
+	/// atomically (see <see cref="IPersistenceStorage"/>): at most one unreadable artifact per
+	/// WAL metadata class is accepted, and only in the exact state an interrupted write can
+	/// produce. Everything else stays fail-closed.
+	/// </summary>
+	private async ValueTask<string?> ResolveTornTailArtifactsAsync(
+		CommitHeadLoad commitHeadLoad,
+		AcknowledgementLoad acknowledgementLoad,
+		long checkpointSequence,
+		PendingPruneIntent? pendingPrune,
+		CancellationToken cancellationToken )
+	{
+		var details = new List<string>();
+		var acknowledgements = acknowledgementLoad.Entries;
+		if ( acknowledgementLoad.TornTailAcknowledgement is { } tornAck )
+		{
+			// A torn acknowledgement is credible only at the exact sequence after the durable
+			// tail: the interrupted commit was never acknowledged, so discarding it (and its
+			// frame, via the orphan sweep) reproduces the crash-before-acknowledgement outcome.
+			var highestVerified = acknowledgements.Count == 0
+				? 0
+				: acknowledgements[^1].Acknowledgement.Sequence;
+			var durableTail = Math.Max(
+				highestVerified,
+				Math.Max( checkpointSequence, pendingPrune?.Intent.AnchorSequence ?? 0 ) );
+			if ( tornAck.Sequence != checked(durableTail + 1) )
+				throw new PersistenceCorruptionException(
+					$"Acknowledgement '{tornAck.Path}' is unreadable and is not the torn tail of the durable chain." );
+			await _storage.DeleteAsync( tornAck.Path, cancellationToken );
+			var message = $"HEXAGON_TORN_TAIL_ACK_DISCARDED sequence={tornAck.Sequence} path={tornAck.Path}";
+			_options.Log?.Invoke( message );
+			details.Add( message );
+		}
+
+		if ( commitHeadLoad.TornHead is { } tornHead )
+		{
+			// A torn commit head is redundant metadata; it is deleted here and recreated from
+			// its verified acknowledgement by the recovery pass, but only when that
+			// acknowledgement exists and matches the hash embedded in the head's file name.
+			var backing = acknowledgements.FirstOrDefault(
+				entry => entry.Acknowledgement.Sequence == tornHead.Sequence );
+			if ( backing is null ||
+				!string.Equals( backing.Hash, tornHead.ExpectedAckHash, StringComparison.Ordinal ) )
+				throw new PersistenceCorruptionException(
+					$"Commit head '{tornHead.Path}' is unreadable and no verified acknowledgement backs it." );
+			await _storage.DeleteAsync( tornHead.Path, cancellationToken );
+			var message = $"HEXAGON_TORN_COMMIT_HEAD_RECREATED sequence={tornHead.Sequence} path={tornHead.Path}";
+			_options.Log?.Invoke( message );
+			details.Add( message );
+		}
+
+		return details.Count == 0 ? null : string.Join( " ", details );
 	}
 
 	private protected override async ValueTask<CommitPersistenceOutcome> PersistCommitCoreAsync(
@@ -452,12 +516,14 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 		return decoded;
 	}
 
-	private async ValueTask<IReadOnlyList<AcknowledgementEntry>> ReadAcknowledgementFilesAsync(
+	private async ValueTask<AcknowledgementLoad> ReadAcknowledgementFilesAsync(
+		IReadOnlyDictionary<long, CommitHeadEntry> commitHeads,
 		CancellationToken cancellationToken )
 	{
 		var paths = await _storage.ListAsync( _ackPrefix, cancellationToken );
 		var entries = new List<AcknowledgementEntry>( paths.Count );
 		var sequences = new HashSet<long>();
+		TornArtifact? tornTail = null;
 		foreach ( var path in paths.OrderBy( value => value, StringComparer.Ordinal ) )
 		{
 			var sequence = ParseSequenceFileName( path, ".ack" );
@@ -465,26 +531,54 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 				throw new PersistenceCorruptionException( $"Duplicate acknowledgement sequence {sequence}." );
 			var bytes = await _storage.ReadAsync( path, cancellationToken )
 				?? throw new PersistenceCorruptionException( $"Acknowledgement '{path}' disappeared." );
-			var acknowledgement = Deserialize<WalAcknowledgement>( bytes, "WAL acknowledgement" );
+			WalAcknowledgement acknowledgement;
+			try
+			{
+				acknowledgement = Deserialize<WalAcknowledgement>( bytes, "WAL acknowledgement" );
+			}
+			catch ( PersistenceCorruptionException )
+			{
+				// An unreadable acknowledgement can only be tolerated as the torn tail of a
+				// non-atomic storage adapter: a commit head proves the acknowledgement was once
+				// complete, so its corruption is fatal, and only one torn artifact is credible.
+				if ( tornTail is not null || commitHeads.ContainsKey( sequence ) ) throw;
+				tornTail = new TornArtifact( path, sequence, null );
+				continue;
+			}
 			if ( acknowledgement.FormatVersion != WalAcknowledgement.CurrentFormatVersion ||
 				acknowledgement.StoreId != _storeId || acknowledgement.WriterEpoch == Guid.Empty ||
 				acknowledgement.Sequence != sequence || acknowledgement.CompactionGeneration < 0 )
 				throw new PersistenceCorruptionException( $"Acknowledgement '{path}' has invalid metadata." );
 			entries.Add( new AcknowledgementEntry( path, acknowledgement, ComputeHash( bytes.Span ), bytes.Length ) );
 		}
-		return entries.OrderBy( entry => entry.Acknowledgement.Sequence ).ToArray();
+		return new AcknowledgementLoad(
+			entries.OrderBy( entry => entry.Acknowledgement.Sequence ).ToArray(),
+			tornTail );
 	}
 
-	private async ValueTask<IReadOnlyDictionary<long, CommitHeadEntry>> ReadCommitHeadFilesAsync(
-		CancellationToken cancellationToken )
+	private async ValueTask<CommitHeadLoad> ReadCommitHeadFilesAsync( CancellationToken cancellationToken )
 	{
 		var result = new Dictionary<long, CommitHeadEntry>();
+		TornArtifact? torn = null;
 		foreach ( var path in await _storage.ListAsync( _commitHeadPrefix, cancellationToken ) )
 		{
 			var sequence = ParseSequenceFileName( path, ".head", hasHashSuffix: true );
 			var bytes = await _storage.ReadAsync( path, cancellationToken )
 				?? throw new PersistenceCorruptionException( $"Commit head '{path}' disappeared." );
-			var head = Deserialize<WalCommitHead>( bytes, "WAL commit head" );
+			WalCommitHead head;
+			try
+			{
+				head = Deserialize<WalCommitHead>( bytes, "WAL commit head" );
+			}
+			catch ( PersistenceCorruptionException )
+			{
+				// Commit heads are redundant recovery metadata recreated from acknowledgements,
+				// so one torn head from a non-atomic storage adapter is tolerated here and
+				// validated against its backing acknowledgement by the recovery orchestration.
+				if ( torn is not null ) throw;
+				torn = new TornArtifact( path, sequence, ParseHashSuffix( path, ".head" ) );
+				continue;
+			}
 			var expectedPath = $"{_commitHeadPrefix}/{sequence:D20}-{head.AcknowledgementHash}.head";
 			if ( head.FormatVersion != WalCommitHead.CurrentFormatVersion || head.StoreId != _storeId ||
 				head.WriterEpoch == Guid.Empty || head.Sequence != sequence ||
@@ -492,7 +586,10 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 				!result.TryAdd( sequence, new CommitHeadEntry( path, head ) ) )
 				throw new PersistenceCorruptionException( $"Commit head '{path}' has invalid metadata." );
 		}
-		return result;
+		if ( torn is not null && result.ContainsKey( torn.Sequence ) )
+			throw new PersistenceCorruptionException(
+				$"Commit head '{torn.Path}' is unreadable and duplicates a verified commit head." );
+		return new CommitHeadLoad( result, torn );
 	}
 
 	private static WalCommitHead CreateCommitHead(
@@ -649,7 +746,19 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 			throw new PersistenceCorruptionException( "More than one checkpoint prune intent is pending." );
 		var bytes = await _storage.ReadAsync( paths[0], cancellationToken )
 			?? throw new PersistenceCorruptionException( $"Checkpoint prune intent '{paths[0]}' disappeared." );
-		var intent = Deserialize<CheckpointPruneIntent>( bytes, "checkpoint prune intent" );
+		CheckpointPruneIntent intent;
+		try
+		{
+			intent = Deserialize<CheckpointPruneIntent>( bytes, "checkpoint prune intent" );
+		}
+		catch ( PersistenceCorruptionException )
+		{
+			// An unreadable intent means its write-and-verify never completed, so no pruning
+			// began; discarding it is safe and the next checkpoint recomputes the prune.
+			await _storage.DeleteAsync( paths[0], cancellationToken );
+			_options.Log?.Invoke( $"HEXAGON_TORN_PRUNE_INTENT_DISCARDED path={paths[0]}" );
+			return null;
+		}
 		if ( intent.FormatVersion != CheckpointPruneIntent.CurrentFormatVersion ||
 			intent.StoreId != _storeId || intent.AnchorSequence <= 0 || string.IsNullOrWhiteSpace( intent.AnchorAckHash ) ||
 			intent.ObsoleteCompletions is null || intent.ObsoleteManifests is null || intent.ObsoleteBlobs is null )
@@ -892,6 +1001,13 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 		return builder.ToString();
 	}
 
+	private static string ParseHashSuffix( string path, string extension )
+	{
+		var name = path[(path.LastIndexOf( '/' ) + 1)..];
+		var stem = name[..^extension.Length];
+		return stem[(stem.IndexOf( '-', StringComparison.Ordinal ) + 1)..];
+	}
+
 	private static long ParseSequenceFileName( string path, string extension, bool hasHashSuffix = false )
 	{
 		var name = path[(path.LastIndexOf( '/' ) + 1)..];
@@ -942,6 +1058,11 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 		string Hash,
 		int Length );
 	private sealed record CommitHeadEntry( string Path, WalCommitHead Head );
+	private sealed record TornArtifact( string Path, long Sequence, string? ExpectedAckHash );
+	private sealed record CommitHeadLoad( IReadOnlyDictionary<long, CommitHeadEntry> Heads, TornArtifact? TornHead );
+	private sealed record AcknowledgementLoad(
+		IReadOnlyList<AcknowledgementEntry> Entries,
+		TornArtifact? TornTailAcknowledgement );
 	private sealed record CheckpointCandidate(
 		string CompletionPath,
 		string ManifestPath,

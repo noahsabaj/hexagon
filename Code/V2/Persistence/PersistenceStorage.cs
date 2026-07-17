@@ -14,6 +14,11 @@ namespace Hexagon.V2.Persistence;
 /// <summary>
 /// Durability boundary used by <c>FileSystemPersistenceProvider</c>. Paths are normalized,
 /// relative storage keys. Immutable publication must be absent-or-complete and durable before returning.
+/// Adapters that cannot guarantee atomic finalization (for example the s&amp;box editor adapter, which
+/// has no atomic rename available to whitelist-safe code) may leave one torn artifact at the final
+/// name after a crash; recovery tolerates exactly one such torn <em>tail</em> artifact per WAL
+/// metadata class (acknowledgement, commit head, checkpoint prune intent) in the exact state an
+/// interrupted write can produce, and stays fail-closed for every other corruption.
 /// </summary>
 public interface IPersistenceStorage
 {

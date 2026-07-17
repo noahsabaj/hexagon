@@ -15,6 +15,7 @@ public sealed class ImmutableWalPersistenceProviderTests
 	private const string Acks = Root + "/wal/acks";
 	private const string CommitHeads = Root + "/wal/commit-heads";
 	private const string Completions = Root + "/checkpoints/complete";
+	private static readonly byte[] TornBytes = "{\"formatVersion\":1,\"sto"u8.ToArray();
 	private const string LeaseProbeRole = "HEXAGON_LEASE_PROBE_ROLE";
 	private const string LeaseProbeRoot = "HEXAGON_LEASE_PROBE_ROOT";
 	private const string LeaseProbeSignal = "HEXAGON_LEASE_PROBE_SIGNAL";
@@ -368,6 +369,118 @@ public sealed class ImmutableWalPersistenceProviderTests
 			PersistenceHealthStatus.Healthy,
 			recovered.Health.Status,
 			"Discarding an unacknowledged frame is normal crash recovery, not a degraded store." );
+	}
+
+	[TestMethod]
+	public async Task TornTailAcknowledgementWithoutCommitHeadIsDiscardedAndRecoveryContinues()
+	{
+		var storage = new FaultInjectingStorage();
+		await WriteCommitsAndShutdownAsync( storage, 2 );
+		var fakeHash = new string( 'a', 64 );
+		await storage.SeedAsync( $"{Frames}/00000000000000000003-{fakeHash}.frame", TornBytes );
+		await storage.SeedAsync( $"{Acks}/00000000000000000003.ack", TornBytes );
+
+		await using var recovered = Create( storage );
+		await recovered.InitializeAsync();
+		Assert.AreEqual( 2, recovered.Repository<TestDocument>( "documents" ).Find( "one" )!.Value.Score );
+		Assert.AreEqual( 2L, recovered.Health.Sequence );
+		Assert.AreEqual( 1, recovered.Health.DiscardedUnacknowledgedFrames );
+		Assert.AreEqual( PersistenceHealthStatus.Healthy, recovered.Health.Status );
+		Assert.HasCount( 2, await storage.ListAsync( Acks ) );
+		Assert.HasCount( 2, await storage.ListAsync( Frames ) );
+		StringAssert.Contains( recovered.Health.Detail!, "HEXAGON_TORN_TAIL_ACK_DISCARDED" );
+	}
+
+	[TestMethod]
+	public async Task TornAcknowledgementBelowTheDurableTailIsFatal()
+	{
+		var storage = new FaultInjectingStorage();
+		await WriteCommitsAndShutdownAsync( storage, 2 );
+		var firstAck = (await storage.ListAsync( Acks )).OrderBy( value => value, StringComparer.Ordinal ).First();
+		var firstHead = (await storage.ListAsync( CommitHeads )).OrderBy( value => value, StringComparer.Ordinal ).First();
+		await storage.DeleteAsync( firstHead );
+		await storage.OverwriteAsync( firstAck, TornBytes );
+
+		await using var recovered = Create( storage );
+		await Assert.ThrowsAsync<PersistenceCorruptionException>( async () => await recovered.InitializeAsync() );
+		Assert.AreEqual( PersistenceProviderState.Faulted, recovered.State );
+	}
+
+	[TestMethod]
+	public async Task TornTailAcknowledgementWithACommitHeadIsFatal()
+	{
+		var storage = new FaultInjectingStorage();
+		await WriteCommitsAndShutdownAsync( storage, 2 );
+		var lastAck = (await storage.ListAsync( Acks )).OrderBy( value => value, StringComparer.Ordinal ).Last();
+		await storage.OverwriteAsync( lastAck, TornBytes );
+
+		await using var recovered = Create( storage );
+		await Assert.ThrowsAsync<PersistenceCorruptionException>( async () => await recovered.InitializeAsync() );
+		Assert.AreEqual( PersistenceProviderState.Faulted, recovered.State );
+	}
+
+	[TestMethod]
+	public async Task TwoTornAcknowledgementsAreFatal()
+	{
+		var storage = new FaultInjectingStorage();
+		await WriteCommitsAndShutdownAsync( storage, 2 );
+		await storage.SeedAsync( $"{Acks}/00000000000000000003.ack", TornBytes );
+		await storage.SeedAsync( $"{Acks}/00000000000000000004.ack", TornBytes );
+
+		await using var recovered = Create( storage );
+		await Assert.ThrowsAsync<PersistenceCorruptionException>( async () => await recovered.InitializeAsync() );
+		Assert.AreEqual( PersistenceProviderState.Faulted, recovered.State );
+	}
+
+	[TestMethod]
+	public async Task TornCommitHeadBackedByItsAcknowledgementIsRecreated()
+	{
+		var storage = new FaultInjectingStorage();
+		await WriteCommitsAndShutdownAsync( storage, 2 );
+		var lastHead = (await storage.ListAsync( CommitHeads )).OrderBy( value => value, StringComparer.Ordinal ).Last();
+		await storage.OverwriteAsync( lastHead, TornBytes );
+
+		await using var recovered = Create( storage );
+		await recovered.InitializeAsync();
+		Assert.AreEqual( 2, recovered.Repository<TestDocument>( "documents" ).Find( "one" )!.Value.Score );
+		Assert.AreEqual( 0, recovered.Health.DiscardedUnacknowledgedFrames );
+		Assert.AreEqual( PersistenceHealthStatus.Healthy, recovered.Health.Status );
+		var heads = await storage.ListAsync( CommitHeads );
+		Assert.HasCount( 2, heads );
+		Assert.IsTrue( heads.Contains( lastHead ), "The torn head must be recreated at its original path." );
+		var recreated = await storage.ReadAsync( lastHead ) ?? throw new InvalidOperationException();
+		_ = JsonSerializer.Deserialize<WalCommitHead>( recreated.Span,
+			new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase } );
+		StringAssert.Contains( recovered.Health.Detail!, "HEXAGON_TORN_COMMIT_HEAD_RECREATED" );
+	}
+
+	[TestMethod]
+	public async Task TornCommitHeadWithoutBackingAcknowledgementIsFatal()
+	{
+		var storage = new FaultInjectingStorage();
+		await WriteCommitsAndShutdownAsync( storage, 2 );
+		var fakeHash = new string( 'a', 64 );
+		await storage.SeedAsync( $"{CommitHeads}/00000000000000000003-{fakeHash}.head", TornBytes );
+
+		await using var recovered = Create( storage );
+		await Assert.ThrowsAsync<PersistenceCorruptionException>( async () => await recovered.InitializeAsync() );
+		Assert.AreEqual( PersistenceProviderState.Faulted, recovered.State );
+	}
+
+	[TestMethod]
+	public async Task TornCheckpointPruneIntentIsDiscardedAndRecoveryContinues()
+	{
+		var storage = new FaultInjectingStorage();
+		await WriteCommitsAndShutdownAsync( storage, 2 );
+		var fakeHash = new string( 'a', 64 );
+		var intentPath = $"{Root}/checkpoints/prune-intents/00000000000000000002-{fakeHash}.intent";
+		await storage.SeedAsync( intentPath, TornBytes );
+
+		await using var recovered = Create( storage );
+		await recovered.InitializeAsync();
+		Assert.AreEqual( 2, recovered.Repository<TestDocument>( "documents" ).Find( "one" )!.Value.Score );
+		Assert.AreEqual( PersistenceHealthStatus.Healthy, recovered.Health.Status );
+		Assert.IsFalse( await storage.ExistsAsync( intentPath ), "The torn prune intent must be discarded." );
 	}
 
 	[TestMethod]
