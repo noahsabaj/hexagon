@@ -51,6 +51,47 @@ public sealed class PackageLayoutTests
 	}
 
 	[TestMethod]
+	public void TrackedUserProjectFileStaysAnEmptyInjectionPoint()
+	{
+		// MSBuild auto-imports Code/*.csproj.user into the generated project at the
+		// targets stage, where its properties override the generated ones. The file is
+		// deliberately tracked (untracking would hide it while still imported); this
+		// gate makes any build-affecting content a loud failure instead of a dormant
+		// build-behavior injection point.
+		AssertEmptyUserProjectFile( Path.Combine(
+			RepositoryRoots.FindHexagon(), "Code", "hexagon.csproj.user" ) );
+	}
+
+	[TestMethod]
+	[TestCategory( "CrossRepository" )]
+	public void GameHasNoTrackedUserProjectFilesOrOnlyEmptyOnes()
+	{
+		var codeRoot = Path.Combine( RepositoryRoots.FindPair().Hl2Rp, "Code" );
+		foreach ( var userFile in Directory.GetFiles( codeRoot, "*.csproj.user", SearchOption.AllDirectories ) )
+			AssertEmptyUserProjectFile( userFile );
+	}
+
+	private static void AssertEmptyUserProjectFile( string path )
+	{
+		Assert.IsTrue( File.Exists( path ), $"Expected tracked user project file: {path}" );
+		var document = System.Xml.Linq.XDocument.Load( path );
+		var ns = document.Root!.Name.Namespace;
+		Assert.IsEmpty( document.Root.Elements( ns + "Import" ).ToArray(),
+			$"{path} must not import anything." );
+		Assert.IsEmpty( document.Root.Elements( ns + "Target" ).ToArray(),
+			$"{path} must not declare targets." );
+		foreach ( var propertyGroup in document.Root.Elements( ns + "PropertyGroup" ) )
+			Assert.IsEmpty( propertyGroup.Elements().ToArray(),
+				$"{path} must not set MSBuild properties." );
+		var unexpected = document.Root.Elements()
+			.Where( element => element.Name.LocalName is not "PropertyGroup" )
+			.Select( element => element.Name.LocalName )
+			.ToArray();
+		Assert.IsEmpty( unexpected,
+			$"{path} contains unexpected elements: {string.Join( ", ", unexpected )}" );
+	}
+
+	[TestMethod]
 	public void DependencySourcesArePinnedWithAuditSources()
 	{
 		AssertPinnedNuGetConfiguration( Path.Combine( RepositoryRoots.FindHexagon(), "NuGet.config" ) );

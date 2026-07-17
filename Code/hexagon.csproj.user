@@ -1,4 +1,12 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MUST STAY EMPTY. MSBuild auto-imports this file into every build of the generated
+  project at the targets stage (Microsoft.Common.CurrentVersion.targets), so any
+  property, Import, or Target added here silently overrides the generated project for
+  verification builds and developer IDEs. It is deliberately tracked — untracking would
+  make it invisible while still imported — and PackageLayoutTests fails if it carries
+  any build-affecting content.
+-->
 <Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup />
 </Project>
