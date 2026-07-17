@@ -29,13 +29,6 @@ public enum HexRuntimeReadiness
 	Disposed = 5
 }
 
-internal enum CommandCompletionStatus
-{
-	Current = 0,
-	Stale = 1,
-	Disconnected = 2
-}
-
 /// <summary>
 /// Scene-scoped host/client composition root. Listen servers receive independent
 /// scopes, while each host connection owns an ephemeral command and character epoch.
@@ -43,7 +36,7 @@ internal enum CommandCompletionStatus
 public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem>, ISceneStartup, Component.INetworkListener
 {
 	private readonly Scene _runtimeScene;
-	private readonly Dictionary<Guid, RuntimePlayerSession> _sessions = new();
+	private readonly Dictionary<Guid, RuntimePlayerSession<HexPlayerBody>> _sessions = new();
 	private readonly SpawnSlotAllocator _spawnSlots = new();
 	private readonly CancellationTokenSource _hostLifetime = new();
 	private readonly AsyncOperationRegistry _hostOperations = new();
@@ -270,7 +263,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 
 		var slot = _spawnSlots.Acquire( connection.Id );
 		GameObject? playerObject = null;
-		RuntimePlayerSession? newSession = null;
+		RuntimePlayerSession<HexPlayerBody>? newSession = null;
 		try
 		{
 			var placement = SpawnSlotAllocator.Describe( slot, spawns.Length );
@@ -297,7 +290,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 				return;
 			}
 
-			newSession = new RuntimePlayerSession( player, exception =>
+			newSession = new RuntimePlayerSession<HexPlayerBody>( player, exception =>
 				Log.Error( exception, $"Hexagon command cancellation callback failed for connection '{connection.Id}'." ) );
 			_sessions.Add( connection.Id, newSession );
 			player.HostInputAuthenticator = AuthenticatePlayerInput;
@@ -348,6 +341,20 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 				session.Dispose();
 			}
 		}
+	}
+
+	void Component.INetworkListener.OnBecameHost( Connection previousHost )
+	{
+		// Hexagon's single-writer persistence model cannot survive a host change: a
+		// migrated-to client has no host application, no domain services, and no
+		// persistence lease, so accepting hostship would keep an unpersisted zombie
+		// session alive under an unprepared, unsandboxed machine's authority. The
+		// project networking settings disable migration; this is defense in depth for
+		// any composition that re-enables it.
+		Log.Error(
+			$"HEXAGON_HOST_MIGRATION_REFUSED previous_host={previousHost?.Id.ToString() ?? "unknown"} " +
+			"detail=\"Hexagon sessions cannot outlive their prepared host; disconnecting.\"" );
+		Networking.Disconnect();
 	}
 
 	public bool TryGetPlayer( Guid connectionId, out HexPlayerBody player )
@@ -707,7 +714,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		Exception? firstFailure = null;
 		PersistenceShutdownResult? persistenceShutdown = null;
 		var application = HostApplication;
-		var disconnects = new List<(RuntimePlayerSession Session, RpcActor? Actor)>();
+		var disconnects = new List<(RuntimePlayerSession<HexPlayerBody> Session, RpcActor? Actor)>();
 		foreach ( var session in _sessions.Values )
 		{
 			session.Player.HostInputAuthenticator = null;
@@ -893,30 +900,15 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		return OperationResult<HexagonBootstrapComponent>.Success( bootstraps[0] );
 	}
 
-	private static OperationResult<HostBootstrapOptions> ResolveHostOptions( HexagonBootstrapComponent bootstrap )
-	{
-		try
-		{
-			var requestedRoot = string.IsNullOrWhiteSpace( HexagonRuntimeOverrides.PersistenceRoot )
-				? bootstrap.PersistenceRootOverride
-				: HexagonRuntimeOverrides.PersistenceRoot;
-			var root = string.IsNullOrWhiteSpace( requestedRoot )
-				? string.Empty
-				: PrefixedPersistenceStorage.Normalize( requestedRoot );
-			var requestedProbe = string.IsNullOrWhiteSpace( HexagonRuntimeOverrides.VerificationProbe )
-				? bootstrap.VerificationProbe
-				: HexagonRuntimeOverrides.VerificationProbe;
-			var probe = (requestedProbe ?? string.Empty).Trim();
-			if ( probe.Length > 128 ) probe = probe[..128];
-			return OperationResult<HostBootstrapOptions>.Success( new HostBootstrapOptions( root, probe ) );
-		}
-		catch ( Exception exception )
-		{
-			return OperationResult<HostBootstrapOptions>.Failure( ErrorCode.ConfigurationInvalid, exception.Message );
-		}
-	}
+	private static OperationResult<HostBootstrapOptions> ResolveHostOptions( HexagonBootstrapComponent bootstrap ) =>
+		HostBootstrapResolution.Resolve(
+			HexagonRuntimeOverrides.PersistenceRoot,
+			bootstrap.PersistenceRootOverride,
+			HexagonRuntimeOverrides.VerificationProbe,
+			bootstrap.VerificationProbe,
+			PrefixedPersistenceStorage.Normalize );
 
-	private RpcActor BuildActor( Connection connection, RuntimePlayerSession session, bool requiresStableCharacter )
+	private RpcActor BuildActor( Connection connection, RuntimePlayerSession<HexPlayerBody> session, bool requiresStableCharacter )
 	{
 		var character = HostApplication?.FindActiveCharacter( new ConnectionId( connection.Id ) );
 		return new RpcActor(
@@ -928,7 +920,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			session.Boundary.Capture( character?.Id, requiresStableCharacter ) );
 	}
 
-	private bool NotifyConnected( RpcActor actor, RuntimePlayerSession session )
+	private bool NotifyConnected( RpcActor actor, RuntimePlayerSession<HexPlayerBody> session )
 	{
 		var succeeded = false;
 		try
@@ -979,7 +971,4 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		_hostLifetime.Dispose();
 	}
 
-	private sealed record HostBootstrapOptions(
-		string PersistenceRootOverride,
-		string VerificationProbe );
 }

@@ -6,7 +6,16 @@ using Hexagon.V2.Networking;
 
 namespace Hexagon.V2.Runtime;
 
-internal sealed class RuntimePlayerSession : IDisposable
+/// <summary>
+/// Engine seam for the player body a session owns. The session only stores and hands the
+/// body back to the composition root, so this marker keeps the session compilable and
+/// testable without binding Sandbox types.
+/// </summary>
+internal interface IRuntimePlayer
+{
+}
+
+internal sealed class RuntimePlayerSession<TPlayer> : IDisposable where TPlayer : class, IRuntimePlayer
 {
 	private readonly object _sync = new();
 	private readonly CommandAdmissionController _admission = new( Stopwatch.Frequency );
@@ -15,13 +24,13 @@ internal sealed class RuntimePlayerSession : IDisposable
 	private ClientSessionNonce? _clientNonce;
 	private bool _disconnected;
 
-	public RuntimePlayerSession( HexPlayerBody player, Action<Exception>? cancellationFailure = null )
+	public RuntimePlayerSession( TPlayer player, Action<Exception>? cancellationFailure = null )
 	{
 		Player = player ?? throw new ArgumentNullException( nameof(player) );
 		Boundary = new ConnectionSessionBoundary( ConnectionEpoch.New(), cancellationFailure );
 	}
 
-	public HexPlayerBody Player { get; }
+	public TPlayer Player { get; }
 	public ConnectionSessionBoundary Boundary { get; }
 	public bool IsConnected
 	{

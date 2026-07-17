@@ -31,7 +31,7 @@ public readonly record struct PlayerMovementState(
 /// object simulated by the host; an owner-local, never-networked predictor is
 /// presentation only and is never exposed to authority callers.
 /// </summary>
-public sealed class HexPlayerBody : Component, ICameraModifier
+public sealed class HexPlayerBody : Component, ICameraModifier, IRuntimePlayer
 {
 	private const float InputSendIntervalSeconds = 1f / 30f;
 	private const float PredictionSmoothSeconds = 0.100f;
