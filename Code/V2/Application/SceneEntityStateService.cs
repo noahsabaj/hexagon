@@ -22,6 +22,14 @@ public sealed record SceneEntityStateChangedEvent(
 	PersistentSceneEntityRecord After,
 	long CommitSequence );
 
+/// <summary>
+/// Framework-provided transactional mutation boundary for persistent scene-entity state.
+/// This is deliberately public framework API with no in-repo runtime consumer: schema
+/// packages that do not need bespoke post-commit behavior compose it directly, while
+/// richer gamemodes (HL2RP's HL2RPSceneEntityBehaviorService, for example) implement
+/// their own boundary with feature-specific events and policies instead of wrapping this
+/// one. Unit tests pin its commit semantics.
+/// </summary>
 public sealed class SceneEntityStateService
 {
 	private readonly DomainRepositories _repositories;
