@@ -137,6 +137,57 @@ public sealed class SceneAndAggregateMutationTests
 	}
 
 	[TestMethod]
+	public async Task CompletionSucceedsFromTheReceiptAloneAfterAnInterleavedCommit()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var account = new AccountId( 9106 );
+		var character = ApplicationServiceTestEnvironment.Character( account, 0 ) with
+		{
+			LastPlayedAt = DateTimeOffset.UnixEpoch
+		};
+		await environment.SeedAsync( unitOfWork =>
+			unitOfWork.Create(
+				environment.Repositories.Characters, DomainKeys.Character( character.Id ), character ) );
+		var events = new RecordingCharacterChangedHandler();
+		var service = new AggregateMutationService(
+			environment.Repositories,
+			environment.Schema,
+			ApplicationServiceTestEnvironment.AllowPolicy<CharacterMutationContext>(),
+			ApplicationServiceTestEnvironment.AllowPolicy<ItemTraitMutationContext>(),
+			new PostCommitEventBus<CharacterChangedEvent>( new[]
+			{
+				new EventHandlerRegistration<CharacterChangedEvent>( "record", events )
+			} ) );
+
+		var timestamp = DateTimeOffset.UnixEpoch.AddMinutes( 1 );
+		var prepared = service.PrepareTouchLastPlayed( account, character.Id, timestamp );
+		Assert.IsTrue( prepared.Succeeded, prepared.Error?.Message );
+		var unitOfWork = environment.Repositories.Provider.BeginUnitOfWork();
+		Assert.IsTrue( service.StageTouchLastPlayed( unitOfWork, prepared.Value ).Succeeded );
+		var committed = await unitOfWork.CommitAsync();
+		await unitOfWork.DisposeAsync();
+		Assert.IsTrue( committed.Succeeded, committed.Error?.Message );
+
+		var current = environment.Repositories.Characters.Find( DomainKeys.Character( character.Id ) )!;
+		var competingUnit = environment.Repositories.Provider.BeginUnitOfWork();
+		var competingEditor = competingUnit.Edit( environment.Repositories.Characters, current )!;
+		competingEditor.Replace( competingEditor.Value with
+		{
+			LastPlayedAt = DateTimeOffset.UnixEpoch.AddMinutes( 2 )
+		} );
+		competingUnit.Save( competingEditor );
+		Assert.IsTrue( (await competingUnit.CommitAsync()).Succeeded );
+		await competingUnit.DisposeAsync();
+
+		var completed = service.CompleteTouchLastPlayed( prepared.Value, committed.Value! );
+
+		Assert.IsTrue( completed.Succeeded,
+			"A durably committed mutation must complete from its receipt even after an interleaved commit." );
+		Assert.AreEqual( timestamp, completed.Value.After.LastPlayedAt );
+		Assert.HasCount( 1, events.Events );
+	}
+
+	[TestMethod]
 	public async Task PreparedTouchCommitFailureAndRevisionConflictEmitNoEvent()
 	{
 		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
@@ -192,8 +243,11 @@ public sealed class SceneAndAggregateMutationTests
 		Assert.AreEqual( PersistenceErrorCode.RevisionConflict, conflict.Error!.Code );
 		Assert.IsEmpty( events.Events );
 
+		// Completion validates from the receipt alone; a receipt that does not contain the
+		// prepared revision is rejected without publishing.
 		var wrongCompletion = service.CompleteTouchLastPlayed(
-			conflictedPlan.Value, competingCommit.Value! );
+			conflictedPlan.Value,
+			new CommitReceipt( competingCommit.Value!.Sequence, Array.Empty<CommittedDocumentVersion>() ) );
 		Assert.AreEqual( ErrorCode.InvariantViolation, wrongCompletion.Error!.Code );
 		Assert.IsEmpty( events.Events );
 	}

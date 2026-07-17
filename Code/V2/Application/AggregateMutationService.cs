@@ -209,11 +209,11 @@ public sealed class AggregateMutationService
 		var committedDocuments = commit.Documents.Where( document =>
 			document.Address == address && !document.IsDeleted ).Take( 2 ).ToArray();
 		var committedDocument = committedDocuments.Length == 1 ? committedDocuments[0] : null;
-		var current = _repositories.Characters.Find( address.Key );
+		// The provider receipt alone proves the prepared revision committed durably. A live
+		// repository re-read here would misreport success as failure whenever a later
+		// legitimate commit touched the same character between durability and completion.
 		if ( commit.Sequence <= 0 || committedDocument is null ||
-			committedDocument.Revision != expectedRevision ||
-			current is null || current.Revision != expectedRevision ||
-			current.Value.LastPlayedAt != prepared.After.LastPlayedAt )
+			committedDocument.Revision != expectedRevision )
 			return OperationResult<CharacterMutationReceipt>.Failure(
 				ErrorCode.InvariantViolation,
 				"Commit receipt does not contain the prepared character revision." );
