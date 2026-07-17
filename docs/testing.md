@@ -12,11 +12,24 @@ Use `-SkipRemoteAcceptance` only for an explicitly incomplete local run.
 
 The verification boundary is split deliberately:
 
-- `tools/verify-portable.ps1` is the hosted, engine-neutral profile. It performs
-  a locked restore, treats NuGet audit warnings as errors, inventories direct
-  and transitive vulnerabilities, runs the Release suite with warnings as
-  errors, and enforces the neutral layer boundary. The `hexagon / neutral`
-  GitHub check runs this profile on Ubuntu 24.04 and requires a clean diff.
+- `tools/verify-portable.ps1` is the hosted, engine-neutral profile. It first
+  requires both a clean worktree (`tools/worktree-gate.ps1`; `-AllowDirty` runs
+  explicitly unattributed, skipping SHA claims) and then performs a locked,
+  always-on audited restore against the tracked `NuGet.config` — which pins
+  api.nuget.org under both `<packageSources>` and `<auditSources>` so missing
+  vulnerability data raises NU1905 and fails closed — inventories direct and
+  transitive vulnerabilities by parsing the pinned JSON report schema, runs the
+  Release suite with warnings as errors, runs the tool contract suites, and
+  enforces the neutral layer boundary. The `hexagon / neutral` GitHub check runs
+  this profile on Ubuntu 24.04 and requires a clean diff.
+- The neutral suite additionally carries two structural gates for the
+  engine-facing files it cannot compile: `RuntimeInclusionTests` requires every
+  `Code/V2/Runtime` and `Code/V2/Infrastructure` file to be either test-compiled
+  or reviewed onto `tests/CompileExclusions.txt` with a reason, and
+  `SourceSyntaxTests` (Roslyn, pinned) parses every `Code/**/*.cs` under both
+  the neutral and `SERVER` symbol sets so an unparseable engine-facing file
+  cannot merge green. Semantic compilation of those files remains the generated
+  s&box build's job in the full profile.
 - `tools/verify.ps1` is the full source-bound local profile. It includes both
   neutral suites, package validation, generated s&box builds, a client-equivalent
   archive build checked by the installed `Sandbox.Access` verifier, persistence
@@ -28,10 +41,18 @@ The verification boundary is split deliberately:
 HL2RP stores its exact Hexagon dependency in `hexagon.lock.json`. Its hosted
 `hl2rp / integration` check validates the lowercase 40-character SHA, checks
 out that commit as a sibling, verifies `HEAD`, then runs both locked neutral
-suites. A release operator may run `tools/publish-release-evidence.ps1` only
-from clean checkouts whose two exact HEADs match the HL2RP lock. The publisher
-runs the full verifier before setting `sbox / release-evidence` to success for
-both commits.
+suites. An advisory `hexagon / cross-head-canary` job additionally tests
+hl2rp@main against every candidate hexagon commit so consumer breakage surfaces
+before the next lock bump; it is `continue-on-error` and must never enter
+branch protection, because intentional breaking changes paired with an hl2rp
+update would otherwise deadlock (the release gate already refuses an unmatched
+pair). The same cross-HEAD run is available locally via hl2rp's
+`tools/verify-portable.ps1 -AllowUnlockedHexagon`. A release operator may run
+`tools/publish-release-evidence.ps1` only from clean checkouts whose two exact
+HEADs match the HL2RP lock. The publisher runs the full verifier before setting
+`sbox / release-evidence` to success for both commits, and re-verifies the
+evidence bytes and bundle digest after that verification window before touching
+GitHub state.
 
 A final release requires a real dedicated server with two distinct authenticated
 remote clients. That run must prove cross-account character isolation,
