@@ -31,3 +31,37 @@ jobs:
         run: |
           git diff --exit-code
           test -z "$(git status --porcelain)"
+
+  # Advisory only: surfaces consumer breakage against hl2rp@main between lock bumps.
+  # This job must NEVER be added to branch protection — intentional breaking changes
+  # paired with an hl2rp update would otherwise deadlock; the release gate already
+  # refuses to publish an unmatched pair.
+  cross-head-canary:
+    name: hexagon / cross-head-canary (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Check out candidate Hexagon
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          path: hexagon
+      - name: Check out HL2RP main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: noahsabaj/hl2rp-hexagon
+          ref: main
+          path: hl2rp-hexagon
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: hl2rp-hexagon/tests/packages.lock.json
+      - name: Build and test HL2RP against the candidate Hexagon
+        shell: pwsh
+        run: |
+          # Runs the consumer csproj directly: hl2rp's lock-enforcing verifier script
+          # must stay strict, so the canary bypasses it rather than weakening it.
+          dotnet restore hl2rp-hexagon/tests/HL2RP.V2.Tests.csproj --locked-mode --nologo
+          dotnet test hl2rp-hexagon/tests/HL2RP.V2.Tests.csproj --configuration Release --no-restore --nologo
