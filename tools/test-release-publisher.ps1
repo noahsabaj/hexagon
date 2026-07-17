@@ -106,6 +106,11 @@ if ($env:HEXAGON_FAKE_VERIFY_FAIL -ceq '1') { throw 'Injected verification failu
 if ($env:HEXAGON_FAKE_VERIFY_DIRTY -ceq '1') {
     Add-Content -LiteralPath (Join-Path $SchemaRoot 'source.txt') -Value 'verifier-side-effect'
 }
+if ($env:HEXAGON_FAKE_VERIFY_MUTATE_EVIDENCE -ceq '1') {
+    $evidence = Get-Content -LiteralPath $RemoteAcceptanceEvidence -Raw | ConvertFrom-Json
+    $evidence.artifacts[0].id = 'tampered-artifact'
+    $evidence | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $RemoteAcceptanceEvidence -Encoding utf8
+}
 '@ | Set-Content -LiteralPath $fakeVerify -Encoding utf8
 
     @'
@@ -307,6 +312,17 @@ exit 1
     }
     Remove-Item Env:HEXAGON_FAKE_GH_FAIL_SUCCESS_REPOSITORY
 
+    $env:HEXAGON_FAKE_VERIFY_MUTATE_EVIDENCE = '1'
+    Save-Evidence -RunId ([Guid]::NewGuid()) -Fingerprint $fingerprint
+    $releasesBeforeMutation = @((Read-State).releases).Count
+    Assert-FailsLike -Expected 'Release evidence changed during verification'
+    $state = Read-State
+    if (($state.statuses | Select-Object -Last 2).state -join ',' -cne 'failure,failure' -or
+        @($state.releases).Count -ne $releasesBeforeMutation) {
+        throw 'Evidence mutated during verification was not rejected and failure-compensated before release creation.'
+    }
+    Remove-Item Env:HEXAGON_FAKE_VERIFY_MUTATE_EVIDENCE
+
     Write-Host 'Release-publisher contract tests passed.' -ForegroundColor Green
 }
 finally {
@@ -314,6 +330,7 @@ finally {
     Remove-Item Env:HEXAGON_FAKE_GH_FAIL_PENDING_REPOSITORY -ErrorAction SilentlyContinue
     Remove-Item Env:HEXAGON_FAKE_VERIFY_FAIL -ErrorAction SilentlyContinue
     Remove-Item Env:HEXAGON_FAKE_VERIFY_DIRTY -ErrorAction SilentlyContinue
+    Remove-Item Env:HEXAGON_FAKE_VERIFY_MUTATE_EVIDENCE -ErrorAction SilentlyContinue
     Remove-Item Env:HEXAGON_FAKE_GH_FAIL_SUCCESS_REPOSITORY -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $tempRoot) {
         $resolved = (Resolve-Path -LiteralPath $tempRoot).Path

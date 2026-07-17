@@ -145,6 +145,10 @@ function New-ReleaseEvidenceBundle {
         Path = $outputFullPath
         Sha256 = (Get-FileHash -LiteralPath $outputFullPath -Algorithm SHA256).Hash.ToLowerInvariant()
         ManifestSha256 = Get-LowerSha256Bytes -Bytes $manifestBytes
+        # Canonical evidence hash for the publisher's post-verification recheck: the
+        # bundle is built before the long verify window, so the publisher must prove
+        # the evidence bytes did not change while verification ran (DEPL-05).
+        EvidenceSha256 = $payloads['evidence/remote-acceptance.json'].Sha256
         RunId = [string]$evidence.run_id
         SourceFingerprint = [string]$evidence.source_fingerprint
     }

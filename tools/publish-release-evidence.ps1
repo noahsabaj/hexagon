@@ -225,6 +225,26 @@ try {
         throw 'HL2RP lock consistency changed during verification.'
     }
 
+    # The bundle snapshotted the evidence before the multi-minute verify window, and
+    # the evidence file necessarily lives outside both worktrees, so the fingerprint
+    # recheck above cannot cover it. Re-read, re-bind, and canonicalize identically:
+    # a mismatch means verification validated different bytes than the bundle carries.
+    $postVerificationEvidence = ConvertFrom-ReleaseEvidenceJson -Json (
+        Get-Content -LiteralPath $evidencePath -Raw)
+    $postVerificationCanonical = [System.Text.Encoding]::UTF8.GetBytes(
+        ($postVerificationEvidence | ConvertTo-Json -Depth 20 -Compress))
+    if ((Get-LowerSha256Bytes -Bytes $postVerificationCanonical) -cne $bundle.EvidenceSha256 -or
+        [string]$postVerificationEvidence.hexagon_sha -cne $HexagonSha -or
+        [string]$postVerificationEvidence.hl2rp_sha -cne $HL2RPSha -or
+        [string]$postVerificationEvidence.source_fingerprint -cne $releaseInputs.Fingerprint -or
+        [string]$postVerificationEvidence.run_id -cne $runId) {
+        throw 'Release evidence changed during verification.'
+    }
+    $freshBundleDigest = "sha256:$((Get-FileHash -LiteralPath $bundle.Path -Algorithm SHA256).Hash.ToLowerInvariant())"
+    if ($freshBundleDigest -cne $assetDigest) {
+        throw 'Release evidence bundle bytes changed during verification.'
+    }
+
     $releaseResult = Invoke-GitHub -Arguments @(
         'api', "repos/$HL2RPRepository/releases/tags/$tag") -AllowFailure
     if ($releaseResult.ExitCode -ne 0) {
