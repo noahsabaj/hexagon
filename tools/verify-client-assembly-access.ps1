@@ -24,6 +24,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $schemaRootPath = (Resolve-Path -LiteralPath $SchemaRoot).Path
+$schemaManifest = Get-Content -LiteralPath (Join-Path $schemaRootPath 'hl2rp.sbproj') -Raw | ConvertFrom-Json
+# s&box names a streamed game assembly package.<org>.<ident>; deriving it from the
+# manifest keeps this gate bound to the real streamed name if the org ever changes.
+$streamedAssemblyName = "package.$($schemaManifest.Org).$($schemaManifest.Ident)"
 $generatedProject = Join-Path $schemaRootPath 'Code\hl2rp.csproj'
 $generatedProjectDirectory = Split-Path -Parent $generatedProject
 $managedRoot = Join-Path $SboxRoot 'bin\managed'
@@ -151,7 +155,7 @@ try {
     $trustedStream = $null
     try {
         $clientAssembly = [Mono.Cecil.AssemblyDefinition]::ReadAssembly($clientAssemblyPath, $reader)
-        $clientAssembly.Name.Name = 'package.local.hl2rp'
+        $clientAssembly.Name.Name = $streamedAssemblyName
         $assemblyStream = [System.IO.MemoryStream]::new()
         $clientAssembly.Write($assemblyStream)
         $assemblyStream.Position = 0

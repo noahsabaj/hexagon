@@ -1,7 +1,7 @@
 {
   "Title": "Hexagon",
   "Type": "library",
-  "Org": "local",
+  "Org": "kbj",
   "Ident": "hexagon",
   "Schema": 1,
   "IncludeSourceFiles": false,

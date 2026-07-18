@@ -286,7 +286,7 @@ public sealed class PackageLayoutTests
 			"GenerateTargetFrameworkAttribute=false",
 			"Sandbox.AccessControl",
 			"VerifyAssembly",
-			"package.local.hl2rp"
+			"package.$($schemaManifest.Org).$($schemaManifest.Ident)"
 		} )
 			StringAssert.Contains( clientAccess, marker );
 	}
