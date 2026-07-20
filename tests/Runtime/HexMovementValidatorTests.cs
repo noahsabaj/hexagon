@@ -16,7 +16,7 @@ public sealed class HexMovementValidatorTests
 	[TestMethod]
 	public void AcceptsMovementWithinTheRunSpeedEnvelope()
 	{
-		// Horizontal envelope ≈ 320 * 1.25 * (1/30) + 16 ≈ 29 units per tick.
+		// Horizontal envelope ≈ 320 * 1.25 * (1/30) + 4 ≈ 17 units per tick.
 		var decision = HexMovementValidator.Evaluate(
 			At( 0, 0, 0 ), At( 9, 0, 0 ), Dt, RunSpeed, JumpSpeed, frozen: false );
 		Assert.IsFalse( decision.Corrected );
@@ -61,7 +61,7 @@ public sealed class HexMovementValidatorTests
 	[TestMethod]
 	public void AcceptsAFallWithinTheTerminalEnvelope()
 	{
-		// Falling envelope ≈ 1800 * (1/30) + 16 ≈ 76 units per tick.
+		// Falling envelope ≈ 1800 * (1/30) + 4 ≈ 64 units per tick.
 		var decision = HexMovementValidator.Evaluate(
 			At( 0, 0, 0 ), At( 0, 0, -40 ), Dt, RunSpeed, JumpSpeed, frozen: false );
 		Assert.IsFalse( decision.Corrected );
@@ -70,9 +70,55 @@ public sealed class HexMovementValidatorTests
 	[TestMethod]
 	public void CorrectsImpossibleVerticalRise()
 	{
-		// Rise envelope ≈ 300 * 1.5 * (1/30) + 16 ≈ 31 units per tick.
+		// Rise envelope ≈ 300 * 1.5 * (1/30) + 4 ≈ 19 units per tick (no step-rise without motion).
 		var decision = HexMovementValidator.Evaluate(
 			At( 0, 0, 0 ), At( 0, 0, 200 ), Dt, RunSpeed, JumpSpeed, frozen: false );
 		Assert.IsTrue( decision.Corrected );
+	}
+
+	[TestMethod]
+	public void RejectsHorizontalSpeedTheLooseSkinWouldHaveAllowed()
+	{
+		// 24 units/tick: within the old +16 skin (≈29), beyond the tightened +4 skin (≈17).
+		var decision = HexMovementValidator.Evaluate(
+			At( 0, 0, 0 ), At( 24, 0, 0 ), Dt, RunSpeed, JumpSpeed, frozen: false );
+		Assert.IsTrue( decision.Corrected );
+	}
+
+	[TestMethod]
+	public void FrozenPlayerIsCorrectedBeyondTheTightFrozenSkin()
+	{
+		// 10 units/tick while frozen: the loose skin tolerated it; the frozen skin (2) does not.
+		var decision = HexMovementValidator.Evaluate(
+			At( 0, 0, 0 ), At( 10, 0, 0 ), Dt, RunSpeed, JumpSpeed, frozen: true );
+		Assert.IsTrue( decision.Corrected );
+	}
+
+	[TestMethod]
+	public void RejectsStraightUpFlightWithoutHorizontalMotion()
+	{
+		// 30 units of pure vertical rise: with no horizontal motion there is no step allowance, so
+		// only jump physics apply (≈19/tick) and this is corrected — a client cannot fly straight up.
+		var decision = HexMovementValidator.Evaluate(
+			At( 0, 0, 0 ), At( 0, 0, 30 ), Dt, RunSpeed, JumpSpeed, frozen: false );
+		Assert.IsTrue( decision.Corrected );
+	}
+
+	[TestMethod]
+	public void AllowsAStepUpWhileMovingHorizontally()
+	{
+		// An 18-unit rise is legitimate when paired with horizontal movement (a stair/slope), so the
+		// discrete step allowance keeps it smooth.
+		var decision = HexMovementValidator.Evaluate(
+			At( 0, 0, 0 ), At( 6, 0, 18 ), Dt, RunSpeed, JumpSpeed, frozen: false );
+		Assert.IsFalse( decision.Corrected );
+	}
+
+	[TestMethod]
+	public void AcceptsANormalJumpRise()
+	{
+		var decision = HexMovementValidator.Evaluate(
+			At( 0, 0, 0 ), At( 0, 0, 10 ), Dt, RunSpeed, JumpSpeed, frozen: false );
+		Assert.IsFalse( decision.Corrected );
 	}
 }

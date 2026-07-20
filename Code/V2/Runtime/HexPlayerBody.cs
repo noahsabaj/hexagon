@@ -20,6 +20,10 @@ namespace Hexagon.V2.Runtime;
 public sealed class HexPlayerBody : Component, IRuntimePlayer
 {
 	private const float CorrectionCooldownSeconds = 0.35f;
+	// A sustained run of per-tick movement violations (a client ignoring corrections or forging its
+	// transform) trips a kick; the score leaks down on every accepted tick so honest lag never trips
+	// it. Corrections carry a cooldown, so violations accrue at ~one per cooldown, not one per tick.
+	private const int ViolationKickThreshold = 10;
 
 	private int _appliedCorrectionTick = -1;
 
@@ -29,6 +33,7 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 	private double _lastValidatedSeconds;
 	private double _correctionCooldownUntilSeconds;
 	private bool _validatorPrimed;
+	private int _violationScore;
 
 	[Sync( SyncFlags.FromHost )] public Guid ConnectionGuid { get; private set; }
 	[Sync( SyncFlags.FromHost )] public ulong PlatformAccountDisplay { get; private set; }
@@ -55,6 +60,29 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 	/// contract every caller already handles.
 	/// </summary>
 	public GameObject? AuthoritativeBody => IsEmbodied && GameObject.IsValid() ? GameObject : null;
+
+	/// <summary>
+	/// The host's authoritative world position for gameplay decisions (interaction reach,
+	/// line-of-sight, combat traces, proximity chat). On the host a remote player is a network
+	/// proxy whose transform the owning client authors, so this returns the last position that
+	/// passed movement validation — a client cannot teleport it. For the host's own body and on
+	/// clients it is the live transform. Spatial gameplay checks must resolve against this, never
+	/// the raw client-authored <see cref="GameObject.WorldPosition"/>.
+	/// </summary>
+	public Vector3 AuthoritativeWorldPosition =>
+		Sandbox.Networking.IsHost && GameObject.IsValid() && GameObject.Network.IsProxy && _validatorPrimed
+			? _lastValidatedPosition
+			: (GameObject.IsValid() ? GameObject.WorldPosition : AuthoritativePosition);
+
+	/// <summary>
+	/// The host-authoritative gameplay position for a player-body GameObject (the object carrying a
+	/// <see cref="HexPlayerBody"/>), or its raw transform when it carries none. Use this for a spatial
+	/// gameplay decision that starts from a body GameObject rather than the component in hand.
+	/// </summary>
+	public static Vector3 AuthoritativeWorldPositionOf( GameObject body ) =>
+		body.IsValid() && body.Components.Get<HexPlayerBody>() is { } player
+			? player.AuthoritativeWorldPosition
+			: (body.IsValid() ? body.WorldPosition : Vector3.Zero);
 
 	public bool TryGetUsableAuthoritativeBody( out GameObject body )
 	{
@@ -287,8 +315,27 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 			new MovementSample( _lastValidatedPosition.x, _lastValidatedPosition.y, _lastValidatedPosition.z ),
 			new MovementSample( position.x, position.y, position.z ),
 			dt, controller.RunSpeed, controller.JumpSpeed, frozen );
-		if ( decision.Corrected ) IssueCorrection( _lastValidatedPosition );
-		else _lastValidatedPosition = position;
+		if ( decision.Corrected )
+		{
+			IssueCorrection( _lastValidatedPosition );
+			if ( ++_violationScore >= ViolationKickThreshold ) KickForMovement();
+		}
+		else
+		{
+			_lastValidatedPosition = position;
+			if ( _violationScore > 0 ) _violationScore--;
+		}
+	}
+
+	// A client that keeps reporting out-of-envelope positions is ignoring corrections or forging its
+	// transform; drop it. Resetting the score lets a reconnecting client start clean.
+	private void KickForMovement()
+	{
+		_violationScore = 0;
+		var connection = HostConnection;
+		Log.Warning(
+			$"HEXAGON_MOVEMENT_KICK connection={connection?.Id} account={PlatformAccountDisplay} character={CharacterGuid}" );
+		connection?.Kick( "Movement validation failed repeatedly." );
 	}
 
 	private static double MonotonicSeconds() =>

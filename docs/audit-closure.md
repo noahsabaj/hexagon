@@ -372,3 +372,65 @@ recovery:
   `kbj.hexagon` 0/0.
 - Still open, unchanged: the two-client acceptance run and its `sbox / release-evidence` contexts;
   the branch is not yet re-frozen or re-published.
+
+## 2026-07-20 scoped re-audit remediation (movement authority + quarantine hardening)
+
+A scoped re-audit of the two deliberate authority changes (movement server-simulated →
+server-validated; persistence store-open no longer fail-closing on a predecessor drain) — two
+adversarial agents plus direct verification against the engine source — found the movement change
+under-delivered and turned up three lower findings in the self-heal's quarantine.
+
+**MOVE-RE-01 (High, confirmed against `sbox-public`).** "Server-validated" position was
+detection-only, not enforcing, so a client could still mint spatial authority — contradicting the
+audited `ClientInputCannotBecomeSpatialAuthority` invariant (which was a source-text pin that
+verified the structure existed, not that it enforced). The player is a connection-owned object;
+the engine authors a networked transform only on the owner (`NetworkObject.WriteSnapshotState`,
+`if ( !IsProxy )`), so on the host a remote player is a proxy whose transform the host cannot
+write. `HexPlayerBody.IssueCorrection` only sets `[Sync(FromHost)]` fields; the actual snap-back
+(`OwnerApplyCorrection`) runs on the owner, which a cheat client ignores — and nothing escalated.
+Meanwhile every gameplay decision (interaction reach, LOS, combat trace, proximity chat, encounter,
+pickup) read the raw client `body.WorldPosition`, plus the validator's `StepSkin=16` allowed ~3.75×
+speed / straight-up flight even for a compliant client, and the frozen check leaked the same skin.
+
+Remediation — keep the client-owned idiom, make the host authoritative for *gameplay* and enforce:
+- **Tightened validator** (`HexMovementValidator`): the flat `StepSkin=16` per-tick grant is split
+  into a small `PositionSkin=4` jitter/impulse epsilon plus a `StepRise=16` vertical step allowed
+  only alongside horizontal motion (no straight-up flight), a tighter `TeleportGuard` (384), and a
+  dedicated tight `FrozenSkin=2` for locked/dead players. Constants are conservative framework
+  defaults, tunable once the two-client run exercises real remote movement.
+- **Host-authoritative gameplay position** (`HexPlayerBody.AuthoritativeWorldPosition` +
+  `AuthoritativeWorldPositionOf(GameObject)`): on the host a remote proxy resolves to the last
+  position that passed validation — a client cannot teleport it. All ten player-position reads in
+  the gamemode (interaction context/LOS, pistol origin, chat, nearest-target, encounter, drop
+  transform) were migrated to it; the host's own non-proxy body keeps the live transform.
+- **Enforcement**: a leaky-bucket violation score (`+1` corrected / `-1` accepted) kicks a client
+  (`Connection.Kick`) after a sustained run of out-of-envelope reports (`HEXAGON_MOVEMENT_KICK`).
+- **Honest residual (documented, tracked):** *bounded* within-envelope speed/fly (≈1.5× horizontal;
+  vertical bounded to jump/run) remains possible without host-side ground-truth movement simulation
+  — the very thing that caused the origin-pin wedge. This is a movement-quality residual, not a
+  spatial-authority breach: teleport/instant-reposition/interact-from-arbitrary-point is closed, and
+  sustained gross violation is kicked. `ClientInputCannotBecomeSpatialAuthority` now pins the
+  enforcement (`AuthoritativeWorldPosition` + `Connection.Kick`), not just the structure.
+
+**Quarantine hardening (from the self-heal re-audit).** QUAR-01 (Medium): the one-shot ConVar was
+reset only when quarantine actually consumed, so an armed start that did not fire left it armed for
+a later store — now the arming is consumed at the start of every host attempt regardless of outcome.
+QUAR-02/03 (Low, documented as expected in `persistence.md`): whole-store rebuild archives a
+readable-but-chain-broken checkpoint along with the corruption (recoverable under `quarantine/`),
+and `format.json` corruption is preserved rather than self-healed. The re-audit confirmed the
+self-heal's hard guarantees hold — the exclusive OS-file lease, not the barrier, gates ownership;
+no double-writer, no data loss by deferral, genuine corruption still fatal when unarmed.
+
+### Evidence boundary for this register
+
+- Neutral suites: **Hexagon 384/384** (five new `HexMovementValidator` tightening cases; the
+  `ClientInputCannotBecomeSpatialAuthority` and quarantine pins updated to the enforcing model),
+  **HL2RP 298/298** (the migrated gameplay files are engine-coupled, exercised by the editor compile
+  and the two-client run, not the neutral suite).
+- Editor whitelist compile clean: `kbj.hexagon` 0/0, `kbj.hl2rp` 0 errors (`Connection.Kick`,
+  `AuthoritativeWorldPosition`, and the migrations all pass s&box access control). Single-editor Play
+  reached `HEXAGON_READY host`/`client` with no regression (the host body is non-proxy, so gameplay
+  uses the live transform exactly as before).
+- NOT yet exercised: the validator envelope and host-authoritative reads against a real *remote*
+  proxy — that lands in the two-client acceptance run, where the validator constants are tuned and
+  the kick threshold confirmed against live latency.

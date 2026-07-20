@@ -27,18 +27,32 @@ public readonly record struct MovementSample( float X, float Y, float Z );
 /// Pure, engine-independent decision for host-side validation of a client-owned
 /// player's reported movement. The owning client simulates its <c>PlayerController</c>
 /// and networks its transform; the host bounds each reported position delta to the
-/// controller's speed envelope and flags gross teleport/speed/noclip for an
-/// authoritative correction. Sub-threshold drift is deliberately tolerated — position
-/// is low-stakes; all stateful authority lives in the command/persistence layer.
+/// controller's speed envelope and flags any excess for an authoritative correction.
+/// <para>
+/// Position is authority-bearing, not cosmetic: interaction reach, line-of-sight, combat
+/// traces, and proximity chat all resolve against the player's position, so gameplay reads
+/// the host's last-validated position (see <c>HexPlayerBody.AuthoritativeWorldPosition</c>),
+/// never the raw client transform. The per-tick skin is a small jitter/impulse epsilon, not a
+/// speed grant; a client that keeps reporting out-of-envelope deltas is corrected every tick
+/// and, after a sustained run, kicked. Bounded within-envelope drift stays possible without
+/// host-side ground-truth movement simulation — a movement-quality residual, not a
+/// spatial-authority breach. The constants below are conservative framework defaults tunable
+/// per game once the two-client run exercises real remote movement (jumps, slopes, impulses).
+/// </para>
 /// </summary>
 public static class HexMovementValidator
 {
-	/// <summary>Slack multiplier on horizontal run speed (slopes, strafe, rounding).</summary>
+	/// <summary>Slack multiplier on horizontal run speed (slopes, strafe, dt jitter).</summary>
 	public const float HorizontalTolerance = 1.25f;
-	/// <summary>Per-tick positional skin absorbing step/ground snapping and jitter.</summary>
-	public const float StepSkin = 16f;
+	/// <summary>Small absolute per-tick skin for float rounding, ground-snap, and modest impulses.</summary>
+	public const float PositionSkin = 4f;
+	/// <summary>Tighter skin for a player that must not move at all (dead / no character / locked).</summary>
+	public const float FrozenSkin = 2f;
+	/// <summary>Discrete vertical rise a legitimate step-up/steep slope adds in one tick — allowed
+	/// only alongside horizontal motion, so a client cannot ascend straight up on it.</summary>
+	public const float StepRise = 16f;
 	/// <summary>Single-tick delta above which movement is treated as a hard teleport.</summary>
-	public const float TeleportGuard = 512f;
+	public const float TeleportGuard = 384f;
 	/// <summary>Upward slack multiplier over jump speed.</summary>
 	public const float VerticalRiseTolerance = 1.5f;
 	/// <summary>Downward (falling) envelope per second.</summary>
@@ -49,7 +63,7 @@ public static class HexMovementValidator
 	/// <summary>
 	/// Evaluates one reported step. <paramref name="frozen"/> is true when the player
 	/// must not move at all (dead, no character, or movement-locked); then any delta
-	/// beyond the skin is corrected.
+	/// beyond the frozen skin is corrected.
 	/// </summary>
 	public static Decision Evaluate(
 		MovementSample lastGood,
@@ -68,19 +82,23 @@ public static class HexMovementValidator
 		var total = MathF.Sqrt( (dx * dx) + (dy * dy) + (dz * dz) );
 
 		if ( frozen )
-			return new Decision( total > StepSkin );
+			return new Decision( total > FrozenSkin );
 
 		if ( total > TeleportGuard )
 			return new Decision( true );
 
 		var dt = MathF.Max( deltaSeconds, 0f );
 		var horizontal = MathF.Sqrt( (dx * dx) + (dy * dy) );
-		var horizontalMax = (MathF.Max( runSpeed, 1f ) * HorizontalTolerance * dt) + StepSkin;
+		var horizontalMax = (MathF.Max( runSpeed, 1f ) * HorizontalTolerance * dt) + PositionSkin;
 		if ( horizontal > horizontalMax )
 			return new Decision( true );
 
-		var upMax = (MathF.Max( jumpSpeed, 1f ) * VerticalRiseTolerance * dt) + StepSkin;
-		var downMax = (TerminalFall * dt) + StepSkin;
+		// Vertical: jump/fall physics, plus a single discrete step/slope rise granted only when the
+		// player is actually moving horizontally (a stationary player cannot step up). This keeps
+		// stairs and steep slopes smooth while denying straight-up flight on the step allowance.
+		var stepRise = horizontal > PositionSkin ? StepRise : 0f;
+		var upMax = (MathF.Max( jumpSpeed, 1f ) * VerticalRiseTolerance * dt) + PositionSkin + stepRise;
+		var downMax = (TerminalFall * dt) + PositionSkin;
 		if ( dz > upMax || -dz > downMax )
 			return new Decision( true );
 

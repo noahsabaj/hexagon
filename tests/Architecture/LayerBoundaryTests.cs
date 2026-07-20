@@ -114,6 +114,11 @@ public sealed class LayerBoundaryTests
 		// The owner APPLIES corrections; it does not author them.
 		StringAssert.Contains( playerBody, "GameObject.WorldPosition = AuthoritativePosition" );
 		StringAssert.Contains( playerBody, "AuthoritativeBody" );
+		// Gameplay resolves spatial checks against the host-validated position (not the raw client
+		// transform), and a client that keeps reporting out-of-envelope positions is enforced
+		// against — kicked, not merely nudged.
+		StringAssert.Contains( playerBody, "public Vector3 AuthoritativeWorldPosition" );
+		StringAssert.Contains( playerBody, "connection?.Kick(" );
 		// The deleted owner->host input pump must not return in any form.
 		Assert.IsFalse( playerBody.Contains( "SubmitInputFrame", StringComparison.Ordinal ),
 			"Movement is owner-simulated; there must be no owner->host input RPC." );
@@ -299,7 +304,9 @@ public sealed class LayerBoundaryTests
 		Assert.IsFalse( runtime.Contains( "did not drain cleanly", StringComparison.Ordinal ),
 			"The barrier must not fail-closed on a predecessor drain; the lease and recovery are the authorities." );
 		// Corruption recovery is operator-armed and one-shot, never automatic.
-		StringAssert.Contains( runtime, "QuarantineCorruptStore = HexagonRuntimeOverrides.QuarantineCorruptStore" );
+		// The arming is consumed per host-start (read into a local, then reset) so it cannot linger
+		// and silently quarantine a later store.
+		StringAssert.Contains( runtime, "var quarantineCorruptStore = HexagonRuntimeOverrides.QuarantineCorruptStore" );
 		StringAssert.Contains( runtime, "HexagonRuntimeOverrides.QuarantineCorruptStore = false" );
 	}
 

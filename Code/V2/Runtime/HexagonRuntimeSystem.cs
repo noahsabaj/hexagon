@@ -136,13 +136,18 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			compiled.Value,
 			new SchemaItemShapeCatalog( compiled.Value ),
 			descriptorResult.Value.PersistenceInvariants );
+		// One-shot: consume the quarantine arming for THIS host start regardless of outcome, so a
+		// start that does not quarantine (intact store, lease-unavailable, a different root) cannot
+		// leave it armed to silently quarantine a later store. Re-arm to quarantine again.
+		var quarantineCorruptStore = HexagonRuntimeOverrides.QuarantineCorruptStore;
+		if ( quarantineCorruptStore ) HexagonRuntimeOverrides.QuarantineCorruptStore = false;
 		_persistence = new FileSystemPersistenceProvider(
 			storage,
 			new FileSystemPersistenceOptions( compiled.Value.Id )
 			{
 				Log = message => Log.Info( message ),
-				// Operator-armed one-shot corruption recovery; consumed and reset in InitializeHostAsync.
-				QuarantineCorruptStore = HexagonRuntimeOverrides.QuarantineCorruptStore,
+				// Operator-armed one-shot corruption recovery; the arming was consumed at read above.
+				QuarantineCorruptStore = quarantineCorruptStore,
 				// Threshold checkpoints must not stall the committing command or the main
 				// thread; the registry-tracked task is drained by shutdown before the
 				// provider's own final checkpoint runs.
@@ -590,13 +595,9 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			$"orphan_frames_discarded={health.DiscardedUnacknowledgedFrames} checkpoint_fallback={health.RecoveredFromCheckpointFallback} " +
 			$"quarantined={health.RecoveredByQuarantine} root={persistenceRoot}" );
 		if ( health.RecoveredByQuarantine )
-		{
-			// One-shot: disarm so a later corruption fails closed again unless the operator re-arms.
-			HexagonRuntimeOverrides.QuarantineCorruptStore = false;
 			Log.Warning(
 				$"HEXAGON_PERSISTENCE_QUARANTINE_CONSUMED root={persistenceRoot} quarantine={health.QuarantinePath}; " +
 				$"the corrupt store was archived and a fresh store was opened. Re-arm hexagon-persistence-quarantine to quarantine again." );
-		}
 		if ( _disposeRequested )
 		{
 			_ = await ShutdownResourcesOnceAsync();
