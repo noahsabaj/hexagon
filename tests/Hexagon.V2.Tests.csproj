@@ -49,6 +49,7 @@
 	<Compile Include="../Code/V2/Runtime/HostServicePublication.cs" Link="Product/Runtime/HostServicePublication.cs" />
 	<Compile Include="../Code/V2/Runtime/RuntimePlayerSession.cs" Link="Product/Runtime/RuntimePlayerSession.cs" />
 	<Compile Include="../Code/V2/Runtime/SceneShutdownBarrier.cs" Link="Product/Runtime/SceneShutdownBarrier.cs" />
+	<Compile Include="../Code/V2/Runtime/SceneHandoffPolicy.cs" Link="Product/Runtime/SceneHandoffPolicy.cs" />
 	<Compile Include="../Code/V2/Infrastructure/PrefixedPersistenceStorage.cs" Link="Product/Infrastructure/PrefixedPersistenceStorage.cs" />
   </ItemGroup>
 

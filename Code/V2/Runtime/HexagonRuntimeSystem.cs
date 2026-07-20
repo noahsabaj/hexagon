@@ -141,6 +141,8 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			new FileSystemPersistenceOptions( compiled.Value.Id )
 			{
 				Log = message => Log.Info( message ),
+				// Operator-armed one-shot corruption recovery; consumed and reset in InitializeHostAsync.
+				QuarantineCorruptStore = HexagonRuntimeOverrides.QuarantineCorruptStore,
 				// Threshold checkpoints must not stall the committing command or the main
 				// thread; the registry-tracked task is drained by shutdown before the
 				// provider's own final checkpoint runs.
@@ -540,19 +542,31 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		string persistenceRoot,
 		string verificationProbe )
 	{
+		// Wait for a previous owner of this persistence root (an in-process scene replacement) to
+		// finish releasing its lease, then ALWAYS proceed. The predecessor's drain outcome conflates
+		// benign engine-teardown faults with real ones, so it is never an authority on whether the
+		// store may be opened — the exclusive lease and WAL recovery below decide that. The wait is
+		// time-boxed so a stranded drain degrades to a precise lease failure, never an unbounded hang.
 		var previousDrain = SceneShutdownBarrier.Previous( persistenceRoot );
 		if ( previousDrain is not null )
 		{
-			var previousOutcome = await AsyncOperation.Capture(
-				() => new ValueTask<OperationResult>( previousDrain ) );
-			SceneShutdownBarrier.Clear( persistenceRoot, previousDrain );
-			if ( !previousOutcome.Succeeded || previousOutcome.Value.Failed )
+			if ( await AwaitPredecessorSettlementAsync( previousDrain ) )
 			{
-				var detail = previousOutcome.Exception?.Message ?? previousOutcome.Value.Error!.Message;
-				FailHost( $"Previous owner of persistence root '{persistenceRoot}' did not drain cleanly: {detail}" );
-				_ = await ShutdownResourcesOnceAsync();
-				return;
+				var previousOutcome = await AsyncOperation.Capture(
+					() => new ValueTask<OperationResult>( previousDrain ) );
+				var verdict = SceneHandoffPolicy.EvaluatePredecessor( previousOutcome );
+				if ( verdict.ShouldWarn )
+					Log.Warning(
+						$"HEXAGON_HANDOFF_DEGRADED root='{persistenceRoot}' state={verdict.State} " +
+						$"detail={verdict.Diagnostic}; deferring ownership and integrity to the lease and recovery." );
 			}
+			else if ( !_disposeRequested )
+			{
+				Log.Warning(
+					$"HEXAGON_HANDOFF_TIMEOUT root='{persistenceRoot}' the previous owner's drain did not settle " +
+					$"within {HandoffWaitBudget.TotalSeconds:0}s; proceeding under exclusive-lease protection." );
+			}
+			SceneShutdownBarrier.Clear( persistenceRoot, previousDrain );
 		}
 
 		if ( _disposeRequested )
@@ -573,7 +587,16 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		var health = persistence.Health;
 		Log.Info(
 			$"HEXAGON_RECOVERED schema={schema.Id} sequence={health.Sequence} checkpoint={health.CheckpointSequence} " +
-			$"orphan_frames_discarded={health.DiscardedUnacknowledgedFrames} checkpoint_fallback={health.RecoveredFromCheckpointFallback} root={persistenceRoot}" );
+			$"orphan_frames_discarded={health.DiscardedUnacknowledgedFrames} checkpoint_fallback={health.RecoveredFromCheckpointFallback} " +
+			$"quarantined={health.RecoveredByQuarantine} root={persistenceRoot}" );
+		if ( health.RecoveredByQuarantine )
+		{
+			// One-shot: disarm so a later corruption fails closed again unless the operator re-arms.
+			HexagonRuntimeOverrides.QuarantineCorruptStore = false;
+			Log.Warning(
+				$"HEXAGON_PERSISTENCE_QUARANTINE_CONSUMED root={persistenceRoot} quarantine={health.QuarantinePath}; " +
+				$"the corrupt store was archived and a fresh store was opened. Re-arm hexagon-persistence-quarantine to quarantine again." );
+		}
 		if ( _disposeRequested )
 		{
 			_ = await ShutdownResourcesOnceAsync();
@@ -654,6 +677,31 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 				_ = NotifyConnected( BuildActor( session.Player.HostConnection, session, false ), session );
 		}
 		Log.Info( $"HEXAGON_READY host schema={schema.Id} sequence={persistence.Health.Sequence} root={persistenceRoot}" );
+	}
+
+	private static readonly TimeSpan HandoffWaitBudget = TimeSpan.FromSeconds( 10 );
+
+	/// <summary>
+	/// Waits for a previous owner of the same persistence root to finish draining, bounded so a
+	/// stranded drain cannot hang host initialization forever. Returns true if the predecessor
+	/// settled within the budget, false on timeout or host disposal. Built only from async
+	/// primitives proven under the s&amp;box whitelist elsewhere in this assembly — a
+	/// CancellationTokenSource timer, token registrations, a TaskCompletionSource, and
+	/// AsyncOperation.Capture — with no Task.Delay/WhenAny/WaitAsync.
+	/// </summary>
+	private async ValueTask<bool> AwaitPredecessorSettlementAsync( Task<OperationResult> previousDrain )
+	{
+		if ( previousDrain.IsCompleted ) return true;
+		var settlement = new TaskCompletionSource<bool>( TaskCreationOptions.RunContinuationsAsynchronously );
+		using var timeout = new CancellationTokenSource();
+		using var timeoutRegistration = timeout.Token.Register(
+			static state => ((TaskCompletionSource<bool>)state!).TrySetResult( false ), settlement );
+		using var lifetimeRegistration = _hostLifetime.Token.Register(
+			static state => ((TaskCompletionSource<bool>)state!).TrySetResult( false ), settlement );
+		_ = previousDrain.ContinueWith( _ => settlement.TrySetResult( true ) );
+		timeout.CancelAfter( HandoffWaitBudget );
+		var settled = await AsyncOperation.Capture( () => new ValueTask<bool>( settlement.Task ) );
+		return settled.Succeeded && settled.Value;
 	}
 
 	private void RequestShutdown()

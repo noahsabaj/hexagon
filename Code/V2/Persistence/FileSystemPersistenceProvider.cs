@@ -30,6 +30,15 @@ public sealed record FileSystemPersistenceOptions
 	public Action<string>? Log { get; init; }
 
 	/// <summary>
+	/// When set, a host that finds this store CORRUPT during recovery archives the unreadable WAL
+	/// and checkpoint artifacts into a quarantine subtree and rebuilds a clean store at sequence
+	/// zero, instead of failing closed. Operator-armed and deliberate: it fires ONLY on a genuine
+	/// <see cref="PersistenceCorruptionException"/> — a tolerated torn tail is repaired in place and
+	/// never quarantined — and accepts the resulting data loss as the recovery action.
+	/// </summary>
+	public bool QuarantineCorruptStore { get; init; }
+
+	/// <summary>
 	/// Optional scheduler for threshold-triggered automatic checkpoints. When set, the
 	/// threshold-crossing commit returns immediately and the checkpoint runs as the scheduled
 	/// work (the host composition tracks it and may move it off the main thread); returning
@@ -127,6 +136,13 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 		var recovery = await AsyncOperation.Capture( () => RecoverAfterLeaseAcquiredAsync( cancellationToken ) );
 		if ( recovery.Succeeded ) return recovery.Value!;
 
+		if ( _options.QuarantineCorruptStore && recovery.Exception is PersistenceCorruptionException )
+		{
+			var quarantined = await QuarantineAndRebuildAsync( cancellationToken );
+			if ( quarantined.Succeeded ) return quarantined.Value!;
+			recovery = quarantined;
+		}
+
 		var release = await AsyncOperation.Capture( ReleaseLeaseAsync );
 		if ( !release.Succeeded )
 		{
@@ -138,6 +154,86 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 
 		throw recovery.Exception!;
 	}
+
+	/// <summary>
+	/// Operator-armed recovery from a genuinely corrupt store (see
+	/// <see cref="FileSystemPersistenceOptions.QuarantineCorruptStore"/>). The exclusive lease is
+	/// already held, so no other writer can race: archive the unreadable artifacts aside, then
+	/// rebuild a clean store. On any failure the original corruption is surfaced by the caller.
+	/// </summary>
+	private async ValueTask<OperationOutcome<RecoveryState>> QuarantineAndRebuildAsync( CancellationToken cancellationToken )
+	{
+		var quarantine = await AsyncOperation.Capture( () => QuarantineCorruptArtifactsAsync( cancellationToken ) );
+		if ( !quarantine.Succeeded )
+		{
+			_options.Log?.Invoke(
+				$"HEXAGON_PERSISTENCE_QUARANTINE_FAILED root={RootPath} " +
+				$"{quarantine.Exception!.GetType().Name}: {quarantine.Exception.Message}" );
+			return OperationOutcome<RecoveryState>.Failure( quarantine.Exception! );
+		}
+
+		ResetRecoveredWriterState();
+		var rebuilt = await AsyncOperation.Capture( () => RecoverAfterLeaseAcquiredAsync( cancellationToken ) );
+		if ( !rebuilt.Succeeded ) return rebuilt;
+
+		_options.Log?.Invoke(
+			$"HEXAGON_PERSISTENCE_QUARANTINED root={RootPath} " +
+			$"archived={quarantine.Value.ArchivedArtifacts} quarantine={quarantine.Value.QuarantinePath}" );
+		return OperationOutcome<RecoveryState>.Success( rebuilt.Value! with
+		{
+			RecoveredByQuarantine = true,
+			QuarantinePath = quarantine.Value.QuarantinePath
+		} );
+	}
+
+	private async ValueTask<QuarantineOutcome> QuarantineCorruptArtifactsAsync( CancellationToken cancellationToken )
+	{
+		// The WAL and checkpoint subtrees carry every committed transaction AND the corrupt chain.
+		// Archive them under a subtree keyed by this recovery's writer epoch — deterministic, no wall
+		// clock, so tests stay stable — copying each artifact durably before deleting the original.
+		// format.json (store identity) and the lease we hold are left in place so the rebuild keeps
+		// the same slot and recovers to sequence zero.
+		var quarantinePath = $"{RootPath}/quarantine/{_writerEpoch:N}";
+		var archived = 0;
+		foreach ( var prefix in new[]
+		{
+			_framePrefix,
+			_ackPrefix,
+			_commitHeadPrefix,
+			_checkpointBlobPrefix,
+			_checkpointManifestPrefix,
+			_checkpointCompletionPrefix,
+			_pruneIntentPrefix
+		} )
+		{
+			foreach ( var path in await _storage.ListAsync( prefix, cancellationToken ) )
+			{
+				if ( await _storage.ReadAsync( path, cancellationToken ) is { } content )
+				{
+					await WriteAndVerifyImmutableAsync(
+						$"{quarantinePath}/{path[(RootPath.Length + 1)..]}", content, cancellationToken );
+					archived++;
+				}
+				await _storage.DeleteAsync( path, cancellationToken );
+			}
+		}
+
+		return new QuarantineOutcome( quarantinePath, archived );
+	}
+
+	private void ResetRecoveredWriterState()
+	{
+		// The corrupt recovery pass threw before assigning durable writer state; clear the fields it
+		// would set so the post-quarantine rebuild starts from a pristine, empty store.
+		_durableSequence = 0;
+		_durableGeneration = 0;
+		_lastAckHash = string.Empty;
+		_retainedWalBytes = 0;
+		_retainedCommitCount = 0;
+		_pendingCommitHead = null;
+	}
+
+	private readonly record struct QuarantineOutcome( string QuarantinePath, int ArchivedArtifacts );
 
 	private async ValueTask<RecoveryState> RecoverAfterLeaseAcquiredAsync( CancellationToken cancellationToken )
 	{

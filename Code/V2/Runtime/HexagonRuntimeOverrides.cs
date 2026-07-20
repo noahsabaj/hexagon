@@ -17,4 +17,10 @@ internal static class HexagonRuntimeOverrides
 	[ConVar( "hexagon-verification-probe", ConVarFlags.Server | ConVarFlags.Hidden,
 		Help = "Opaque verification scenario exposed to the schema host application." )]
 	public static string VerificationProbe { get; set; } = string.Empty;
+
+	[ConVar( "hexagon-persistence-quarantine", ConVarFlags.Server,
+		Help = "Operator-armed one-shot recovery: on the next host start, if this store is genuinely " +
+			"corrupt, archive it aside and rebuild an empty store instead of failing closed. Consumed " +
+			"and reset once it takes effect." )]
+	public static bool QuarantineCorruptStore { get; set; }
 }

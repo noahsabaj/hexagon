@@ -311,3 +311,64 @@ Resolution — one whitelist-safe storage path for every host shape:
 - Still open, unchanged: organization identities in both `.sbproj` manifests (`local` →
   the owner's sbox.game org), package publication, and the two-client acceptance run with
   its `sbox / release-evidence` contexts.
+
+## 2026-07-20 persistence self-heal (scene-handoff barrier + operator quarantine)
+
+The paused acceptance run's editor iteration surfaced a latent operational wedge: after any
+ungraceful stop (an editor `play_stop` that did not await the async drain, a killed editor, a
+force power-off) the next Play hung, and only an editor-process recycle plus a hand-moved store
+folder recovered it. Root cause was `SceneShutdownBarrier`, a per-process static that carries the
+previous host's drain `Task` across an in-process scene replacement so the successor awaits it
+before opening storage. That await is correct, but `InitializeHostAsync` also **failed the host
+closed** whenever the awaited drain reported failure — a purely in-memory signal that conflates a
+benign engine-teardown fault (for example a destroyed `GameObject` during disembody) with a real
+durability fault, and that a refused Play then re-published on its own teardown, so every
+subsequent Play in the process failed closed. The genuine authorities on whether a store may be
+opened — the exclusive lease (`LeaseUnavailable` for a live owner) and WAL recovery
+(`PersistenceCorruptionException` for real corruption) — run immediately afterward, so the barrier
+was a redundant, coarser, self-poisoning gate.
+
+Resolution — the barrier becomes an ordering primitive, and genuine corruption gains a deliberate
+recovery:
+
+- `InitializeHostAsync` awaits the predecessor drain (time-boxed at 10s so a stranded drain cannot
+  hang init — on timeout it proceeds under lease protection) and then **always proceeds**,
+  deferring ownership and integrity to the lease and recovery. The classification is extracted to
+  the engine-free, test-compiled `SceneHandoffPolicy` seam, which pins the invariant that no
+  predecessor outcome fails the successor closed; a non-clean predecessor is a
+  `HEXAGON_HANDOFF_DEGRADED` warning, never a `FailHost`. The old `did not drain cleanly` fatal is
+  removed. Genuine corruption still fails closed, precisely, at the recovery gate.
+- Fatal corruption stays fail-closed with no automatic discard. The server ConVar
+  `hexagon-persistence-quarantine`, armed by an operator for one host start, makes recovery — only
+  on a genuine `PersistenceCorruptionException`, never a tolerated torn tail or an intact store —
+  archive the unreadable WAL and checkpoint artifacts under `quarantine/<writer-epoch>/` (holding
+  the lease it already acquired) and rebuild a clean store at sequence zero
+  (`HEXAGON_PERSISTENCE_QUARANTINED`, `PersistenceHealth.RecoveredByQuarantine`), then reset the
+  switch. `format.json` and the lease are left in place so the store keeps its slot. This accepts
+  the resulting data loss as the recovery action.
+- Position authority and every other lifecycle path are unchanged; this register touches only the
+  in-process store handoff and the corruption-recovery affordance.
+
+### Evidence boundary for this register
+
+- Neutral suites at this head: **Hexagon 379/379** (371 + a four-case `SceneHandoffPolicy` seam
+  test, three provider quarantine tests spanning armed-heal / intact-untouched / torn-tail-not-
+  quarantined, and a `LayerBoundaryTests` source pin that the handoff defers to recovery and the
+  quarantine is ConVar-gated), **HL2RP 298/298** (links the same persistence source).
+- Source-bound `verify.ps1` sub-steps ran with the editor closed: the generated warnings-as-errors
+  s&box build compiled **0/0** (authoritative whitelist gate — the bounded wait built from
+  `CancellationTokenSource.CancelAfter` + `TaskCompletionSource` + `ContinueWith`, the ConVar, and
+  the provider quarantine all pass the whitelist), the client-equivalent assembly passed
+  `Sandbox.Access`, and the headless commit → drain → exact-recovery smoke passed.
+- **Live editor verification (MCP-driven, 2026-07-20)** on an isolated data root
+  (`hexagon-data-root`), the real store untouched: a corrupted WAL frame failed the host closed
+  with the precise `Persistence recovery failed … frame … failed verification`; that failed drain
+  poisoned the barrier, and the next Play emitted `HEXAGON_HANDOFF_DEGRADED
+  state=DrainReportedFailure … deferring … to the lease and recovery` and reached the authoritative
+  recovery gate rather than the old fatal `did not drain cleanly` — the self-heal, observed live.
+  Arming `hexagon-persistence-quarantine` then archived 36 artifacts, rebuilt a clean store
+  (`sequence=0 quarantined=True`), reached `HEXAGON_READY host`, and consumed the one-shot; the
+  editor's real store still recovered at `sequence=19`. The editor's own compile reported
+  `kbj.hexagon` 0/0.
+- Still open, unchanged: the two-client acceptance run and its `sbox / release-evidence` contexts;
+  the branch is not yet re-frozen or re-published.

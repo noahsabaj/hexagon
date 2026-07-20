@@ -37,12 +37,14 @@ internal static class PersistenceTestSupport
 
 	public static FileSystemPersistenceProvider CreateFileProvider(
 		IPersistenceStorage storage,
-		int checkpointEveryCommits = 0 ) => new(
+		int checkpointEveryCommits = 0,
+		bool quarantineCorruptStore = false ) => new(
 		storage,
 		new FileSystemPersistenceOptions( "test-schema" )
 		{
 			CheckpointEveryCommits = checkpointEveryCommits,
-			RetainedCheckpointGenerations = 2
+			RetainedCheckpointGenerations = 2,
+			QuarantineCorruptStore = quarantineCorruptStore
 		},
 		CreateRegistry() );
 }

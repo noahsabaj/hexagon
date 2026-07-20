@@ -419,6 +419,16 @@ public sealed record PersistenceHealth(
 	/// commit-head file must be repaired before another write or clean shutdown.
 	/// </summary>
 	public bool CommitMetadataRepairPending { get; init; }
+
+	/// <summary>
+	/// True when recovery found the store corrupt and — because the host was operator-armed to
+	/// quarantine — archived the unreadable artifacts aside and rebuilt a clean store. This is a
+	/// deliberate, logged data-loss recovery, distinct from the normal fail-closed corruption path.
+	/// </summary>
+	public bool RecoveredByQuarantine { get; init; }
+
+	/// <summary>The store-relative subtree the corrupt artifacts were archived to, when quarantined.</summary>
+	public string? QuarantinePath { get; init; }
 }
 
 public sealed class PersistenceCorruptionException : Exception

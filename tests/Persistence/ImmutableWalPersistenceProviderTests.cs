@@ -392,6 +392,25 @@ public sealed class ImmutableWalPersistenceProviderTests
 	}
 
 	[TestMethod]
+	public async Task TornTailArmedForQuarantineIsRepairedInPlaceNotQuarantined()
+	{
+		var storage = new FaultInjectingStorage();
+		await WriteCommitsAndShutdownAsync( storage, 2 );
+		var fakeHash = new string( 'a', 64 );
+		await storage.SeedAsync( $"{Frames}/00000000000000000003-{fakeHash}.frame", TornBytes );
+		await storage.SeedAsync( $"{Acks}/00000000000000000003.ack", TornBytes );
+
+		// A tolerated torn tail is recoverable, so quarantine must NOT fire even when armed: the
+		// store is repaired in place — committed data survives — rather than archived away.
+		await using var recovered = Create( storage, quarantineCorruptStore: true );
+		await recovered.InitializeAsync();
+		Assert.IsFalse( recovered.Health.RecoveredByQuarantine );
+		Assert.AreEqual( 2L, recovered.Health.Sequence );
+		Assert.AreEqual( 2, recovered.Repository<TestDocument>( "documents" ).Find( "one" )!.Value.Score );
+		Assert.IsEmpty( await storage.ListAsync( Root + "/quarantine" ) );
+	}
+
+	[TestMethod]
 	public async Task TornAcknowledgementBelowTheDurableTailIsFatal()
 	{
 		var storage = new FaultInjectingStorage();
@@ -956,9 +975,14 @@ public sealed class ImmutableWalPersistenceProviderTests
 
 	private static FileSystemPersistenceProvider Create(
 		IPersistenceStorage storage,
-		IPersistenceInvariantSet? invariants = null ) => new(
+		IPersistenceInvariantSet? invariants = null,
+		bool quarantineCorruptStore = false ) => new(
 		storage,
-		new FileSystemPersistenceOptions( "test-schema" ) { CheckpointEveryCommits = 0 },
+		new FileSystemPersistenceOptions( "test-schema" )
+		{
+			CheckpointEveryCommits = 0,
+			QuarantineCorruptStore = quarantineCorruptStore
+		},
 		PersistenceTestSupport.CreateRegistry(),
 		invariants );
 

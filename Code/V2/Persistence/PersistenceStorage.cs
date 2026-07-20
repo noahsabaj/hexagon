@@ -289,4 +289,6 @@ internal sealed record RecoveryState(
 	IReadOnlyList<PersistedMutation> Documents,
 	int DiscardedUnacknowledgedFrames,
 	bool RecoveredFromCheckpointFallback,
-	string? Detail );
+	string? Detail,
+	bool RecoveredByQuarantine = false,
+	string? QuarantinePath = null );

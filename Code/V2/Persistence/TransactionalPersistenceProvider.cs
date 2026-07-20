@@ -770,7 +770,11 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			recovered.DiscardedUnacknowledgedFrames,
 			recovered.RecoveredFromCheckpointFallback,
 			recovered.Detail,
-			DateTimeOffset.UtcNow );
+			DateTimeOffset.UtcNow )
+		{
+			RecoveredByQuarantine = recovered.RecoveredByQuarantine,
+			QuarantinePath = recovered.QuarantinePath
+		};
 		_accepting = true;
 		SetProviderState( PersistenceProviderState.Ready );
 	}

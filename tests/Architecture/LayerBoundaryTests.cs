@@ -288,6 +288,22 @@ public sealed class LayerBoundaryTests
 	}
 
 	[TestMethod]
+	public void PersistenceHandoffDefersToRecoveryAndQuarantineIsOperatorArmed()
+	{
+		var runtime = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.cs" ) );
+		// The scene-handoff gate awaits the previous owner (bounded) and then defers ownership and
+		// integrity to the exclusive lease and WAL recovery — it must never fail-closed on the
+		// predecessor's drain outcome again (that was the self-poisoning wedge).
+		StringAssert.Contains( runtime, "AwaitPredecessorSettlementAsync" );
+		StringAssert.Contains( runtime, "SceneHandoffPolicy.EvaluatePredecessor" );
+		Assert.IsFalse( runtime.Contains( "did not drain cleanly", StringComparison.Ordinal ),
+			"The barrier must not fail-closed on a predecessor drain; the lease and recovery are the authorities." );
+		// Corruption recovery is operator-armed and one-shot, never automatic.
+		StringAssert.Contains( runtime, "QuarantineCorruptStore = HexagonRuntimeOverrides.QuarantineCorruptStore" );
+		StringAssert.Contains( runtime, "HexagonRuntimeOverrides.QuarantineCorruptStore = false" );
+	}
+
+	[TestMethod]
 	public void HostConstructionOccursOnlyAfterConfigurationAndRecoveredDomainValidation()
 	{
 		var runtime = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.cs" ) );

@@ -166,6 +166,64 @@ public sealed class FileSystemPersistenceProviderTests
 	}
 
 	[TestMethod]
+	public async Task CorruptStoreIsFailClosedByDefaultButQuarantinedWhenArmed()
+	{
+		var storage = new FaultInjectingStorage();
+		await using var first = PersistenceTestSupport.CreateFileProvider( storage );
+		await first.InitializeAsync();
+		var repository = first.Repository<TestDocument>( "characters" );
+		await using ( var create = first.BeginUnitOfWork() )
+		{
+			create.Create( repository, "alyx", new TestDocument( "Alyx", 1 ) );
+			Assert.IsTrue( (await create.CommitAsync()).Succeeded );
+		}
+		await using ( var create = first.BeginUnitOfWork() )
+		{
+			create.Create( repository, "barney", new TestDocument( "Barney", 1 ) );
+			Assert.IsTrue( (await create.CommitAsync()).Succeeded );
+		}
+		Assert.IsTrue( (await first.ShutdownAsync()).IsClean );
+		var firstFrame = (await storage.ListAsync( FramePrefix )).OrderBy( value => value, StringComparer.Ordinal ).First();
+		await storage.CorruptByteAsync( firstFrame, 10 );
+
+		// Default: a genuinely corrupt store stays fail-closed — no silent data loss.
+		await using ( var strict = PersistenceTestSupport.CreateFileProvider( storage ) )
+			await Assert.ThrowsAsync<PersistenceCorruptionException>( async () => await strict.InitializeAsync() );
+
+		// Operator-armed: the corrupt artifacts are archived aside and a clean store is rebuilt.
+		await using var healed = PersistenceTestSupport.CreateFileProvider( storage, quarantineCorruptStore: true );
+		await healed.InitializeAsync();
+		Assert.IsTrue( healed.Health.RecoveredByQuarantine );
+		Assert.AreEqual( 0L, healed.Health.Sequence );
+		Assert.IsNotNull( healed.Health.QuarantinePath );
+		Assert.IsNull( healed.Repository<TestDocument>( "characters" ).Find( "alyx" ) );
+		Assert.IsNotEmpty( await storage.ListAsync( Root + "/quarantine" ) );
+	}
+
+	[TestMethod]
+	public async Task IntactStoreIsNotQuarantinedEvenWhenArmed()
+	{
+		var storage = new FaultInjectingStorage();
+		await using var first = PersistenceTestSupport.CreateFileProvider( storage );
+		await first.InitializeAsync();
+		var repository = first.Repository<TestDocument>( "characters" );
+		await using ( var create = first.BeginUnitOfWork() )
+		{
+			create.Create( repository, "alyx", new TestDocument( "Alyx", 7 ) );
+			Assert.IsTrue( (await create.CommitAsync()).Succeeded );
+		}
+		Assert.IsTrue( (await first.ShutdownAsync()).IsClean );
+
+		// Arming the switch must never touch an intact store: it recovers normally, no quarantine.
+		await using var armed = PersistenceTestSupport.CreateFileProvider( storage, quarantineCorruptStore: true );
+		await armed.InitializeAsync();
+		Assert.IsFalse( armed.Health.RecoveredByQuarantine );
+		Assert.AreEqual( 1L, armed.Health.Sequence );
+		Assert.AreEqual( 7, armed.Repository<TestDocument>( "characters" ).Find( "alyx" )!.Value.Score );
+		Assert.IsEmpty( await storage.ListAsync( Root + "/quarantine" ) );
+	}
+
+	[TestMethod]
 	public async Task CheckpointRetentionKeepsTwoCompleteGenerations()
 	{
 		var storage = new FaultInjectingStorage();
