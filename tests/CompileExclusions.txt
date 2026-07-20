@@ -9,7 +9,7 @@
 # Format: <path relative to Code/V2, forward slashes> | <reason>
 Runtime/HexClientRootComponent.cs | Sandbox Component hosting the client store, controller, and session polling; UI wiring only.
 Runtime/HexHostServicesComponent.cs | Sandbox RPC surface; the dispatch pipeline is extracted to Networking/CommandDispatchOrchestrator.cs, leaving a thin transport adapter.
-Runtime/HexPlayerBody.cs | Sandbox Component; input admission and authoritative-body decisions are extracted to compiled neutral seams.
+Runtime/HexPlayerBody.cs | Sandbox Component; movement validation and body-authority decisions are extracted to the compiled HexMovementValidator seam.
 Runtime/HexagonBootstrapComponent.cs | Sandbox Component exposing scene-editable bootstrap properties.
 Runtime/HexagonRuntimeOverrides.cs | ConVar declarations bound to the engine console system.
 Runtime/HexagonRuntimeSystem.cs | GameObjectSystem composition root binding scene, network, and persistence lifecycles.

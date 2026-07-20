@@ -79,65 +79,50 @@ public sealed class LayerBoundaryTests
 	}
 
 	[TestMethod]
-	public void AuthoritativeBodyLifecycleUsesAnIndependentDormantUnownedNetworkRoot()
+	public void PlayerIsASingleConnectionOwnedObjectRunningANativeController()
 	{
-		var playerBody = Path.Combine( V2Root(), "Runtime", "HexPlayerBody.cs" );
-		var source = SourceWithoutComments( playerBody );
+		var playerBody = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexPlayerBody.cs" ) );
+		// The player is one connection-owned object running a native, owner-simulated
+		// PlayerController. This is the engine idiom (ownership == authority) that keeps the
+		// body from being pinned to the world origin by host physics.
+		StringAssert.Contains( playerBody, "controller.UseInputControls = true" );
+		StringAssert.Contains( playerBody, "controller.UseLookControls = true" );
+		StringAssert.Contains( playerBody, "controller.EnablePressing = true" );
+		// No separate unowned body, and no revived custom client predictor.
+		Assert.IsFalse( playerBody.Contains( "Owner = null!", StringComparison.Ordinal ),
+			"The player body is the connection-owned object; no unowned host-simulated body may be spawned." );
+		Assert.IsFalse( playerBody.Contains( "NetworkMode = NetworkMode.Never", StringComparison.Ordinal ),
+			"The custom client predictor is removed in favour of the native controller's prediction." );
 
-		StringAssert.Contains( source, "new GameObject( false, \"Hexagon Authoritative Body\" )" );
-		Assert.IsFalse( source.Contains( "new GameObject( GameObject, false", StringComparison.Ordinal ) );
-		StringAssert.Contains( source, "Owner = null!" );
-		StringAssert.Contains( source, "StartEnabled = false" );
-		StringAssert.Contains( source, "OwnerTransfer = OwnerTransfer.Fixed" );
-		StringAssert.Contains( source, "OrphanedMode = NetworkOrphaned.Destroy" );
-		StringAssert.Contains( source, "controller.UseInputControls = false" );
-		StringAssert.Contains( source, "Components.Get<PlayerController>( FindMode.EverythingInSelf )" );
-		StringAssert.Contains( source, "NetworkMode = NetworkMode.Never" );
-		StringAssert.Contains( source, "if ( _predictedBody is not null ) DestroyPredictedBody()" );
-		StringAssert.Contains( source, "AuthoritativeBodyReplacement.RequireActivated" );
-		StringAssert.Contains( source, "_candidate.Network.Refresh()" );
-	}
-
-	[TestMethod]
-	public void IdentityShellDestructionCleansIndependentAuthoritativeBodies()
-	{
-		var playerBody = Path.Combine( V2Root(), "Runtime", "HexPlayerBody.cs" );
-		var source = SourceWithoutComments( playerBody );
-		var onDestroy = source.IndexOf( "protected override void OnDestroy()", StringComparison.Ordinal );
-		var preparedCleanup = source.IndexOf( "_preparedBody?.Dispose()", onDestroy, StringComparison.Ordinal );
-		var activeCleanup = source.IndexOf(
-			"DestroyAuthoritativeBody( publishRemoval: false )", preparedCleanup, StringComparison.Ordinal );
-
-		Assert.IsGreaterThanOrEqualTo( 0, onDestroy );
-		Assert.IsGreaterThan( onDestroy, preparedCleanup );
-		Assert.IsGreaterThan( preparedCleanup, activeCleanup );
-		StringAssert.Contains( source, "var publishRemoval = !Game.IsClosing" );
-		StringAssert.Contains( source, "if ( publishRemoval )" );
-		StringAssert.Contains( source, "try { GameObject.Network.Refresh(); }" );
+		var runtime = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.cs" ) );
+		StringAssert.Contains( runtime, "playerObject.NetworkSpawn( connection )" );
 	}
 
 	[TestMethod]
 	public void ClientInputCannotBecomeSpatialAuthority()
 	{
 		var playerBody = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexPlayerBody.cs" ) );
-		StringAssert.Contains( playerBody, "Rpc.Host( NetFlags.OwnerOnly | NetFlags.UnreliableNoDelay )" );
-		StringAssert.Contains( playerBody, "Rpc.Caller.Id != HostConnection.Id" );
-		StringAssert.Contains( playerBody, "_inputAdmission.TryBeginAttempt" );
-		StringAssert.Contains( playerBody, "_inputAdmission.TryAcceptCharged" );
-		StringAssert.Contains( playerBody, "HostInputAuthenticator" );
-		StringAssert.Contains( playerBody, "HasProcessedInput" );
-		StringAssert.Contains( playerBody, "ProcessedMovementState" );
-		StringAssert.Contains( playerBody, "PredictionReconciliation.Calculate" );
+		// Movement is owner-simulated, but position AUTHORITY stays on the host: it validates
+		// the owner-reported transform against the controller's speed envelope and corrects
+		// only through a host-authored channel. A client can never mint spatial authority.
+		StringAssert.Contains( playerBody, "Sandbox.Networking.IsHost && GameObject.Network.IsProxy && IsEmbodied" );
+		StringAssert.Contains( playerBody, "HostValidateMovement" );
+		StringAssert.Contains( playerBody, "HexMovementValidator.Evaluate" );
+		// The correction pulse is the only authority write to position, and it is host-authored.
+		StringAssert.Contains( playerBody, "[Sync( SyncFlags.FromHost )] public Vector3 AuthoritativePosition" );
+		StringAssert.Contains( playerBody, "[Sync( SyncFlags.FromHost )] public int CorrectionTick" );
+		// The owner APPLIES corrections; it does not author them.
+		StringAssert.Contains( playerBody, "GameObject.WorldPosition = AuthoritativePosition" );
 		StringAssert.Contains( playerBody, "AuthoritativeBody" );
-		Assert.IsFalse( playerBody.Contains( "ProcessedInputSequence == 0", StringComparison.Ordinal ),
-			"Sequence zero is valid after wrap and cannot be used as the unprocessed-input sentinel." );
+		// The deleted owner->host input pump must not return in any form.
+		Assert.IsFalse( playerBody.Contains( "SubmitInputFrame", StringComparison.Ordinal ),
+			"Movement is owner-simulated; there must be no owner->host input RPC." );
 		Assert.IsFalse( playerBody.Contains( "PlayableBody", StringComparison.Ordinal ) );
 
 		var runtime = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.cs" ) );
 		StringAssert.Contains( runtime, "connection.CanSpawnObjects = false" );
 		StringAssert.Contains( runtime, "connection.CanRefreshObjects = false" );
 		StringAssert.Contains( runtime, "connection.CanDestroyObjects = false" );
-		StringAssert.Contains( runtime, "PlayerInputSessionAuthentication.IsAuthorized" );
 	}
 
 	[TestMethod]

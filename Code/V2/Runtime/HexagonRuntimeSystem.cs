@@ -251,8 +251,17 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			connection.CanDestroyObjects = false;
 		}
 		if ( _sessions.ContainsKey( connection.Id ) ) return;
-		var spawns = _runtimeScene.GetAll<SpawnPoint>()
+		// Mounted map packages ship their own SpawnPoints (flatgrass carries a whole
+		// roof-top grid of them, and map spawns can carry the generic "spawn" tag too);
+		// schema-authored spawns use the namespaced "hexagon_spawn" tag and must win or
+		// players are distributed onto arbitrary map geometry.
+		var allSpawns = _runtimeScene.GetAll<SpawnPoint>()
 			.Where( candidate => candidate.Active )
+			.ToArray();
+		var schemaSpawns = allSpawns
+			.Where( candidate => candidate.GameObject.Tags.Has( "hexagon_spawn" ) )
+			.ToArray();
+		var spawns = (schemaSpawns.Length > 0 ? schemaSpawns : allSpawns)
 			.OrderBy( candidate => candidate.GameObject.Id )
 			.ToArray();
 		if ( spawns.Length == 0 )
@@ -293,7 +302,6 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			newSession = new RuntimePlayerSession<HexPlayerBody>( player, exception =>
 				Log.Error( exception, $"Hexagon command cancellation callback failed for connection '{connection.Id}'." ) );
 			_sessions.Add( connection.Id, newSession );
-			player.HostInputAuthenticator = AuthenticatePlayerInput;
 			Log.Info( FormattableString.Invariant(
 				$"HEXAGON_PLAYER_SPAWNED connection={connection.Id} slot={slot} position={position.x:0.###},{position.y:0.###},{position.z:0.###}" ) );
 			if ( HostReadiness == HexRuntimeReadiness.Ready ) _ = newSession.ObserveHostReady();
@@ -316,7 +324,6 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		_spawnSlots.Release( connection.Id );
 		if ( !_sessions.Remove( connection.Id, out var session ) ) return;
 		var actor = session.IsApplicationConnected ? BuildActor( connection, session, false ) : (RpcActor?)null;
-		session.Player.HostInputAuthenticator = null;
 		session.Disconnect();
 		try
 		{
@@ -366,22 +373,6 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		}
 		player = null!;
 		return false;
-	}
-
-	private bool AuthenticatePlayerInput( HexPlayerBody player, PlayerInputFrame frame )
-	{
-		if ( player.HostConnection is not Connection connection ) return false;
-		var sessionExists = _sessions.TryGetValue( connection.Id, out var session );
-		var character = HostApplication?.FindActiveCharacter( new ConnectionId( connection.Id ) );
-		return PlayerInputSessionAuthentication.IsAuthorized( new PlayerInputAuthenticationState(
-			sessionExists,
-			sessionExists && ReferenceEquals( session!.Player, player ),
-			sessionExists && session!.IsApplicationConnected,
-			character?.Id.Value ?? Guid.Empty,
-			player.CharacterGuid,
-			player.BodyGeneration,
-			frame.BodyGeneration,
-			player.TryGetUsableAuthoritativeBody( out _ ) ) );
 	}
 
 	internal OperationResult<RpcActor> ResolveActor(
@@ -717,7 +708,6 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		var disconnects = new List<(RuntimePlayerSession<HexPlayerBody> Session, RpcActor? Actor)>();
 		foreach ( var session in _sessions.Values )
 		{
-			session.Player.HostInputAuthenticator = null;
 			RpcActor? actor = null;
 			if ( session.Player.HostConnection is Connection connection && session.Scope is not null )
 			{
