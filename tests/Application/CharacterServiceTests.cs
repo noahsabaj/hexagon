@@ -89,7 +89,12 @@ public sealed class CharacterServiceTests
 		Assert.HasCount(2, environment.Repositories.Inventories.All());
 		Assert.HasCount(2, environment.Repositories.OwnerInventories.All());
 		Assert.HasCount(2, environment.Repositories.Items.All());
-		Assert.HasCount(1, environment.Repositories.UniqueReservations.All());
+		// The schema's own reservation, plus the framework's reservation of the name skeleton.
+		Assert.HasCount(2, environment.Repositories.UniqueReservations.All());
+		Assert.IsTrue(environment.Repositories.UniqueReservations.All().Any(document =>
+			document.Value.Namespace == "hexagon.character-name" &&
+			document.Value.Value == CharacterNameSkeleton.Of("Alyx Vance") &&
+			document.Value.CharacterId == created.Value.Character.Id));
 
 		var deleted = await service.DeleteAsync(account, created.Value.Character.Id);
 
@@ -100,6 +105,35 @@ public sealed class CharacterServiceTests
 		Assert.IsEmpty(environment.Repositories.OwnerInventories.All());
 		Assert.IsEmpty(environment.Repositories.Items.All());
 		Assert.IsEmpty(environment.Repositories.UniqueReservations.All());
+	}
+
+	[TestMethod]
+	public async Task ASecondCharacterWhoseNameOnlyReadsLikeAnExistingOneIsRefused()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var service = environment.CreateCharacterService();
+		var holder = new AccountId(7656140);
+		var other = new AccountId(7656141);
+		var first = await service.CreateAsync(
+			holder, ApplicationServiceTestEnvironment.Request() with { Name = "Alyx Vance" });
+		Assert.IsTrue(first.Succeeded, first.Error?.Message);
+
+		// A different account, a different spelling, the same rendered name.
+		var impersonation = await service.CreateAsync(
+			other, ApplicationServiceTestEnvironment.Request() with { Name = "A1yx  Vance" });
+		Assert.IsTrue(impersonation.Failed);
+		Assert.AreEqual(ErrorCode.Conflict, impersonation.Error!.Code);
+
+		// A genuinely different name is unaffected.
+		var distinct = await service.CreateAsync(
+			other, ApplicationServiceTestEnvironment.Request() with { Name = "Judith Mossman" });
+		Assert.IsTrue(distinct.Succeeded, distinct.Error?.Message);
+
+		// The name is reserved by the character, not forever: deleting it frees the name.
+		Assert.IsTrue((await service.DeleteAsync(holder, first.Value.Character.Id)).Succeeded);
+		var reused = await service.CreateAsync(
+			other, ApplicationServiceTestEnvironment.Request() with { Name = "Alyx Vance" });
+		Assert.IsTrue(reused.Succeeded, reused.Error?.Message);
 	}
 
 	[TestMethod]
