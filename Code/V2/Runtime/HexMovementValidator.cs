@@ -18,283 +18,250 @@ public static class PlayerBodyAuthorityRules
 }
 
 /// <summary>
-/// A world-space position sample, engine-free so the validator can be unit-tested
-/// without the Sandbox runtime.
+/// A world-space position sample, engine-free so the auditor can be unit-tested without the Sandbox
+/// runtime.
 /// </summary>
 public readonly record struct MovementSample( float X, float Y, float Z );
 
 /// <summary>
-/// The movement envelope a host validates against, and the same envelope the owning client's
-/// <c>HexMoveModeWalk</c> configures its controller from — so client physics and host validation
-/// cannot drift apart. Operator-tunable per game; see <c>docs/security.md</c>.
+/// The movement envelope the host audits against, and the same envelope the owning client's
+/// <c>HexMoveModeWalk</c> configures its controller from, so client physics and host validation cannot
+/// drift apart. Operator-tunable; see <c>docs/security.md</c>.
 /// </summary>
-/// <remarks>
-/// <para>
-/// Defaults mirror the shipped s&amp;box <c>PlayerController</c> and <c>MoveModeWalk</c> so a game that
-/// does not tune anything is validated against the movement its clients actually perform:
-/// <c>StepHeight</c> is <c>MoveModeWalk.StepUpHeight</c> (18) and <c>GroundAngleDegrees</c> is
-/// <c>MoveModeWalk.GroundAngle</c> (45). Those two numbers previously existed only as a hand-picked
-/// approximation on the host, which is how the host came to permit climbs no client could perform.
-/// </para>
-/// </remarks>
 public readonly record struct HexMovementEnvelope(
 	float HorizontalTolerance,
-	float SkinReservoir,
+	float AuditWindowSeconds,
+	float InterpolationSlack,
 	float StepHeight,
 	float GroundAngleDegrees,
 	float TeleportGuard,
-	float TerminalFall,
 	float Gravity,
-	float CorrectionCooldownSeconds,
+	float FrozenDriftAllowance,
 	float ViolationKickSeconds )
 {
-	// Declared as const, not just as the Default values, because the operator ConVars in
-	// HexagonRuntimeOverrides initialise from them and s&box's ConVar source generator copies a
-	// property initialiser into a generated attribute argument — which must be a compile-time
-	// constant. Keeping the numbers here means the ConVar defaults and Default stay one source of
-	// truth rather than two lists that must be kept equal.
+	// Declared as const because s&box's ConVar source generator copies a property initialiser into a
+	// generated attribute argument, which must be a compile-time constant. Keeping the numbers here
+	// means the ConVar defaults in HexagonRuntimeOverrides and Default stay one source of truth.
 	public const float DefaultHorizontalTolerance = 1.25f;
-	public const float DefaultSkinReservoir = 8f;
+	/// <summary>Seconds of travel each audit covers. Long enough that interpolation timing is noise.</summary>
+	public const float DefaultAuditWindowSeconds = 1f;
+	/// <summary>
+	/// Endpoint slack for the interpolation buffer's delay. A proxy's position lags the client's by
+	/// roughly the buffer depth, so a window's measured path can differ from the true path by about
+	/// that much travel. Generous: it costs a little detection sensitivity, never a false positive.
+	/// </summary>
+	public const float DefaultInterpolationSlack = 96f;
 	/// <summary>Matches the shipped <c>MoveModeWalk.StepUpHeight</c>.</summary>
 	public const float DefaultStepHeight = 18f;
 	/// <summary>Matches the shipped <c>MoveModeWalk.GroundAngle</c>.</summary>
 	public const float DefaultGroundAngleDegrees = 45f;
+	/// <summary>Instantaneous jump that no interpolation artifact can reach.</summary>
 	public const float DefaultTeleportGuard = 384f;
-	public const float DefaultTerminalFall = 1800f;
 	public const float DefaultGravity = 800f;
-	public const float DefaultCorrectionCooldownSeconds = 0.35f;
-	public const float DefaultViolationKickSeconds = 3.5f;
+	/// <summary>Total travel tolerated per window while dead, locked, or without a character.</summary>
+	public const float DefaultFrozenDriftAllowance = 24f;
+	public const float DefaultViolationKickSeconds = 10f;
 
 	public static HexMovementEnvelope Default => new(
 		HorizontalTolerance: DefaultHorizontalTolerance,
-		SkinReservoir: DefaultSkinReservoir,
+		AuditWindowSeconds: DefaultAuditWindowSeconds,
+		InterpolationSlack: DefaultInterpolationSlack,
 		StepHeight: DefaultStepHeight,
 		GroundAngleDegrees: DefaultGroundAngleDegrees,
 		TeleportGuard: DefaultTeleportGuard,
-		TerminalFall: DefaultTerminalFall,
 		Gravity: DefaultGravity,
-		CorrectionCooldownSeconds: DefaultCorrectionCooldownSeconds,
+		FrozenDriftAllowance: DefaultFrozenDriftAllowance,
 		ViolationKickSeconds: DefaultViolationKickSeconds );
 
 	/// <summary>
-	/// Steepest sustained rise a grounded player can achieve, as rise per unit of horizontal travel.
-	/// Falls straight out of the ground angle: you cannot climb faster than the steepest surface you
-	/// are allowed to stand on.
+	/// Steepest sustained rise a grounded player can achieve, as rise per unit of horizontal travel:
+	/// you cannot climb faster than the steepest surface you are allowed to stand on.
 	/// </summary>
 	public float MaximumRisePerHorizontalUnit =>
 		MathF.Tan( Math.Clamp( GroundAngleDegrees, 0f, 89f ) * (MathF.PI / 180f) );
 
+	/// <summary>Apex of one unassisted jump, the slack a net-rise bound must tolerate.</summary>
+	public float JumpApex( float jumpSpeed ) =>
+		(jumpSpeed * jumpSpeed) / (2f * MathF.Max( Gravity, 1f ));
+
 	/// <summary>
-	/// Rejects an envelope an operator could set to something that validates nothing. A tunable
-	/// envelope means a mis-set value is a security hole, so the bounds are enforced rather than
-	/// documented.
+	/// Rejects an envelope an operator could set to something that audits nothing. A tunable envelope
+	/// means a mis-set value is a hole, so the bounds are enforced rather than documented.
 	/// </summary>
 	public bool IsWellFormed( out string error )
 	{
 		error = string.Empty;
 		if ( !(HorizontalTolerance >= 1f && HorizontalTolerance <= 2f) )
 			error = "HorizontalTolerance must be between 1 and 2.";
-		else if ( !(SkinReservoir >= 0f && SkinReservoir <= 64f) )
-			error = "SkinReservoir must be between 0 and 64 units.";
+		else if ( !(AuditWindowSeconds >= 0.25f && AuditWindowSeconds <= 10f) )
+			error = "AuditWindowSeconds must be between 0.25 and 10.";
+		else if ( !(InterpolationSlack >= 0f && InterpolationSlack <= 512f) )
+			error = "InterpolationSlack must be between 0 and 512 units.";
 		else if ( !(StepHeight >= 0f && StepHeight <= 64f) )
 			error = "StepHeight must be between 0 and 64 units.";
 		else if ( !(GroundAngleDegrees > 0f && GroundAngleDegrees <= 89f) )
 			error = "GroundAngleDegrees must be above 0 and at most 89.";
 		else if ( !(TeleportGuard > 0f && TeleportGuard <= 4096f) )
 			error = "TeleportGuard must be above 0 and at most 4096 units.";
-		else if ( !(TerminalFall > 0f && TerminalFall <= 8192f) )
-			error = "TerminalFall must be above 0 and at most 8192 units per second.";
 		else if ( !(Gravity > 0f && Gravity <= 4096f) )
 			error = "Gravity must be above 0 and at most 4096 units per second squared.";
-		else if ( !(CorrectionCooldownSeconds >= 0f && CorrectionCooldownSeconds <= 5f) )
-			error = "CorrectionCooldownSeconds must be between 0 and 5.";
-		else if ( !(ViolationKickSeconds > 0f && ViolationKickSeconds <= 120f) )
-			error = "ViolationKickSeconds must be above 0 and at most 120.";
+		else if ( !(FrozenDriftAllowance >= 0f && FrozenDriftAllowance <= 256f) )
+			error = "FrozenDriftAllowance must be between 0 and 256 units.";
+		else if ( !(ViolationKickSeconds > 0f && ViolationKickSeconds <= 300f) )
+			error = "ViolationKickSeconds must be above 0 and at most 300.";
 		return error.Length == 0;
 	}
 }
 
 /// <summary>
-/// Carry-over state between validated ticks. The validator is stateful by design: a per-tick delta
-/// clamp that keeps no state re-grants its whole allowance every tick, which turns every per-tick
-/// maximum into a rate a client can sustain indefinitely.
+/// Accumulated observation of one player across the current audit window.
 /// </summary>
-public readonly record struct MovementState(
-	MovementSample LastGood,
-	float VerticalSpeed,
-	float StepBudget,
-	float SkinBudget,
+public readonly record struct MovementAudit(
+	MovementSample Anchor,
+	MovementSample Last,
+	double WindowStartSeconds,
+	float HorizontalPath,
 	bool Primed )
 {
-	public static MovementState Unprimed => new( default, 0f, 0f, 0f, false );
+	public static MovementAudit Unprimed => new( default, default, 0, 0f, false );
 
-	public static MovementState PrimedAt( MovementSample position, HexMovementEnvelope envelope ) =>
-		new( position, 0f, envelope.StepHeight, envelope.SkinReservoir, true );
-
-	public MovementState At( MovementSample position ) => this with { LastGood = position };
+	public static MovementAudit OpenAt( MovementSample position, double nowSeconds ) =>
+		new( position, position, nowSeconds, 0f, true );
 }
 
 /// <summary>
-/// Pure, engine-independent decision for host-side validation of a client-owned player's reported
-/// movement. The owning client simulates its <c>PlayerController</c> and networks its transform; the
-/// host integrates each reported delta against a movement model and corrects anything the model cannot
-/// produce.
+/// Host-side audit of a client-owned player's movement.
 /// <para>
-/// Position is authority-bearing, not cosmetic: interaction reach, line-of-sight, combat traces, and
-/// proximity chat all resolve against the player's position, so gameplay reads the host's last-validated
-/// position (see <c>HexPlayerBody.AuthoritativeWorldPosition</c>), never the raw client transform.
+/// <b>Why this is a window and not a per-tick check.</b> The host cannot see what the client reported.
+/// For a proxy, <c>GameObject.WorldPosition</c> is the INTERPOLATED transform — a reconstruction the
+/// engine rebuilds from a network buffer; the raw received value lives in <c>GameTransform.TargetLocal</c>,
+/// which is <c>internal</c> and reachable only by <c>NetworkObject</c>'s own send/receive paths. Its
+/// per-tick deltas are artifacts of buffer depth and packet timing, not of player movement: measured
+/// live on 2026-07-29, honest sprinting produced deltas quantised at 19.2 units against a per-tick
+/// budget of ~15, twelve times identically. Per-tick validation is the industry idiom, but every engine
+/// that uses it validates the client's CLAIMED position from a movement packet. We do not have that
+/// input, and copying the idiom without it is what produced the defect.
 /// </para>
 /// <para>
-/// <b>What this enforces, precisely.</b> Horizontal travel is bounded to the run envelope as a RATE over
-/// any window, not per tick — the jitter allowance is a reservoir that refills only from unused budget,
-/// so it absorbs a burst without raising the sustained ceiling. Vertical travel is integrated: rise is
-/// paid for out of an inferred vertical speed that only a host-observed ground contact re-arms and that
-/// gravity decays every airborne tick, so an airborne client's climb is bounded by one jump's apex. A
-/// grounded client's rise is bounded by its horizontal travel through the ground angle — you cannot
-/// climb faster than the steepest surface you may stand on.
+/// Summing deltas over a window is immune to how the interpolator chunks the travel: however the path
+/// is sliced, the sum over a window is the path. That is the property per-tick checking lacks, and it
+/// is what makes this sound against the only signal the host can observe. It also audits the transform
+/// every other player actually sees, rather than a side-channel claim a cheat could keep honest while
+/// flying.
 /// </para>
 /// <para>
-/// <b>What survives.</b> A client that moves at exactly the permitted rate at all times is
-/// indistinguishable from a fast honest player without host-side movement simulation, which is not
-/// reintroduced here (host-simulating a client-owned body is what pinned players to the world origin).
-/// That residual is bounded by the envelope above — roughly a 25% speed margin — and is a
-/// movement-quality residual, not a spatial-authority breach.
+/// <b>What is enforced.</b> Instantaneously: a teleport guard, whose margin no interpolation artifact
+/// approaches. Per window: horizontal path against the run envelope, and net rise against horizontal
+/// path through the ground angle plus one jump's apex. A correction is issued at most once per window,
+/// so a correction can no longer provoke the next one — the per-tick corrective loop was self-feeding
+/// and is what players experienced as rubber-banding.
+/// </para>
+/// <para>
+/// <b>What this costs.</b> Detection latency of about one window: gameplay resolves against the client's
+/// position until an audit fails, so sub-teleport abuse is visible for up to that long. The teleport
+/// guard still catches the gross case immediately.
 /// </para>
 /// </summary>
 public static class HexMovementValidator
 {
-	public readonly record struct Decision( bool Corrected );
+	public enum Verdict
+	{
+		/// <summary>Sample accepted; no action.</summary>
+		Accepted,
+		/// <summary>A single step no movement could produce. Corrected immediately.</summary>
+		Teleport,
+		/// <summary>The completed window exceeded the envelope. Corrected once, then the window reopens.</summary>
+		WindowExceeded
+	}
+
+	public readonly record struct Decision(
+		Verdict Verdict,
+		bool WindowClosed,
+		float HorizontalPath,
+		float NetRise,
+		float HorizontalBudget,
+		float RiseBudget )
+	{
+		public bool Corrected => Verdict != Verdict.Accepted;
+	}
 
 	/// <summary>
-	/// Evaluates one reported step and returns the carry-over state for the next.
+	/// Observes one sampled position. Returns the verdict and the carried audit state.
 	/// </summary>
-	/// <param name="state">Carry-over state from the previous validated tick.</param>
-	/// <param name="reported">The position the owning client authored this tick.</param>
-	/// <param name="deltaSeconds">Wall-clock seconds since the previous validated tick.</param>
+	/// <param name="audit">Accumulated state for the current window.</param>
+	/// <param name="reported">The position sampled from the proxy transform.</param>
+	/// <param name="nowSeconds">Monotonic clock, used only for window length.</param>
 	/// <param name="runSpeed">The controller's run speed, read from the live component.</param>
 	/// <param name="jumpSpeed">The controller's jump speed, read from the live component.</param>
-	/// <param name="envelope">The operator-configured movement envelope.</param>
-	/// <param name="grounded">
-	/// Whether the HOST observed ground beneath the reported position, via the controller's own
-	/// <c>TraceBody</c>. This is not client-reported: <c>PlayerController.GroundObject</c> carries no
-	/// <c>[Sync]</c>, so a proxy's grounded state is invisible and must be traced by the host. It is
-	/// what makes the climb bound real rather than advisory.
-	/// </param>
-	/// <param name="frozen">
-	/// True when the player must not move at all (dead, no character, or movement-locked); then only the
-	/// jitter reservoir is available, so drift is bounded for the whole duration rather than per tick.
-	/// </param>
-	public static (Decision Decision, MovementState State) Evaluate(
-		MovementState state,
+	/// <param name="frozen">Dead, movement-locked, or without a character: the player must not travel.</param>
+	/// <param name="envelope">The operator-configured envelope.</param>
+	public static (Decision Decision, MovementAudit Audit) Observe(
+		MovementAudit audit,
 		MovementSample reported,
-		float deltaSeconds,
+		double nowSeconds,
 		float runSpeed,
 		float jumpSpeed,
 		bool frozen,
-		bool grounded,
 		HexMovementEnvelope envelope )
 	{
 		if ( !(float.IsFinite( reported.X ) && float.IsFinite( reported.Y ) && float.IsFinite( reported.Z )) )
-			return (new Decision( true ), state);
+			return (new Decision( Verdict.Teleport, false, 0, 0, 0, 0 ), audit);
 
-		if ( !state.Primed )
-			return (new Decision( false ), MovementState.PrimedAt( reported, envelope ));
+		if ( !audit.Primed )
+			return (new Decision( Verdict.Accepted, false, 0, 0, 0, 0 ), MovementAudit.OpenAt( reported, nowSeconds ));
 
-		var dx = reported.X - state.LastGood.X;
-		var dy = reported.Y - state.LastGood.Y;
-		var dz = reported.Z - state.LastGood.Z;
-		var total = MathF.Sqrt( (dx * dx) + (dy * dy) + (dz * dz) );
+		var dx = reported.X - audit.Last.X;
+		var dy = reported.Y - audit.Last.Y;
+		var dz = reported.Z - audit.Last.Z;
+		var step = MathF.Sqrt( (dx * dx) + (dy * dy) + (dz * dz) );
 
-		if ( total > envelope.TeleportGuard )
-			return (new Decision( true ), state);
-
-		var dt = MathF.Max( deltaSeconds, 0f );
-		var horizontal = MathF.Sqrt( (dx * dx) + (dy * dy) );
-		var skin = state.SkinBudget;
-
-		// --- Frozen: the reservoir is the entire lifetime allowance, so a restrained player drifts a
-		// few units once rather than a few units per tick for the duration of the restraint.
-		if ( frozen )
+		// Instantaneous guard. Robust against this signal because the margin is far beyond anything the
+		// interpolation buffer can emit in one sample.
+		if ( step > envelope.TeleportGuard )
 		{
-			if ( total > skin ) return (new Decision( true ), state);
-			return (new Decision( false ), state.At( reported ) with { SkinBudget = skin - total } );
+			return (new Decision( Verdict.Teleport, false, audit.HorizontalPath, 0, 0, 0 ),
+				MovementAudit.OpenAt( audit.Last, nowSeconds ));
 		}
 
-		// --- Horizontal: a rate bound over any window. The reservoir refills ONLY from budget the
-		// player did not use, so a burst is absorbed but the sustained ceiling stays at the envelope.
-		var horizontalBudget = MathF.Max( runSpeed, 1f ) * envelope.HorizontalTolerance * dt;
-		if ( horizontal <= horizontalBudget )
+		// Accumulate the path. Chunking does not matter: the sum over the window is the path.
+		var horizontalStep = MathF.Sqrt( (dx * dx) + (dy * dy) );
+		var advanced = audit with
 		{
-			skin = MathF.Min( envelope.SkinReservoir, skin + (horizontalBudget - horizontal) );
-		}
-		else
-		{
-			var overdraft = horizontal - horizontalBudget;
-			if ( overdraft > skin ) return (new Decision( true ), state);
-			skin -= overdraft;
-		}
+			Last = reported,
+			HorizontalPath = audit.HorizontalPath + horizontalStep
+		};
 
-		// --- Vertical: integrated, not re-granted.
-		// A host-observed ground contact re-arms jump speed and the discrete step allowance. Airborne,
-		// gravity decays the available rise every tick, so a climb terminates at one jump's apex.
-		var verticalSpeed = state.VerticalSpeed;
-		var stepBudget = state.StepBudget;
-		if ( grounded )
-		{
-			// Standing on ground ARMS a jump; it does not spend one. Spending jump speed while grounded
-			// would hand every grounded tick a fresh jump's worth of rise, which is the same
-			// re-granting mistake in a different place.
-			verticalSpeed = MathF.Max( jumpSpeed, 0f );
-		}
-		else
-		{
-			verticalSpeed -= envelope.Gravity * dt;
-		}
+		var elapsed = (float)Math.Max( nowSeconds - audit.WindowStartSeconds, 0.0 );
+		if ( elapsed < envelope.AuditWindowSeconds )
+			return (new Decision( Verdict.Accepted, false, advanced.HorizontalPath, 0, 0, 0 ), advanced);
 
-		if ( dz > 0f )
-		{
-			// Grounded rise is capped by the ground angle against horizontal travel: on the steepest
-			// standable surface, rise equals horizontal distance. Airborne rise is paid strictly from
-			// the integrated vertical speed, which only a ground contact re-arms.
-			var baseAllowance = grounded
-				? horizontal * envelope.MaximumRisePerHorizontalUnit
-				: MathF.Max( verticalSpeed, 0f ) * dt;
+		// --- Window closes: audit it. ---
+		var netRise = advanced.Last.Z - advanced.Anchor.Z;
 
-			if ( dz <= baseAllowance )
-			{
-				// The step reservoir refills only from rise the player did not take, so a discrete lip
-				// stays affordable while a continuous climb settles at exactly the ground-angle rate.
-				if ( grounded )
-					stepBudget = MathF.Min( envelope.StepHeight, stepBudget + (baseAllowance - dz) );
-			}
-			else
-			{
-				var overdraft = dz - baseAllowance;
-				// A step-up requires ground to step from; it is not available in mid-air.
-				var stepUsed = grounded ? MathF.Min( overdraft, stepBudget ) : 0f;
-				stepBudget -= stepUsed;
-				overdraft -= stepUsed;
-				// The jitter reservoir deliberately does NOT fund rise. It refills from unused
-				// HORIZONTAL budget, so letting it buy altitude would mean standing still paid for a
-				// climb — a client hovering on the spot would refill it every tick and ascend forever
-				// on jitter allowance alone.
-				if ( overdraft > 0f ) return (new Decision( true ), state);
-			}
+		var horizontalBudget = frozen
+			? envelope.FrozenDriftAllowance
+			: (MathF.Max( runSpeed, 1f ) * envelope.HorizontalTolerance * elapsed) + envelope.InterpolationSlack;
 
-			// Airborne, the accepted rise defines the next tick's vertical speed, capped by what was
-			// actually granted so borrowed step/jitter budget cannot inflate the model. Grounded, the
-			// armed jump speed stands.
-			if ( !grounded )
-				verticalSpeed = dt > 0f ? MathF.Min( dz / dt, MathF.Max( verticalSpeed, 0f ) ) : verticalSpeed;
-		}
-		else
-		{
-			var fallAllowance = (envelope.TerminalFall * dt) + skin;
-			if ( -dz > fallAllowance ) return (new Decision( true ), state);
-			verticalSpeed = dt > 0f ? MathF.Max( dz / dt, -envelope.TerminalFall ) : verticalSpeed;
-		}
+		var riseBudget = frozen
+			? envelope.FrozenDriftAllowance
+			: (advanced.HorizontalPath * envelope.MaximumRisePerHorizontalUnit)
+				+ envelope.JumpApex( jumpSpeed ) + envelope.StepHeight;
 
-		return (new Decision( false ), new MovementState(
-			reported, verticalSpeed, stepBudget, skin, true ));
+		var exceeded = advanced.HorizontalPath > horizontalBudget || netRise > riseBudget;
+
+		var decision = new Decision(
+			exceeded ? Verdict.WindowExceeded : Verdict.Accepted,
+			WindowClosed: true,
+			advanced.HorizontalPath,
+			netRise,
+			horizontalBudget,
+			riseBudget );
+
+		// Always reopen at the current position, including on failure. A failed window is NOT snapped
+		// back: yanking an honest player a full window's travel backwards is a worse experience than
+		// the abuse it would prevent, and the per-tick snapping was what fed the rubber-banding. A
+		// failed window escalates the violation clock instead, and sustained abuse ends in a kick.
+		// Teleports remain corrected instantly above, where the snap is small and unambiguous.
+		return (decision, MovementAudit.OpenAt( advanced.Last, nowSeconds ));
 	}
 }

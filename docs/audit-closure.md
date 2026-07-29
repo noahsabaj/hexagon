@@ -524,3 +524,68 @@ exactly, and it already integrated over time correctly. No change was needed the
   present on a proxy — and to run `Scene.Trace` against the host's physics world, but a proxy requires
   a second authenticated client and lands in the two-client acceptance run. The envelope constants
   and the kick threshold are still tuned there.
+
+## Register 2026-07-29 (round 3, part 2) — the movement envelope was auditing the wrong signal
+
+Round 3's windowed-envelope fix above was live-verified on a dedicated server with one remote client
+and **failed**: honest sprinting and jumping rubber-banded, logging 85 violations during normal play.
+Two further fixes were needed, and the second was architectural.
+
+**M3 (High) — the host cannot observe the client's reported position at all.** For a proxy,
+`GameObject.WorldPosition` is the INTERPOLATED transform; the raw received value lives in
+`GameTransform.TargetLocal`, which is `internal` and used only by `NetworkObject`'s own send/receive
+paths (`NetworkObject.cs` 636/709/774/849). A per-tick delta from that signal is an artifact of buffer
+depth and packet timing. Measured live: an honest sprint produced deltas quantised at **19.2 units,
+twelve times identically**, against a per-tick budget of about 15.
+
+Per-tick validation with snap-back IS the industry idiom, but every engine that uses it validates the
+client's CLAIMED position out of a movement packet. s&box exposes no such input to addons. **We copied
+the idiom without the input it assumes, and that is the whole defect** — no choice of constants fixes a
+signal that does not carry per-tick truth. A first attempt to accumulate `dt` until the position moved
+cut violations 85 to 33 but could not converge, because interpolation moves the position slightly on
+most ticks.
+
+A second-order defect made it self-sustaining: a correction makes the owner snap
+(`OwnerApplyCorrection` -> `ClearInterpolation`), the snap returns to the host as another large discrete
+delta, which trips another correction. **The corrective loop fed itself**, which is what players
+experience as rubber-banding, and it is why walking escaped — its round-trip distance stayed inside the
+envelope.
+
+Remediation — audit over a window instead (`HexMovementValidator.Observe`, model `windowed-audit-v1`):
+- **Per sample:** a teleport guard only, whose margin no interpolation artifact approaches, corrected
+  immediately through the host-authored channel.
+- **Per window (1s):** horizontal PATH against the run envelope plus a fixed interpolation slack, and
+  NET RISE against horizontal path through the ground angle plus one jump apex.
+- **Soundness rests on one property**, pinned by `AnIdenticalPathIsMeasuredTheSameHoweverItIsChunked`:
+  summing deltas over a window is invariant to how the interpolator chunks the travel. Per-tick
+  checking fails that by construction.
+- **No per-window snap-back.** A failed window escalates the violation clock toward a kick. Reversing a
+  window of travel is worse for an honest player than the abuse, and per-tick snapping fed the loop.
+- Deleted outright: the skin reservoir, the step budget, per-tick vertical integration, and the
+  `TraceBody` ground probe — the windowed rise check needs no per-tick grounded state, which also
+  retires the unverified `TraceBody`-on-a-proxy dependency the previous register recorded.
+
+**Idiomaticity was investigated before committing to this** (user-directed). s&box ships no movement
+validation, so there is no engine idiom to conform to. Per-tick is the wider industry convention and
+windowing is not — that is recorded as a real mark against it. Two idiom-informed corrections were
+adopted anyway: the teleport clamp stays per-sample because that check IS conventional and robust here,
+and corrections are no longer issued on every trip.
+
+### Evidence boundary for this register
+
+- **Live-verified 2026-07-29 on a dedicated server with one authenticated remote client**, at STOCK
+  settings (`angle=45 step=18`, no ConVar overrides): **0 violations, 0 teleport corrections, 0 kicks**
+  across a full sprint/jump/stairs/fall session. Prior runs on the per-tick model logged 85, 33 and 55.
+- The live build is now self-identifying: `HEXAGON_MOVEMENT_MODEL=windowed-audit-v1 ...` is logged at
+  player spawn. **This was added because three earlier playtest sessions unknowingly ran code that was
+  never deployed** — a publish that created no revision, then a stale package — and nothing in the logs
+  said which build was live. The old log format was the only tell.
+- Neutral suites: **Hexagon 415/415**, **HL2RP 298/298**; both Runtime layers compile clean.
+- **NOT yet exercised: the detection path firing.** Zero violations proves no false positives, not that
+  the audit catches anything. The offline tests cover a 2x speed run and an impossible climb, but no
+  guard has been watched to fire live. Tightening `hexagon-movement-horizontal-tolerance` to 1.0 with
+  `slack 0` would make ordinary sprinting exceed the window and exercise detection and kick end to end
+  without building a cheat client.
+- **NOT yet answered: the ground-angle sync check.** `HexMoveModeWalk` reads host-published values but
+  bails when they are zero, and the defaults equal the engine's, so a sync failure stays invisible at
+  stock settings. Needs steep geometry or a deliberately distinctive value.

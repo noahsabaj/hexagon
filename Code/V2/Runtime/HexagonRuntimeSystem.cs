@@ -304,7 +304,16 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			player.HostSpawnSelector = request => SpawnSelector.Select( request );
 			// Seat the movement envelope before the body network-spawns, so the owning client receives
 			// the geometry its walk mode configures from in the same state as its identity.
-			player.MovementEnvelope = HexagonRuntimeOverrides.ResolveMovementEnvelope();
+			var movementEnvelope = HexagonRuntimeOverrides.ResolveMovementEnvelope();
+			player.MovementEnvelope = movementEnvelope;
+			// Announce the model and the resolved values. Without this there is no way to tell from a
+			// server log WHICH build of the movement code is live, and a stale package served a whole
+			// test session against code that had already been replaced.
+			Log.Info(
+				$"HEXAGON_MOVEMENT_MODEL=windowed-audit-v1 window={movementEnvelope.AuditWindowSeconds}s " +
+				$"tolerance={movementEnvelope.HorizontalTolerance} slack={movementEnvelope.InterpolationSlack} " +
+				$"angle={movementEnvelope.GroundAngleDegrees} step={movementEnvelope.StepHeight} " +
+				$"teleport={movementEnvelope.TeleportGuard} kick={movementEnvelope.ViolationKickSeconds}s" );
 			player.HostSetConnection( connection );
 			if ( !playerObject.NetworkSpawn( connection ) )
 			{

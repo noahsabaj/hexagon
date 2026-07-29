@@ -36,11 +36,17 @@ internal static class HexagonRuntimeOverrides
 	public static float MovementHorizontalTolerance { get; set; } =
 		HexMovementEnvelope.DefaultHorizontalTolerance;
 
-	[ConVar( "hexagon-movement-skin-reservoir", ConVarFlags.Server,
-		Help = "Total jitter allowance in units. A reservoir refilled only from unused movement budget, " +
-			"so it absorbs a burst without raising the sustained speed ceiling." )]
-	public static float MovementSkinReservoir { get; set; } =
-		HexMovementEnvelope.DefaultSkinReservoir;
+	[ConVar( "hexagon-movement-audit-window", ConVarFlags.Server,
+		Help = "Seconds of travel each audit covers. Long enough that network interpolation timing is " +
+			"noise; also the detection latency for speed and climb abuse." )]
+	public static float MovementAuditWindow { get; set; } =
+		HexMovementEnvelope.DefaultAuditWindowSeconds;
+
+	[ConVar( "hexagon-movement-interpolation-slack", ConVarFlags.Server,
+		Help = "Endpoint slack in units for the interpolation buffer's delay. Costs detection " +
+			"sensitivity, never a false positive. Raise it if honest play is flagged." )]
+	public static float MovementInterpolationSlack { get; set; } =
+		HexMovementEnvelope.DefaultInterpolationSlack;
 
 	[ConVar( "hexagon-movement-step-height", ConVarFlags.Server,
 		Help = "Discrete step-up height in units. Published to clients as MoveModeWalk.StepUpHeight so " +
@@ -69,7 +75,8 @@ internal static class HexagonRuntimeOverrides
 		var configured = HexMovementEnvelope.Default with
 		{
 			HorizontalTolerance = MovementHorizontalTolerance,
-			SkinReservoir = MovementSkinReservoir,
+			AuditWindowSeconds = MovementAuditWindow,
+			InterpolationSlack = MovementInterpolationSlack,
 			StepHeight = MovementStepHeight,
 			GroundAngleDegrees = MovementGroundAngle,
 			ViolationKickSeconds = MovementKickSeconds

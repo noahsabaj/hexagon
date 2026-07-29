@@ -26,9 +26,7 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 	// limits and the owning client's HexMoveModeWalk are configured from one source; it falls back to the
 	// framework default until the runtime seats it.
 	private HexMovementEnvelope _envelope = HexMovementEnvelope.Default;
-	private MovementState _movementState = MovementState.Unprimed;
-	private double _lastValidatedSeconds;
-	private double _correctionCooldownUntilSeconds;
+	private MovementAudit _audit = MovementAudit.Unprimed;
 	// Sustained out-of-envelope reporting trips a kick. Measured in SECONDS of violation rather than a
 	// count of them, because a count silently changes meaning whenever the tick rate or the correction
 	// cooldown moves; honest lag produces bursts, not seconds of unbroken violation.
@@ -97,8 +95,8 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 	/// the raw client-authored <see cref="GameObject.WorldPosition"/>.
 	/// </summary>
 	public Vector3 AuthoritativeWorldPosition =>
-		Sandbox.Networking.IsHost && GameObject.IsValid() && GameObject.Network.IsProxy && _movementState.Primed
-			? new Vector3( _movementState.LastGood.X, _movementState.LastGood.Y, _movementState.LastGood.Z )
+		Sandbox.Networking.IsHost && GameObject.IsValid() && GameObject.Network.IsProxy && _audit.Primed
+			? new Vector3( _audit.Last.X, _audit.Last.Y, _audit.Last.Z )
 			: (GameObject.IsValid() ? GameObject.WorldPosition : AuthoritativePosition);
 
 	/// <summary>
@@ -320,12 +318,11 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 	{
 		AuthoritativePosition = target;
 		CorrectionTick++;
-		var seated = MovementState.PrimedAt( new MovementSample( target.x, target.y, target.z ), _envelope );
-		_movementState = restock
-			? seated
-			: seated with { SkinBudget = _movementState.SkinBudget, StepBudget = _movementState.StepBudget };
-		_lastValidatedSeconds = MonotonicSeconds();
-		_correctionCooldownUntilSeconds = _lastValidatedSeconds + _envelope.CorrectionCooldownSeconds;
+		// Reopen the audit window at the destination: a deliberate placement is not travel the player
+		// performed, so it must not be charged against their envelope.
+		_audit = MovementAudit.OpenAt(
+			new MovementSample( target.x, target.y, target.z ), MonotonicSeconds() );
+		if ( restock ) _violationSeconds = 0;
 	}
 
 	// --- Update loops ---
@@ -383,75 +380,62 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 		}
 	}
 
-	// Host bounds the owner-reported transform to the controller's movement envelope.
+	/// <summary>
+	/// Audits the owner-reported transform over a window. See <see cref="HexMovementValidator"/> for why
+	/// this cannot be a per-tick check: the host observes an interpolated reconstruction, whose per-tick
+	/// deltas are artifacts of buffer depth and packet timing rather than of player movement.
+	/// </summary>
 	private void HostValidateMovement()
 	{
 		if ( GameObject.Components.Get<PlayerController>() is not { } controller ) return;
-		var now = MonotonicSeconds();
-		if ( now < _correctionCooldownUntilSeconds ) return;
 		var position = GameObject.WorldPosition;
-		var dt = (float)Math.Clamp( now - _lastValidatedSeconds, 0.0, 0.5 );
-		_lastValidatedSeconds = now;
 		var frozen = !HasActiveCharacter || IsDead || IsMovementLocked;
 
-		var (decision, next) = HexMovementValidator.Evaluate(
-			_movementState,
+		var (decision, audit) = HexMovementValidator.Observe(
+			_audit,
 			new MovementSample( position.x, position.y, position.z ),
-			dt, controller.RunSpeed, controller.JumpSpeed, frozen,
-			HostObservesGround( controller, position ), _envelope );
+			MonotonicSeconds(),
+			controller.RunSpeed,
+			controller.JumpSpeed,
+			frozen,
+			_envelope );
 
-		if ( decision.Corrected )
+		var previousAccepted = _audit.Last;
+		_audit = audit;
+
+		if ( decision.Verdict == HexMovementValidator.Verdict.Accepted )
 		{
-			var lastGood = new Vector3(
-				_movementState.LastGood.X, _movementState.LastGood.Y, _movementState.LastGood.Z );
-			// Log every violation, not only the kick: the two-client acceptance run needs a
-			// false-positive rate, and a guard that only speaks when it fires cannot supply one.
+			// Only a completed clean window pays down the violation clock, so a client cannot bank
+			// credit by standing still between abusive windows.
+			if ( decision.WindowClosed )
+				_violationSeconds = Math.Max( 0.0, _violationSeconds - _envelope.AuditWindowSeconds );
+			return;
+		}
+
+		if ( decision.Verdict == HexMovementValidator.Verdict.Teleport )
+		{
+			// A single impossible step. Correcting here is precise and the snap is small, so it stays.
+			var lastGood = new Vector3( previousAccepted.X, previousAccepted.Y, previousAccepted.Z );
 			Log.Info(
-				$"HEXAGON_MOVEMENT_VIOLATION connection={HostConnection?.Id} account={PlatformAccountDisplay} " +
-				$"reported={position} lastGood={lastGood} dt={dt:F3} frozen={frozen} " +
-				$"sustained={_violationSeconds:F2}s" );
+				$"HEXAGON_MOVEMENT_TELEPORT connection={HostConnection?.Id} account={PlatformAccountDisplay} " +
+				$"reported={position} correctedTo={lastGood} frozen={frozen}" );
 			IssueCorrection( lastGood, restock: false );
-			_violationSeconds += Math.Max( dt, 0.0 ) + _envelope.CorrectionCooldownSeconds;
-			if ( _violationSeconds >= _envelope.ViolationKickSeconds ) KickForMovement();
+			_violationSeconds += _envelope.AuditWindowSeconds;
 		}
 		else
 		{
-			_movementState = next;
-			_violationSeconds = Math.Max( 0.0, _violationSeconds - Math.Max( dt, 0.0 ) );
+			// A window's travel exceeded the envelope. Deliberately NOT corrected: snapping a player
+			// back a window's worth of movement is worse than the abuse, and per-tick snapping is what
+			// fed the rubber-banding. Detection escalates to a kick instead.
+			Log.Info(
+				$"HEXAGON_MOVEMENT_VIOLATION connection={HostConnection?.Id} account={PlatformAccountDisplay} " +
+				$"path={decision.HorizontalPath:F1}/{decision.HorizontalBudget:F1} " +
+				$"rise={decision.NetRise:F1}/{decision.RiseBudget:F1} frozen={frozen} " +
+				$"sustained={_violationSeconds:F1}s" );
+			_violationSeconds += _envelope.AuditWindowSeconds;
 		}
-	}
 
-	/// <summary>
-	/// Whether the HOST sees ground beneath the reported position. <see cref="PlayerController.GroundObject"/>
-	/// carries no <c>[Sync]</c>, so a proxy's grounded state is invisible to the host and must be traced
-	/// here — and without it the validator has to grant a jump/step allowance on faith every tick, which
-	/// is what let a client climb indefinitely.
-	/// <para>
-	/// Uses the controller's own <see cref="PlayerController.TraceBody"/> so the host's notion of ground
-	/// is computed by the engine's code with the engine's body dimensions, rather than an approximation
-	/// that drifts from the client's real physics and produces false corrections. A short box is traced
-	/// (small height scale) so a ducked player — whose <c>CurrentHeight</c> the host cannot observe — is
-	/// measured the same as a standing one.
-	/// </para>
-	/// </summary>
-	private static bool HostObservesGround( PlayerController controller, Vector3 position )
-	{
-		try
-		{
-			const float GroundProbeDistance = 8f;
-			return controller.TraceBody(
-				position + (Vector3.Up * 2f),
-				position + (Vector3.Down * GroundProbeDistance),
-				scale: 1f,
-				heightScale: 0.25f ).Hit;
-		}
-		catch ( Exception exception )
-		{
-			// A trace failure must not become a movement grant: fail closed to "no ground", which
-			// denies the step allowance rather than handing one out.
-			Log.Warning( $"Hexagon ground probe failed; treating player as airborne: {exception.Message}" );
-			return false;
-		}
+		if ( _violationSeconds >= _envelope.ViolationKickSeconds ) KickForMovement();
 	}
 
 	// A client that keeps reporting out-of-envelope positions is ignoring corrections or forging its

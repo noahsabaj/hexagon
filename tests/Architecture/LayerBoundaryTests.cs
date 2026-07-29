@@ -102,12 +102,16 @@ public sealed class LayerBoundaryTests
 	public void ClientInputCannotBecomeSpatialAuthority()
 	{
 		var playerBody = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexPlayerBody.cs" ) );
-		// Movement is owner-simulated, but position AUTHORITY stays on the host: it validates
-		// the owner-reported transform against the controller's speed envelope and corrects
-		// only through a host-authored channel. A client can never mint spatial authority.
+		// Movement is owner-simulated, but position AUTHORITY stays on the host. The host cannot see
+		// what the client reported — a proxy's transform is an interpolated reconstruction — so it
+		// AUDITS that transform over a window rather than validating it per tick. Enforcement is split
+		// deliberately: a teleport is corrected immediately through the host-authored channel, while a
+		// window whose travel exceeds the envelope escalates to a KICK rather than a snap-back, because
+		// per-tick correction fed itself and players experienced it as rubber-banding. Either way a
+		// client can never mint spatial authority: gameplay reads the host's accepted position.
 		StringAssert.Contains( playerBody, "Sandbox.Networking.IsHost && GameObject.Network.IsProxy && IsEmbodied" );
 		StringAssert.Contains( playerBody, "HostValidateMovement" );
-		StringAssert.Contains( playerBody, "HexMovementValidator.Evaluate" );
+		StringAssert.Contains( playerBody, "HexMovementValidator.Observe" );
 		// The correction pulse is the only authority write to position, and it is host-authored.
 		StringAssert.Contains( playerBody, "[Sync( SyncFlags.FromHost )] public Vector3 AuthoritativePosition" );
 		StringAssert.Contains( playerBody, "[Sync( SyncFlags.FromHost )] public int CorrectionTick" );
