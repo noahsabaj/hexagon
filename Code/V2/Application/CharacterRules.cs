@@ -24,6 +24,28 @@ public static class CharacterRules
 	/// </summary>
 	public const int MaximumSlots = 64;
 
+	/// <summary>
+	/// How close two character names may be before the second is refused. Operator-tunable
+	/// because the cost of getting it wrong falls on players: folding is deliberately lossy and
+	/// will sometimes judge two genuinely different names too similar.
+	/// <para>
+	/// This governs NEW characters only. What makes a name well-formed at all — no control or
+	/// format characters, one writing system, canonical encoding — is a persistence invariant and
+	/// is deliberately NOT tunable: if it were, tightening the setting would make an existing
+	/// store fail its own startup validation, and with no rename path that is a host that cannot
+	/// boot.
+	/// </para>
+	/// </summary>
+	public enum NameUniqueness
+	{
+		/// <summary>Refuse a name whose confusable skeleton matches one already taken.</summary>
+		Skeleton = 0,
+		/// <summary>Refuse only a plain repeat, ignoring case, accents, spacing and punctuation.</summary>
+		Exact = 1,
+		/// <summary>Allow names to repeat freely.</summary>
+		None = 2
+	}
+
 	public static OperationResult ValidateCreationRequest( CharacterCreationRequest request, IReadOnlySet<string> allowedFields )
 	{
 		var name = NormalizeName( request.Name );

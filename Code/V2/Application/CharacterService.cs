@@ -30,7 +30,7 @@ public sealed class CharacterService
 	/// Deleting a character releases every reservation it holds, so the name becomes available
 	/// again with the character that held it.
 	/// </summary>
-	private const string NameSkeletonReservationNamespace = "hexagon.character-name";
+	private const string NameReservationNamespace = "hexagon.character-name";
 
 	private readonly DomainRepositories _repositories;
 	private readonly CompiledSchema _schema;
@@ -44,6 +44,7 @@ public sealed class CharacterService
 	private readonly PolicyPipeline<CharacterDeletionContext> _deletionPolicy;
 	private readonly PostCommitEventBus<CharacterCreatedEvent> _createdEvents;
 	private readonly PostCommitEventBus<CharacterDeletedEvent> _deletedEvents;
+	private readonly CharacterRules.NameUniqueness _nameUniqueness;
 	private readonly int _inventoryWidth;
 	private readonly int _inventoryHeight;
 
@@ -61,7 +62,8 @@ public sealed class CharacterService
 		PostCommitEventBus<CharacterCreatedEvent>? createdEvents = null,
 		PostCommitEventBus<CharacterDeletedEvent>? deletedEvents = null,
 		int inventoryWidth = 8,
-		int inventoryHeight = 6 )
+		int inventoryHeight = 6,
+		CharacterRules.NameUniqueness nameUniqueness = CharacterRules.NameUniqueness.Skeleton )
 	{
 		_repositories = repositories ?? throw new ArgumentNullException( nameof(repositories) );
 		_schema = schema ?? throw new ArgumentNullException( nameof(schema) );
@@ -80,6 +82,7 @@ public sealed class CharacterService
 		_deletedEvents = deletedEvents ?? new PostCommitEventBus<CharacterDeletedEvent>();
 		if ( inventoryWidth <= 0 ) throw new ArgumentOutOfRangeException( nameof(inventoryWidth) );
 		if ( inventoryHeight <= 0 ) throw new ArgumentOutOfRangeException( nameof(inventoryHeight) );
+		_nameUniqueness = nameUniqueness;
 		_inventoryWidth = inventoryWidth;
 		_inventoryHeight = inventoryHeight;
 	}
@@ -350,17 +353,27 @@ public sealed class CharacterService
 		} );
 
 		var reservationPlans = contributions.SelectMany( contribution => contribution.Reservations ).ToList();
-		var nameSkeleton = CharacterNameSkeleton.Of( character.Name );
-		if ( nameSkeleton.Length == 0 )
-			return OperationResult<CharacterCreationReceipt>.Failure(
-				ErrorCode.InvalidArgument, "Name has no identity-bearing characters." );
-		// Checked here rather than left to the generic reservation loop below so the caller is
-		// told the name is taken instead of being handed an opaque reservation conflict.
-		if ( _repositories.UniqueReservations.Find(
-			DomainKeys.UniqueReservation( NameSkeletonReservationNamespace, nameSkeleton ) ) is not null )
-			return OperationResult<CharacterCreationReceipt>.Failure(
-				ErrorCode.Conflict, "Another character already uses this name or one that reads like it." );
-		reservationPlans.Add( new UniqueReservationPlan( NameSkeletonReservationNamespace, nameSkeleton ) );
+		if ( _nameUniqueness != CharacterRules.NameUniqueness.None )
+		{
+			var nameKey = _nameUniqueness == CharacterRules.NameUniqueness.Skeleton
+				? CharacterNameSkeleton.Of( character.Name )
+				: CharacterNameSkeleton.Exact( character.Name );
+			if ( nameKey.Length == 0 )
+				return OperationResult<CharacterCreationReceipt>.Failure(
+					ErrorCode.InvalidArgument, "Name has no identity-bearing characters." );
+			// Checked here rather than left to the generic reservation loop below so the caller is
+			// told the name is taken instead of being handed an opaque reservation conflict. The
+			// commit is still the real guard: two concurrent creations both pass this read and the
+			// second loses on the reservation Create.
+			if ( _repositories.UniqueReservations.Find(
+				DomainKeys.UniqueReservation( NameReservationNamespace, nameKey ) ) is not null )
+				return OperationResult<CharacterCreationReceipt>.Failure(
+					ErrorCode.Conflict,
+					_nameUniqueness == CharacterRules.NameUniqueness.Skeleton
+						? "Another character already uses this name or one that reads like it."
+						: "Another character already uses this name." );
+			reservationPlans.Add( new UniqueReservationPlan( NameReservationNamespace, nameKey ) );
+		}
 		if ( selectedClassDefinition?.Capacity is int classCapacity )
 		{
 			var capacitySlot = Enumerable.Range( 0, classCapacity )

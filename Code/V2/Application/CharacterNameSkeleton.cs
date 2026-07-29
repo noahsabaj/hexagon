@@ -28,14 +28,25 @@ public static class CharacterNameSkeleton
 	/// The comparison key for a canonical name, or an empty string when the name carries no
 	/// identity-bearing characters at all. Callers must treat empty as a rejected name.
 	/// </summary>
-	public static string Of( string canonicalName )
+	public static string Of( string canonicalName ) => Reduce( canonicalName, foldConfusables: true );
+
+	/// <summary>
+	/// The same reduction WITHOUT confusable folding: it still ignores case, accents, spacing and
+	/// punctuation, so it catches a plain repeat of a name, but "Alice" and "A1ice" stay distinct.
+	/// Used when an operator judges full folding too aggressive. Like <see cref="Of"/> it yields
+	/// only letters and digits, which is what keeps it usable as a reservation key.
+	/// </summary>
+	public static string Exact( string canonicalName ) => Reduce( canonicalName, foldConfusables: false );
+
+	private static string Reduce( string canonicalName, bool foldConfusables )
 	{
 		if ( string.IsNullOrEmpty( canonicalName ) ) return string.Empty;
 
 		// UTS #39: decompose, replace every confusable with its prototype, recompose to NFD.
 		// Case folding comes last, because the table's prototypes are case-sensitive - it maps
 		// "I" onto "l", which lowercasing first would have already destroyed.
-		var mapped = MapConfusables( canonicalName.Normalize( NormalizationForm.FormD ) )
+		var decomposed = canonicalName.Normalize( NormalizationForm.FormD );
+		var mapped = (foldConfusables ? MapConfusables( decomposed ) : decomposed)
 			.Normalize( NormalizationForm.FormD );
 
 		var builder = new StringBuilder( mapped.Length );
