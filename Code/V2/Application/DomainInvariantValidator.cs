@@ -639,6 +639,16 @@ public sealed class DomainInvariantValidator : IIncrementalPersistenceInvariantS
 		{
 			if ( shouldValidatePayload is not null &&
 				!shouldValidatePayload( DomainCollections.Characters, character.Key ) ) continue;
+			ValidateIdentityText(
+				character.Value.Name,
+				CharacterRules.NormalizeName,
+				$"character/{character.Key}/name",
+				issues );
+			ValidateIdentityText(
+				character.Value.Description,
+				CharacterRules.NormalizeDescription,
+				$"character/{character.Key}/description",
+				issues );
 			ValidatePayload(
 				character.Value.SchemaState,
 				_persistenceProfile.CharacterState,
@@ -706,6 +716,33 @@ public sealed class DomainInvariantValidator : IIncrementalPersistenceInvariantS
 			}
 			ValidatePayload( entity.Value.State, expected, $"scene-entity/{entity.Key}/state", issues );
 		}
+	}
+
+	/// <summary>
+	/// A persisted identity string must already BE the canonical form its rules produce, not
+	/// merely pass them. Asserting equality rather than validity is what closes the path where a
+	/// writer validates one string and stores another, and it holds for every writer rather than
+	/// just character creation. Messages never quote the offending value, so a name cannot forge
+	/// a log line on its way out through the startup report.
+	/// </summary>
+	private static void ValidateIdentityText(
+		string value,
+		Func<string, OperationResult<string>> normalize,
+		string path,
+		ICollection<DomainInvariantIssue> issues )
+	{
+		var canonical = normalize( value );
+		if ( canonical.Failed )
+		{
+			issues.Add( new DomainInvariantIssue( canonical.Error!.Code, path, canonical.Error.Message ) );
+			return;
+		}
+
+		if ( !string.Equals( canonical.Value, value, StringComparison.Ordinal ) )
+			issues.Add( new DomainInvariantIssue(
+				ErrorCode.InvalidArgument,
+				path,
+				"Stored text is not the canonical form its own rules produce." ) );
 	}
 
 	private void ValidateReferenceTargets(

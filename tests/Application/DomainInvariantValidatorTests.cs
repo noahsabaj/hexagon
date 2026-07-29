@@ -55,6 +55,46 @@ public sealed class DomainInvariantValidatorTests
 	}
 
 	[TestMethod]
+	public async Task StoredCharacterIdentityTextThatIsNotCanonicalIsAnInvariantViolation()
+	{
+		// Seeding bypasses CharacterService entirely, standing in for any writer that skips the
+		// creation boundary. In production the validator is also the provider's invariant set, so
+		// this same check rejects the commit; here it is the startup sweep that catches it.
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var account = new AccountId(9100);
+		var spoofed = ApplicationServiceTestEnvironment.Character(account, 0) with
+		{
+			Name = "\u0410lice",
+			Description = "A seeded description with a\u0007 control character."
+		};
+		await environment.SeedAsync(unitOfWork =>
+		{
+			unitOfWork.Create(environment.Repositories.Characters, DomainKeys.Character(spoofed.Id), spoofed);
+			unitOfWork.Create(
+				environment.Repositories.CharacterLifecycleGuards,
+				DomainKeys.CharacterLifecycleGuard(spoofed.Id),
+				new CharacterLifecycleGuardRecord { CharacterId = spoofed.Id, ReferenceRevision = 0 });
+			unitOfWork.Create(
+				environment.Repositories.CharacterSlots,
+				DomainKeys.CharacterSlot(account, 0),
+				new CharacterSlotRecord { AccountId = account, Slot = 0, CharacterId = spoofed.Id });
+		});
+
+		var report = new DomainInvariantValidator(
+			environment.Repositories,
+			environment.Schema,
+			new SchemaItemShapeCatalog(environment.Schema, environment.Repositories),
+			environment.PersistenceProfile).Validate();
+
+		Assert.IsFalse(report.IsValid);
+		var key = DomainKeys.Character(spoofed.Id);
+		Assert.IsTrue(report.Issues.Any(issue => issue.Path == $"character/{key}/name"));
+		Assert.IsTrue(report.Issues.Any(issue => issue.Path == $"character/{key}/description"));
+		// The report must never quote the offending value, or a stored name could forge a log line.
+		Assert.IsFalse(report.Issues.Any(issue => issue.Message.Contains("\u0410lice")));
+	}
+
+	[TestMethod]
 	public async Task EmptyStoreStillRejectsIncompleteOrUnregisteredPersistenceProfile()
 	{
 		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();

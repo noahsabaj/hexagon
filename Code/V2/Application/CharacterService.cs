@@ -24,6 +24,14 @@ public sealed class CharacterService
 	private const string BagInventoryRole = InventoryRoles.Bag;
 	private const string ClassCapacityReservationNamespace = "hexagon.class-capacity";
 
+	/// <summary>
+	/// Reserves the look-alike skeleton of a character name rather than the name itself, so a
+	/// name that merely renders like an existing one is refused along with an exact duplicate.
+	/// Deleting a character releases every reservation it holds, so the name becomes available
+	/// again with the character that held it.
+	/// </summary>
+	private const string NameSkeletonReservationNamespace = "hexagon.character-name";
+
 	private readonly DomainRepositories _repositories;
 	private readonly CompiledSchema _schema;
 	private readonly ICharacterModelCatalog _models;
@@ -250,10 +258,12 @@ public sealed class CharacterService
 		if ( !_models.IsAllowed( request.Model, request.Faction, selectedClass ) )
 			return OperationResult<CharacterCreationReceipt>.Failure( ErrorCode.PolicyDenied, "Model is not allowed for the selected faction and class." );
 
+		// ValidateCreationRequest above already proved both canonicalize, so persisting the
+		// same canonical form is what keeps the validated string and the stored string equal.
 		var normalizedRequest = request with
 		{
-			Name = request.Name.Trim(),
-			Description = request.Description.Trim(),
+			Name = CharacterRules.NormalizeName( request.Name ).Value,
+			Description = CharacterRules.NormalizeDescription( request.Description ).Value,
 			Class = selectedClass,
 			Fields = new Dictionary<string, CreationValue>( request.Fields, StringComparer.Ordinal )
 		};
@@ -340,6 +350,17 @@ public sealed class CharacterService
 		} );
 
 		var reservationPlans = contributions.SelectMany( contribution => contribution.Reservations ).ToList();
+		var nameSkeleton = CharacterNameSkeleton.Of( character.Name );
+		if ( nameSkeleton.Length == 0 )
+			return OperationResult<CharacterCreationReceipt>.Failure(
+				ErrorCode.InvalidArgument, "Name has no identity-bearing characters." );
+		// Checked here rather than left to the generic reservation loop below so the caller is
+		// told the name is taken instead of being handed an opaque reservation conflict.
+		if ( _repositories.UniqueReservations.Find(
+			DomainKeys.UniqueReservation( NameSkeletonReservationNamespace, nameSkeleton ) ) is not null )
+			return OperationResult<CharacterCreationReceipt>.Failure(
+				ErrorCode.Conflict, "Another character already uses this name or one that reads like it." );
+		reservationPlans.Add( new UniqueReservationPlan( NameSkeletonReservationNamespace, nameSkeleton ) );
 		if ( selectedClassDefinition?.Capacity is int classCapacity )
 		{
 			var capacitySlot = Enumerable.Range( 0, classCapacity )

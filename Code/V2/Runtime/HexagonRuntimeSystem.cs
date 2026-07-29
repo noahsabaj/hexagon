@@ -612,8 +612,20 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			descriptor.PersistenceInvariants ).Validate();
 		if ( !invariants.IsValid )
 		{
+			// Report the whole sweep, not just where it stopped: a store with fifty bad rows is
+			// fifty restarts if each boot names one. Issue messages never quote persisted values,
+			// so no stored string can forge a line here.
+			const int reportedIssueLimit = 25;
+			foreach ( var issue in invariants.Issues.Take( reportedIssueLimit ) )
+				Log.Error( $"HEXAGON_INVARIANT_FAILED path='{issue.Path}' code={issue.Code} detail={issue.Message}" );
+			if ( invariants.Issues.Count > reportedIssueLimit )
+				Log.Error(
+					$"HEXAGON_INVARIANT_FAILED reported={reportedIssueLimit} " +
+					$"suppressed={invariants.Issues.Count - reportedIssueLimit} total={invariants.Issues.Count}" );
 			var first = invariants.Issues[0];
-			FailHost( $"Persistence invariant failed at '{first.Path}': {first.Message}" );
+			FailHost(
+				$"Persistence invariant failed at '{first.Path}': {first.Message} " +
+				$"({invariants.Issues.Count} issue(s) total)." );
 			_ = await ShutdownResourcesOnceAsync();
 			return;
 		}
