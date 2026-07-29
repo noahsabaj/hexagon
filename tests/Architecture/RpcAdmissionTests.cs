@@ -96,11 +96,27 @@ public sealed class RpcAdmissionTests
 			.SelectMany( list => list.Attributes )
 			.Any( attribute => attribute.Name.ToString() is "Rpc.Host" or "Host" );
 
+	/// <summary>
+	/// Matches real invocations rather than source text. A substring scan over the body reads interior
+	/// trivia too, so a comment mentioning the admission call was enough to satisfy the guard — which
+	/// made a check on unmetered RPC entry points satisfiable by writing a comment.
+	/// </summary>
 	private static bool ChargesAdmission( MethodDeclarationSyntax method )
 	{
-		var body = method.Body?.ToString() ?? method.ExpressionBody?.ToString() ?? string.Empty;
-		return body.Contains( "Dispatch(", StringComparison.Ordinal ) ||
-			body.Contains( "TryBeginCommand", StringComparison.Ordinal );
+		SyntaxNode? body = method.Body;
+		body ??= method.ExpressionBody;
+		if ( body is null ) return false;
+
+		return body.DescendantNodes()
+			.OfType<InvocationExpressionSyntax>()
+			.Select( invocation => invocation.Expression switch
+			{
+				MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+				IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+				GenericNameSyntax generic => generic.Identifier.ValueText,
+				_ => string.Empty
+			} )
+			.Any( name => name is "Dispatch" or "TryBeginCommand" );
 	}
 
 	private static string[] HostRpcSourceFiles()

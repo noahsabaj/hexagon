@@ -302,6 +302,9 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			playerObject.WorldTransform = spawn.Value;
 			var player = playerObject.AddComponent<HexPlayerBody>();
 			player.HostSpawnSelector = request => SpawnSelector.Select( request );
+			// Seat the movement envelope before the body network-spawns, so the owning client receives
+			// the geometry its walk mode configures from in the same state as its identity.
+			player.MovementEnvelope = HexagonRuntimeOverrides.ResolveMovementEnvelope();
 			player.HostSetConnection( connection );
 			if ( !playerObject.NetworkSpawn( connection ) )
 			{

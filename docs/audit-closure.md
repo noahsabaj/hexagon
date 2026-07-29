@@ -434,3 +434,93 @@ no double-writer, no data loss by deferral, genuine corruption still fatal when 
 - NOT yet exercised: the validator envelope and host-authoritative reads against a real *remote*
   proxy — that lands in the two-client acceptance run, where the validator constants are tuned and
   the kick threshold confirmed against live latency.
+
+## Register 2026-07-29 (round 3) — the movement envelope was a rate, not a bound
+
+Round 3 re-examined the round-1 movement remediation above rather than sweeping for new defects, on
+the principle that a passing source-text pin can be vacuous. It found that the tightened validator
+closed the wrong half of the problem, and that three artifacts asserted protections the code did not
+provide.
+
+**M1 (High) — `HexMovementValidator` was memoryless.** `Evaluate` clamped each per-tick delta and kept
+no state, so every allowance was re-granted every tick and became a rate a client could sustain
+forever. Measured by compiling the real source into a probe at engine ground truth (`RunSpeed=320`,
+`JumpSpeed=300`, `FixedUpdateFrequency=50`, all read from `sbox-public`):
+
+| Motion | Sustained, zero corrections |
+|---|---|
+| Horizontal | 600 u/s vs 320 legit (1.88x) |
+| ...of which `PositionSkin` alone | 200 u/s, independent of `dt` |
+| Vertical climb (6 u/tick horizontal) | 1450 u/s, 78-degree ascent |
+| Vertical climb, zero horizontal | 650 u/s |
+| Frozen (dead / locked) | 100 u/s |
+
+**Annotation to the round-1 register above.** Its residual claim — "≈1.5x horizontal; vertical bounded
+to jump/run" and "no straight-up flight" — was wrong on both counts, and is left in place per the
+convention that historical entries are annotated rather than rewritten. The measured figures are
+1.88x horizontal and 650 u/s of sustained straight-up flight. The claim was not tested because every
+validator test asserted a single tick, which structurally cannot express a rate.
+
+**The guard that blessed the exploit.** `RejectsStraightUpFlightWithoutHorizontalMotion` rejected one
+30-unit tick and was read as proving flight impossible. Meanwhile the *passing*
+`AllowsAStepUpWhileMovingHorizontally` blessed `(6, 0, 18)` — repeated every tick that is 900 u/s,
+180 m of climb in ten seconds. The test suite did not merely miss the defect; it certified its
+vector.
+
+**Root cause under the root cause.** The host validated step-ups against a hand-picked `StepRise=16`
+while clients actually stepped by `MoveModeWalk.StepUpHeight`, which the engine defaults to **18**,
+and the host modelled no ground-angle limit at all. Two numbers that must agree, declared
+independently in two repositories, disagreeing.
+
+Remediation:
+- **Stateful validator.** `Evaluate` now takes and returns `MovementState`. Horizontal is bounded as
+  a rate over any window, with the jitter reservoir refilled only from unused budget so a burst is
+  absorbed without raising the sustained ceiling; it explicitly cannot fund vertical rise, because it
+  refills from unused *horizontal* budget and standing still would otherwise pay for a climb.
+  Vertical is integrated: rise is paid from an inferred vertical speed that only a host-observed
+  ground contact re-arms and gravity decays each airborne tick. A grounded client's rise is bounded
+  by horizontal travel through the ground angle.
+- **Host ground truth.** `HexPlayerBody.HostObservesGround` uses the controller's own public
+  `PlayerController.TraceBody`, so the host's notion of ground is computed by the engine's code with
+  the engine's body dimensions rather than an approximation that drifts from client physics. A short
+  probe box is traced so a ducked player — whose `CurrentHeight` the host cannot observe — measures
+  the same as a standing one. A trace failure fails closed to "airborne", denying the allowance.
+- **One envelope, both ends.** `HexMovementEnvelope` is operator-tunable (`hexagon-movement-*`
+  ConVars) and bounds-checked, falling back to the framework default when a value is out of range.
+  The geometric values are published to the owner over `[Sync(FromHost)]` and applied by
+  `HexMoveModeWalk : MoveModeWalk`, so client physics and host validation configure from one source.
+  Composition, not subclassing: `PlayerController` is `sealed`, `MoveModeWalk` is not.
+- **Enforcement in seconds.** The violation counter is now sustained-violation *seconds* rather than a
+  tick count, which silently changed meaning whenever the tick rate or correction cooldown moved.
+  Every violation is logged (`HEXAGON_MOVEMENT_VIOLATION`), not only the kick, so the two-client run
+  can produce a false-positive rate without shipping a degraded posture.
+- **M2 (Low) — `RpcAdmissionTests.ChargesAdmission`** substring-matched the method body, which retains
+  interior trivia, so a comment mentioning the admission call satisfied the guard. It now matches
+  `InvocationExpressionSyntax` nodes.
+
+**Guarding the class, not the instance.** `tests/Foundation/SustainedEnvelopeHarness.cs` drives any
+envelope or budget rule over many ticks and reports accumulated work, so a per-tick allowance that is
+secretly a rate fails on arrival. It is pointed at the movement validator and at the command token
+bucket, and `TheSecurityDocumentPublishesTheBudgetThatIsActuallyEnforced` parses the published numbers
+out of `docs/security.md` and asserts them against the enforcing constants — making the prose a claim
+the suite owns rather than a description that can drift.
+
+The command bucket was audited with the same harness and found sound: `16`/`8`/`16` match the document
+exactly, and it already integrated over time correctly. No change was needed there.
+
+### Evidence boundary for this register
+
+- Every sustained guard was **watched to fail before it passed**: six failures against the pre-fix
+  validator at 4.7x, 87.5x, 62.5x, and 1.5x their bounds, with the greedy adversary extracting 14,500
+  units of climb in ten seconds. The assertions did not change when the validator gained state; only
+  the driver did.
+- Neutral suites: **Hexagon 423/423** (up from 412: five sustained movement guards, four command-budget
+  guards, and two envelope/priming cases), **HL2RP 298/298**.
+- Both Runtime layers compiled directly — `dotnet build Code/hexagon.csproj` and `Code/hl2rp.csproj`,
+  0 warnings, 0 errors — because the neutral suite structurally cannot compile the Sandbox-bound
+  layer where `HexPlayerBody`, `HexMoveModeWalk`, and the ground probe live.
+- **NOT yet exercised:** `TraceBody` called by the host on a *client-owned proxy*. It was verified by
+  source reading to depend only on `BodyRadius`, `CurrentHeight`, `GameObject`, and `Tags` — all
+  present on a proxy — and to run `Scene.Trace` against the host's physics world, but a proxy requires
+  a second authenticated client and lands in the two-client acceptance run. The envelope constants
+  and the kick threshold are still tuned there.
