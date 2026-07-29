@@ -15,4 +15,5 @@ Runtime/HexagonRuntimeOverrides.cs | ConVar declarations bound to the engine con
 Runtime/HexagonRuntimeSystem.cs | GameObjectSystem composition root binding scene, network, and persistence lifecycles.
 Runtime/PersistentSceneEntity.cs | Sandbox Component identity anchor for persisted scene entities.
 Runtime/RpcAuthority.cs | RpcActor and RpcGuard bind Connection, Rpc.Caller, and HexPlayerBody.
+Runtime/SpawnSelection.cs | Queries Sandbox SpawnPoint components and returns a Transform; the rule deciding which point a slot gets is extracted to the compiled SpawnCandidateSelection seam.
 Infrastructure/RuntimeContracts.cs | Host transport and application contracts reference RpcActor and engine Connection types.

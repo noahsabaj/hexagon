@@ -164,6 +164,46 @@ public sealed class ClientSessionRetrySchedule
 		value > long.MaxValue / 2 ? long.MaxValue : value * 2;
 }
 
+/// <summary>
+/// Bounds the pre-authority session handshake. Every other client-to-host entry point is charged
+/// against the per-connection command budget before it does any work, but the handshake runs
+/// before a command scope exists and so has no request ID to charge. Without this it is the one
+/// unmetered entry point in the system, and the engine applies no rate limiting of its own.
+/// <para>
+/// The cap is generous against <see cref="ClientSessionRetrySchedule"/>, whose backoff doubles
+/// from 250ms to a 2s ceiling: an honest client that keeps missing the host for a full minute
+/// stays well inside it, while an unbounded loop is cut off.
+/// </para>
+/// </summary>
+public sealed class ClientSessionHandshakeAdmissionController
+{
+	public const int MaximumAttempts = 64;
+
+	private readonly object _sync = new();
+	private int _attempts;
+	private bool _disconnected;
+
+	public int AttemptCount
+	{
+		get { lock ( _sync ) return _attempts; }
+	}
+
+	public bool TryBeginHandshake()
+	{
+		lock ( _sync )
+		{
+			if ( _disconnected || _attempts >= MaximumAttempts ) return false;
+			_attempts++;
+			return true;
+		}
+	}
+
+	public void Disconnect()
+	{
+		lock ( _sync ) _disconnected = true;
+	}
+}
+
 public enum ApplicationConnectionState
 {
 	WaitingForConditions = 0,

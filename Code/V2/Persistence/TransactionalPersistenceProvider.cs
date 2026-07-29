@@ -150,12 +150,11 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 				new PersistenceError( PersistenceErrorCode.NotInitialized, "Persistence provider is not initialized." ) );
 		}
 
-		await _commitGate.WaitAsync( cancellationToken );
+		using var gate = await EnterCommitGateAsync( cancellationToken );
 		if ( _health.Status == PersistenceHealthStatus.Fatal )
 		{
 			var error = PersistenceResult<long>.Failure(
 				new PersistenceError( PersistenceErrorCode.DurabilityFailed, _health.Detail ?? "Persistence provider is fatal." ) );
-			_commitGate.Release();
 			return error;
 		}
 		if ( _health.CommitMetadataRepairPending )
@@ -166,7 +165,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			{
 				var exception = repair.Exception!;
 				_health = CreateCommitMetadataRepairFailureHealth( exception );
-				_commitGate.Release();
 				return PersistenceResult<long>.Failure( new PersistenceError(
 					PersistenceErrorCode.DurabilityFailed,
 					_health.Detail!,
@@ -180,7 +178,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		{
 			var exception = snapshotCapture.Exception!;
 			_health = CreateCheckpointFailureHealth( exception, final: false );
-			_commitGate.Release();
 			return PersistenceResult<long>.Failure(
 				new PersistenceError( PersistenceErrorCode.SerializationFailed, _health.Detail!, Exception: exception ) );
 		}
@@ -191,7 +188,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		{
 			var exception = persistence.Exception!;
 			_health = CreateCheckpointFailureHealth( exception, final: false );
-			_commitGate.Release();
 			if ( exception is OperationCanceledException && cancellationToken.IsCancellationRequested )
 			{
 				throw new OperationCanceledException( "Checkpoint was canceled.", exception, cancellationToken );
@@ -215,7 +211,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			_health.RecoveredFromCheckpointFallback,
 			checkpointOutcome.Detail,
 			DateTimeOffset.UtcNow );
-		_commitGate.Release();
 		return PersistenceResult<long>.Success( snapshot.Sequence );
 	}
 
@@ -376,6 +371,30 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 
 	public async ValueTask DisposeAsync() => _ = await ShutdownAsync( CancellationToken.None );
 
+	/// <summary>
+	/// Scoped ownership of the commit gate. The semaphore is never released by hand: a leaked
+	/// permit deadlocks every future commit and checkpoint permanently, with no way back short of
+	/// a restart, so the release is attached to the scope rather than repeated on each exit path.
+	/// </summary>
+	private readonly struct CommitGateScope : IDisposable
+	{
+		private readonly SemaphoreSlim _gate;
+
+		internal CommitGateScope( SemaphoreSlim gate ) => _gate = gate;
+
+		public void Dispose() => _gate.Release();
+	}
+
+	/// <summary>
+	/// Takes the commit gate. The gate is NOT reentrant, so work that itself takes it — a
+	/// checkpoint, for one — must run after the scope has ended, never inside it.
+	/// </summary>
+	private async ValueTask<CommitGateScope> EnterCommitGateAsync( CancellationToken cancellationToken )
+	{
+		await _commitGate.WaitAsync( cancellationToken );
+		return new CommitGateScope( _commitGate );
+	}
+
 	private protected abstract ValueTask<RecoveryState> RecoverCoreAsync( CancellationToken cancellationToken );
 	private protected abstract ValueTask<CommitPersistenceOutcome> PersistCommitCoreAsync(
 		WalCommitBatch batch,
@@ -475,12 +494,58 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 					_health.Detail ?? "Persistence provider is not accepting commits." ) );
 		}
 
-		await _commitGate.WaitAsync( cancellationToken );
+		// A checkpoint takes the same non-reentrant gate, so the gated work is a separate scope
+		// that has ended before any checkpoint below runs. Holding the gate across one would
+		// deadlock the provider outright.
+		var gated = await CommitUnderGateAsync(
+			stagedChanges, dependencies, preconditions, openedCompactionGeneration, cancellationToken );
+		if ( gated.ShouldCheckpoint )
+		{
+			var scheduler = BackgroundCheckpointScheduler;
+			if ( scheduler is null )
+			{
+				_ = await CheckpointAsync( CancellationToken.None );
+			}
+			else if ( Interlocked.CompareExchange( ref _backgroundCheckpointScheduled, 1, 0 ) == 0 )
+			{
+				// The committing caller must not pay for checkpoint I/O. Exactly one background
+				// checkpoint may be in flight; a scheduler refusal (or throw) re-arms the latch
+				// so a later threshold-crossing commit retries. Shutdown still takes its own
+				// final checkpoint, so a refused automatic checkpoint is never data loss.
+				var scheduled = AsyncOperation.CaptureSynchronous( () => scheduler( RunScheduledCheckpointAsync ) );
+				if ( !scheduled.Succeeded || !scheduled.Value )
+					Interlocked.Exchange( ref _backgroundCheckpointScheduled, 0 );
+			}
+		}
+
+		return gated.Result;
+	}
+
+	/// <summary>
+	/// A commit result plus whether a checkpoint threshold was crossed while the gate was held.
+	/// The implicit conversion is what lets every failure path inside the gate keep returning its
+	/// result unchanged instead of restating it.
+	/// </summary>
+	private readonly record struct GatedCommit(
+		PersistenceResult<CommitReceipt> Result,
+		bool ShouldCheckpoint )
+	{
+		public static implicit operator GatedCommit( PersistenceResult<CommitReceipt> result ) =>
+			new( result, false );
+	}
+
+	private async ValueTask<GatedCommit> CommitUnderGateAsync(
+		IReadOnlyCollection<StagedChange> stagedChanges,
+		IReadOnlyCollection<RevisionDependency> dependencies,
+		IReadOnlyCollection<ICommitPrecondition> preconditions,
+		long openedCompactionGeneration,
+		CancellationToken cancellationToken )
+	{
+		using var gate = await EnterCommitGateAsync( cancellationToken );
 		if ( !_accepting || _health.Status == PersistenceHealthStatus.Fatal )
 		{
 			var error = PersistenceResult<CommitReceipt>.Failure(
 				new PersistenceError( PersistenceErrorCode.DurabilityFailed, _health.Detail ?? "Persistence provider is fatal." ) );
-			_commitGate.Release();
 			return error;
 		}
 
@@ -492,7 +557,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			{
 				var exception = repair.Exception!;
 				_health = CreateCommitMetadataRepairFailureHealth( exception );
-				_commitGate.Release();
 				return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
 					PersistenceErrorCode.DurabilityFailed,
 					_health.Detail!,
@@ -502,7 +566,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		}
 		if ( openedCompactionGeneration != _compactionGeneration )
 		{
-			_commitGate.Release();
 			return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
 				PersistenceErrorCode.StaleTransaction,
 				$"Unit of work opened under compaction generation {openedCompactionGeneration}; current generation is {_compactionGeneration}." ) );
@@ -511,7 +574,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		var validationError = ValidateExpectedRevisions( stagedChanges, dependencies );
 		if ( validationError is not null )
 		{
-			_commitGate.Release();
 			return PersistenceResult<CommitReceipt>.Failure( validationError );
 		}
 
@@ -529,7 +591,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		if ( !preparation.Succeeded )
 		{
 			var exception = preparation.Exception!;
-			_commitGate.Release();
 			return PersistenceResult<CommitReceipt>.Failure(
 				new PersistenceError( PersistenceErrorCode.SerializationFailed, exception.Message, Exception: exception ) );
 		}
@@ -541,7 +602,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			_compactionGeneration ) );
 		if ( !candidateCapture.Succeeded )
 		{
-			_commitGate.Release();
 			return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
 				PersistenceErrorCode.InvariantViolation,
 				$"Candidate state could not be validated: {candidateCapture.Exception!.Message}",
@@ -558,7 +618,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			}
 			catch ( Exception exception )
 			{
-				_commitGate.Release();
 				return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
 					PersistenceErrorCode.InvariantViolation,
 					$"Commit precondition '{precondition.GetType().Name}' failed closed: {exception.Message}",
@@ -566,7 +625,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			}
 			if ( issue is not null )
 			{
-				_commitGate.Release();
 				return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
 					PersistenceErrorCode.RevisionConflict,
 					$"Commit precondition failed at '{issue.Path}': {issue.Message}" ) );
@@ -580,7 +638,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 				{
 					CompactionGeneration = _compactionGeneration
 				} );
-			_commitGate.Release();
 			return empty;
 		}
 
@@ -604,7 +661,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		}
 		catch ( Exception exception )
 		{
-			_commitGate.Release();
 			return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
 				PersistenceErrorCode.InvariantViolation,
 				$"Persistence invariant set failed closed: {exception.Message}",
@@ -613,7 +669,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		if ( invariantIssues.Count > 0 )
 		{
 			var issue = invariantIssues[0];
-			_commitGate.Release();
 			return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
 				PersistenceErrorCode.InvariantViolation,
 				$"Persistence invariant '{issue.Code}' failed at '{issue.Path}': {issue.Message}" ) );
@@ -627,14 +682,12 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			var exception = durability.Exception!;
 			if ( exception is PersistenceStorageLimitException )
 			{
-				_commitGate.Release();
 				return PersistenceResult<CommitReceipt>.Failure( new PersistenceError(
 					PersistenceErrorCode.StorageLimitExceeded, exception.Message, Exception: exception ) );
 			}
 			_accepting = false;
 			_health = CreateFatalCommitHealth( exception );
 			SetProviderState( PersistenceProviderState.Faulted );
-			_commitGate.Release();
 			return PersistenceResult<CommitReceipt>.Failure(
 				new PersistenceError( PersistenceErrorCode.DurabilityFailed, _health.Detail!, Exception: exception ) );
 		}
@@ -648,7 +701,6 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 			_accepting = false;
 			_health = CreateFatalCommitHealth( exception );
 			SetProviderState( PersistenceProviderState.Faulted );
-			_commitGate.Release();
 			return PersistenceResult<CommitReceipt>.Failure(
 				new PersistenceError( PersistenceErrorCode.DurabilityFailed, _health.Detail!, Exception: exception ) );
 		}
@@ -667,28 +719,7 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		var shouldCheckpoint = !durabilityOutcome.MetadataRepairPending && (ShouldCheckpointForStoragePressure ||
 			(AutomaticCheckpointCommitInterval > 0
 			&& _sequence - _checkpointSequence >= AutomaticCheckpointCommitInterval));
-		_commitGate.Release();
-
-		if ( shouldCheckpoint )
-		{
-			var scheduler = BackgroundCheckpointScheduler;
-			if ( scheduler is null )
-			{
-				_ = await CheckpointAsync( CancellationToken.None );
-			}
-			else if ( Interlocked.CompareExchange( ref _backgroundCheckpointScheduled, 1, 0 ) == 0 )
-			{
-				// The committing caller must not pay for checkpoint I/O. Exactly one background
-				// checkpoint may be in flight; a scheduler refusal (or throw) re-arms the latch
-				// so a later threshold-crossing commit retries. Shutdown still takes its own
-				// final checkpoint, so a refused automatic checkpoint is never data loss.
-				var scheduled = AsyncOperation.CaptureSynchronous( () => scheduler( RunScheduledCheckpointAsync ) );
-				if ( !scheduled.Succeeded || !scheduled.Value )
-					Interlocked.Exchange( ref _backgroundCheckpointScheduled, 0 );
-			}
-		}
-
-		return PersistenceResult<CommitReceipt>.Success( receipt );
+		return new GatedCommit( PersistenceResult<CommitReceipt>.Success( receipt ), shouldCheckpoint );
 	}
 
 	private async Task RunScheduledCheckpointAsync()

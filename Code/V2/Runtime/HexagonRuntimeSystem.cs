@@ -52,6 +52,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 	private bool _disposeRequested;
 	private bool _hostLifetimeDisposed;
 	private string _persistenceRoot = string.Empty;
+	private IHexSpawnSelector? _spawnSelector;
 
 	public HexagonRuntimeSystem( Scene scene ) : base( scene )
 	{
@@ -66,6 +67,15 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 	public IHexClientController? ClientController => _clientController;
 	public Task<OperationResult>? HostShutdownCompletion => _hostShutdown ?? _resourceShutdown;
 	internal SandboxClientCommandTransport? ClientTransport { get; private set; }
+
+	/// <summary>
+	/// The single answer to where a player belongs, used by both connect placement and every
+	/// later embodiment. Defaults to <see cref="SceneTagSpawnSelector"/>; a game replaces it
+	/// through <c>HexSchemaRuntimeDescriptor.CreateSpawnSelector</c>. Resolved lazily because
+	/// connections can arrive before host initialization has run.
+	/// </summary>
+	internal IHexSpawnSelector SpawnSelector =>
+		_spawnSelector ??= new SceneTagSpawnSelector( _runtimeScene, _spawnSlots );
 
 	void ISceneStartup.OnHostInitialize()
 	{
@@ -91,6 +101,20 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		{
 			FailHost( descriptorResult.Error!.Message );
 			return;
+		}
+
+		if ( descriptorResult.Value.CreateSpawnSelector is { } createSelector )
+		{
+			try
+			{
+				_spawnSelector = createSelector( _runtimeScene )
+					?? throw new InvalidOperationException( "The spawn selector factory returned null." );
+			}
+			catch ( Exception exception )
+			{
+				FailHost( $"Spawn selector construction failed: {exception.Message}" );
+				return;
+			}
 		}
 
 		var compiled = SchemaCompiler.Compile( descriptorResult.Value.Schema );
@@ -258,45 +282,26 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			connection.CanDestroyObjects = false;
 		}
 		if ( _sessions.ContainsKey( connection.Id ) ) return;
-		// Mounted map packages ship their own SpawnPoints (flatgrass carries a whole
-		// roof-top grid of them, and map spawns can carry the generic "spawn" tag too);
-		// schema-authored spawns use the namespaced "hexagon_spawn" tag and must win or
-		// players are distributed onto arbitrary map geometry.
-		var allSpawns = _runtimeScene.GetAll<SpawnPoint>()
-			.Where( candidate => candidate.Active )
-			.ToArray();
-		var schemaSpawns = allSpawns
-			.Where( candidate => candidate.GameObject.Tags.Has( "hexagon_spawn" ) )
-			.ToArray();
-		var spawns = (schemaSpawns.Length > 0 ? schemaSpawns : allSpawns)
-			.OrderBy( candidate => candidate.GameObject.Id )
-			.ToArray();
-		if ( spawns.Length == 0 )
+		// One placement rule answers both this connect and every later embodiment; the game may
+		// replace it wholesale. Resolving it here also fails the spawn early, before an object
+		// exists, exactly as the previous inline spawn-point scan did.
+		var spawn = SpawnSelector.Select( new HexSpawnRequest( connection.Id, null, IsRespawn: false ) );
+		if ( spawn.Failed )
 		{
-			Log.Error( $"HEXAGON_PLAYER_SPAWN_FAILED connection={connection.Id} reason=no_spawn_point" );
+			Log.Error(
+				$"HEXAGON_PLAYER_SPAWN_FAILED connection={connection.Id} reason=no_spawn_point " +
+				$"detail={spawn.Error!.Message}" );
 			return;
 		}
 
-		var slot = _spawnSlots.Acquire( connection.Id );
 		GameObject? playerObject = null;
 		RuntimePlayerSession<HexPlayerBody>? newSession = null;
 		try
 		{
-			var placement = SpawnSlotAllocator.Describe( slot, spawns.Length );
-			var spawn = spawns[placement.SpawnPointIndex];
-			var position = spawn.WorldPosition;
-			if ( placement.Ring > 0 )
-			{
-				var localOffset = new Vector3(
-					(float)(Math.Cos( placement.AngleRadians ) * placement.Radius),
-					(float)(Math.Sin( placement.AngleRadians ) * placement.Radius),
-					0.0f );
-				position += spawn.WorldRotation * localOffset;
-			}
-
 			playerObject = new GameObject( true, $"Hexagon Player - {connection.DisplayName}" );
-			playerObject.WorldTransform = spawn.WorldTransform.WithPosition( position ).WithScale( 1 );
+			playerObject.WorldTransform = spawn.Value;
 			var player = playerObject.AddComponent<HexPlayerBody>();
+			player.HostSpawnSelector = request => SpawnSelector.Select( request );
 			player.HostSetConnection( connection );
 			if ( !playerObject.NetworkSpawn( connection ) )
 			{
@@ -309,8 +314,9 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			newSession = new RuntimePlayerSession<HexPlayerBody>( player, exception =>
 				Log.Error( exception, $"Hexagon command cancellation callback failed for connection '{connection.Id}'." ) );
 			_sessions.Add( connection.Id, newSession );
+			var position = spawn.Value.Position;
 			Log.Info( FormattableString.Invariant(
-				$"HEXAGON_PLAYER_SPAWNED connection={connection.Id} slot={slot} position={position.x:0.###},{position.y:0.###},{position.z:0.###}" ) );
+				$"HEXAGON_PLAYER_SPAWNED connection={connection.Id} position={position.x:0.###},{position.y:0.###},{position.z:0.###}" ) );
 			if ( HostReadiness == HexRuntimeReadiness.Ready ) _ = newSession.ObserveHostReady();
 			// Application-level connection is delayed until the authenticated caller
 			// proves possession of its freshly generated client nonce.

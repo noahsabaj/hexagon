@@ -2,6 +2,7 @@
 
 using System;
 using System.Diagnostics;
+using Hexagon.V2.Domain;
 using Hexagon.V2.Kernel;
 using Hexagon.V2.Networking;
 using Sandbox;
@@ -27,8 +28,7 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 
 	private int _appliedCorrectionTick = -1;
 
-	// Host movement validation / spawn baseline.
-	private Transform _hostSpawnTransform;
+	// Host movement validation.
 	private Vector3 _lastValidatedPosition;
 	private double _lastValidatedSeconds;
 	private double _correctionCooldownUntilSeconds;
@@ -53,6 +53,13 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 	[Sync( SyncFlags.FromHost )] public int CorrectionTick { get; private set; }
 
 	internal Connection? HostConnection { get; set; }
+
+	/// <summary>
+	/// Resolves where this player belongs. Supplied by the runtime when the body is spawned so
+	/// that connect placement and every later embodiment ask the same question of the same
+	/// implementation, rather than embodiment replaying a copy of the connect-time answer.
+	/// </summary>
+	internal Func<HexSpawnRequest, OperationResult<Transform>>? HostSpawnSelector { get; set; }
 
 	/// <summary>
 	/// The playable body. The player is a single connection-owned object, so this is
@@ -110,7 +117,6 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 	internal void HostSetConnection( Connection connection )
 	{
 		HostConnection = connection;
-		_hostSpawnTransform = GameObject.WorldTransform.WithScale( 1 );
 		ConnectionGuid = connection.Id;
 		PlatformAccountDisplay = connection.SteamId.ValueUnsigned;
 		PlatformDisplayName = connection.DisplayName;
@@ -173,7 +179,13 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 			controller.Enabled = true;
 			IsMovementLocked = false;
 			IsEmbodied = true;
-			IssueCorrection( _hostSpawnTransform.Position );
+			// Ask where this player belongs rather than replaying where they first appeared, so a
+			// respawn is placed by the same rule that placed the connect, and a game that overrides
+			// that rule is honoured on both paths.
+			var placement = ResolveSpawn( isRespawn: true );
+			if ( placement.Failed )
+				return OperationResult<GameObject>.Failure( placement.Error!.Code, placement.Error.Message );
+			SeatAt( placement.Value );
 			GameObject.Network.Refresh();
 			return OperationResult<GameObject>.Success( GameObject );
 		}
@@ -225,6 +237,46 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 			controller.WishVelocity = Vector3.Zero;
 		if ( GameObject.IsValid() ) GameObject.Network.Refresh();
 		return OperationResult.Success();
+	}
+
+	/// <summary>
+	/// Moves this player authoritatively. This is the ONLY correct way for a host to place a
+	/// player: on the host a remote body is a client-owned proxy, so writing its transform is
+	/// overwritten on the owner's next tick while <see cref="AuthoritativeWorldPosition"/> keeps
+	/// the old value — interaction reach and combat traces would then resolve against a point the
+	/// player is not standing on. Seating the baseline and pulsing a correction is what makes the
+	/// owner actually move, and holds validation off for the round trip so a deliberate move is
+	/// never mistaken for a teleport.
+	/// </summary>
+	public OperationResult HostPlaceAt( Transform destination )
+	{
+		if ( !Sandbox.Networking.IsHost )
+			return OperationResult.Failure( ErrorCode.Unauthorized, "Only the host can place a player." );
+		if ( !GameObject.IsValid() )
+			return OperationResult.Failure( ErrorCode.NotFound, "The player body is unavailable." );
+		SeatAt( destination );
+		GameObject.Network.Refresh();
+		return OperationResult.Success();
+	}
+
+	/// <summary>Host-authoritative placement without the network refresh the caller may batch.</summary>
+	private void SeatAt( Transform destination )
+	{
+		// The rotation is a starting facing only; the owning client authors look direction, so
+		// only the position is corrected and enforced.
+		GameObject.WorldTransform = destination.WithScale( 1 );
+		IssueCorrection( destination.Position );
+	}
+
+	private OperationResult<Transform> ResolveSpawn( bool isRespawn )
+	{
+		if ( HostSpawnSelector is not { } selector )
+			return OperationResult<Transform>.Failure(
+				ErrorCode.InternalError, "The player body has no spawn selector." );
+		return selector( new HexSpawnRequest(
+			ConnectionGuid,
+			CharacterGuid == Guid.Empty ? null : new CharacterId( CharacterGuid ),
+			IsRespawn: isRespawn ) );
 	}
 
 	// Seats the authoritative baseline and pulses a correction the owner applies, holding

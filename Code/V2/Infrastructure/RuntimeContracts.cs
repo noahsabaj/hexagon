@@ -70,6 +70,16 @@ public sealed record HexSchemaRuntimeDescriptor
 	public required Func<IPersistenceStorage> CreatePersistenceStorage { get; init; }
 	public required Func<HexHostRuntimeContext, IHexHostApplication> CreateHostApplication { get; init; }
 	public Action<HexClientRuntimeContext>? ConfigureClient { get; init; }
+
+	/// <summary>
+	/// Replaces the rule deciding which spawn point a player gets. The framework keeps the
+	/// mechanism of placement — only it can move a client-owned body without desynchronising the
+	/// movement validator — while this owns the policy, which is a game rule. Connect placement
+	/// and every later embodiment both resolve through whatever this returns, so a game cannot
+	/// end up with one rule for spawning and a different one for respawning. Defaults to
+	/// <c>SceneTagSpawnSelector</c>.
+	/// </summary>
+	public Func<Scene, IHexSpawnSelector>? CreateSpawnSelector { get; init; }
 }
 
 public sealed record HexHostRuntimeContext(

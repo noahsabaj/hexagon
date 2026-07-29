@@ -20,6 +20,7 @@ internal sealed class RuntimePlayerSession<TPlayer> : IDisposable where TPlayer 
 	private readonly object _sync = new();
 	private readonly CommandAdmissionController _admission = new( Stopwatch.Frequency );
 	private readonly ClientBootstrapDiagnosticAdmissionController _bootstrapDiagnostics = new();
+	private readonly ClientSessionHandshakeAdmissionController _handshake = new();
 	private readonly ApplicationConnectionLatch _applicationConnection = new();
 	private ClientSessionNonce? _clientNonce;
 	private bool _disconnected;
@@ -60,6 +61,15 @@ internal sealed class RuntimePlayerSession<TPlayer> : IDisposable where TPlayer 
 		out ClientSessionScope scope,
 		out bool newlyBound )
 	{
+		// Charged before any work, matching every other client-to-host entry point. Rebinding the
+		// same nonce is idempotent, so an honest retry costs one attempt and a loop is bounded.
+		if ( !_handshake.TryBeginHandshake() )
+		{
+			scope = default;
+			newlyBound = false;
+			return false;
+		}
+
 		lock ( _sync )
 		{
 			if ( _disconnected || !Boundary.IsConnected || (_clientNonce is not null && _clientNonce != nonce) )
@@ -105,6 +115,7 @@ internal sealed class RuntimePlayerSession<TPlayer> : IDisposable where TPlayer 
 		Boundary.Disconnect();
 		_admission.Disconnect();
 		_bootstrapDiagnostics.Disconnect();
+		_handshake.Disconnect();
 	}
 
 	public void Dispose()
