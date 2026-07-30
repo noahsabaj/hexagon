@@ -236,6 +236,14 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		}
 
 		var clientObject = new GameObject( true, "Hexagon v2 Client" );
+		// NetworkMode.Never, not the default Snapshot. Every client builds this root itself in its own
+		// OnClientInitialize, so replicating it is pure duplication - but on a LISTEN HOST it is worse
+		// than that: a joiner is served a serialized copy of the host's whole live scene, and the
+		// network serializer ignores NotSaved (it excludes only Never, NotNetworked, and already-spawned
+		// objects). So every joiner would receive a dead ghost of the host's client root and everything
+		// beneath it, then build its own alongside. The engine marks its own client-local objects the
+		// same way - see MapInstance's client-built lights.
+		clientObject.NetworkMode = NetworkMode.Never;
 		_clientRoot = clientObject.AddComponent<HexClientRootComponent>();
 		ClientStore = new HexClientStore
 		{
