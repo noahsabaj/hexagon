@@ -174,7 +174,13 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 		try
 		{
 			configure( GameObject );
-			var controller = GameObject.Components.Get<PlayerController>();
+			// includeDisabled matters on RESPAWN. HostDisembody deliberately disables the controller
+			// rather than removing it (the object carries identity and network ownership), and the
+			// gamemode's GetOrAddComponent uses FindMode.EverythingInSelf, so it hands back that same
+			// disabled instance instead of adding a fresh one. Looking it up enabled-only therefore
+			// found nothing and threw on every respawn - the whole death cycle was unreachable until
+			// an administrative kill made it possible to die on demand. Enabled again below.
+			var controller = GameObject.Components.Get<PlayerController>( includeDisabled: true );
 			if ( controller is null )
 				throw new InvalidOperationException( "An embodied player requires a PlayerController." );
 			controller.UseInputControls = true;
