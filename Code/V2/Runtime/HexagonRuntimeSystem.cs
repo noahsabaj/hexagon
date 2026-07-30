@@ -58,11 +58,20 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 	{
 		_runtimeScene = scene;
 		Listen( Stage.FinishUpdate, 100, PollLifecycle, "Hexagon v2 lifecycle" );
-		// Audit round 2's O3 (admission metering) has never been watched executing. Watching O1 run
-		// found a defect that had survived the project's whole life, so these markers exist to make
-		// "it is wired" an observation rather than an inference.
+		// Three guards whose whole job is to refuse something, and which are therefore silent when
+		// they work. These markers make "it is wired" an observation rather than an inference: each
+		// has now been watched firing in a live session, and each stays so the next reader can watch
+		// it too rather than trusting that it still runs.
+		// O3: admission metering. One-shot.
 		CommandAdmissionController.FirstChargeObserver ??= ( cost, burst ) =>
 			Log.Info( $"HEXAGON_ADMISSION_CHARGED cost={cost} burst={burst} refill={CommandAdmissionController.RefillUnitsPerSecond}/s" );
+		// O2: the scoped commit gate. One-shot, so it costs nothing after the first commit.
+		TransactionalPersistenceProvider.FirstCommitGateObserver ??= () =>
+			Log.Info( "HEXAGON_COMMIT_GATE_TAKEN scoped=true reentrant=false" );
+		// F1: name canonicalisation and confusable folding. Logs what a name collapses to, which is
+		// the thing worth seeing - a skeleton collision is what rejects an impersonating name.
+		CharacterNameSkeleton.ReductionObserver ??= ( name, skeleton, folded ) =>
+			Log.Info( $"HEXAGON_NAME_SKELETON name=\"{name}\" skeleton=\"{skeleton}\" folded={folded}" );
 	}
 
 	public HexRuntimeReadiness HostReadiness { get; private set; } = HexRuntimeReadiness.Absent;

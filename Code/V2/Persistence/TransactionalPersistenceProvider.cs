@@ -386,11 +386,27 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 	}
 
 	/// <summary>
+	/// Raised the first time the commit gate is actually taken, so a reader can confirm from a live
+	/// log that the gate runs rather than inferring it from a green suite. A gate that has never
+	/// been watched to hold proves nothing, and this one is silent by construction when it works.
+	/// </summary>
+	public static Action? FirstCommitGateObserver { get; set; }
+
+	private int _observedFirstCommitGate;
+
+	/// <summary>
 	/// Takes the commit gate. The gate is NOT reentrant, so work that itself takes it — a
 	/// checkpoint, for one — must run after the scope has ended, never inside it.
 	/// </summary>
 	private async ValueTask<CommitGateScope> EnterCommitGateAsync( CancellationToken cancellationToken )
 	{
+		// Interlocked rather than a plain bool: callers reach here before awaiting anything, and a
+		// commit can resume on a pool thread, so two could otherwise both see the flag unset. The
+		// cost of losing that race is only a duplicate log line, but a diagnostic that races in the
+		// one file where races matter most is not worth the two words it saves.
+		if ( Interlocked.Exchange( ref _observedFirstCommitGate, 1 ) == 0 )
+			FirstCommitGateObserver?.Invoke();
+
 		await _commitGate.WaitAsync( cancellationToken );
 		return new CommitGateScope( _commitGate );
 	}

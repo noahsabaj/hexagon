@@ -25,6 +25,14 @@ namespace Hexagon.V2.Application;
 public static class CharacterNameSkeleton
 {
 	/// <summary>
+	/// Raised on every reduction, so an operator can see from the log what a name collapsed to and
+	/// therefore why a rejected name was judged a look-alike. Reduction happens only at character
+	/// creation, so this is rare enough to log unconditionally. Arguments are
+	/// (canonicalName, skeleton, foldedConfusables).
+	/// </summary>
+	public static Action<string, string, bool>? ReductionObserver { get; set; }
+
+	/// <summary>
 	/// The comparison key for a canonical name, or an empty string when the name carries no
 	/// identity-bearing characters at all. Callers must treat empty as a rejected name.
 	/// </summary>
@@ -64,7 +72,9 @@ public static class CharacterNameSkeleton
 				builder.Append( char.ConvertFromUtf32( codePoint ) );
 		}
 
-		return builder.ToString().ToLowerInvariant();
+		var skeleton = builder.ToString().ToLowerInvariant();
+		ReductionObserver?.Invoke( canonicalName, skeleton, foldConfusables );
+		return skeleton;
 	}
 
 	private static string MapConfusables( string value )

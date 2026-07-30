@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Hexagon.V2.Kernel;
 
 namespace Hexagon.V2.Networking;
@@ -132,22 +133,22 @@ public sealed class CommandAdmissionController
 
 	/// <summary>
 	/// Raised the first time this controller charges anything, so a reader can confirm from a live
-	/// log that admission metering actually runs rather than inferring it from a green suite. Audit
-	/// round 2 (O3) has never been observed executing, and the one round-2 item that WAS watched
-	/// immediately exposed a defect the suites could not reach.
+	/// log that admission metering runs rather than inferring it from a green suite. Metering is
+	/// silent by construction until it refuses something, which is exactly when it is too late to
+	/// discover it was never wired.
 	/// </summary>
 	public static Action<int, int>? FirstChargeObserver { get; set; }
 
-	private bool _observedFirstCharge;
+	private int _observedFirstCharge;
 
 	public CommandAdmissionResult TryBegin( CommandRequestId requestId, int cost, long timestamp )
 	{
 		if ( cost <= 0 || cost > BurstUnits ) throw new ArgumentOutOfRangeException( nameof(cost) );
-		if ( !_observedFirstCharge )
-		{
-			_observedFirstCharge = true;
+		// Interlocked, and deliberately outside _sync: this class is concurrency-aware everywhere
+		// else, and raising a caller-supplied callback while holding the lock would be a worse
+		// trade than the atomic.
+		if ( Interlocked.Exchange( ref _observedFirstCharge, 1 ) == 0 )
 			FirstChargeObserver?.Invoke( cost, BurstUnits );
-		}
 
 		lock ( _sync )
 		{
