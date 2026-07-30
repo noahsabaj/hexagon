@@ -9,8 +9,8 @@ namespace Hexagon.V2.Application;
 /// Reduces a canonical character name to a comparison key that collapses look-alike spellings
 /// onto each other, following the UTS #39 skeleton algorithm over the full Unicode confusables
 /// table in <see cref="ConfusableMappings"/>. Two names with the same skeleton render similarly
-/// enough that one could pass for the other, so the framework reserves the skeleton rather than
-/// the name and refuses the second of any such pair.
+/// enough that one could pass for the other, so the framework compares skeletons rather than names
+/// and refuses the second of any such pair.
 /// <para>
 /// The script profile already stops a name from MIXING writing systems. This closes what it
 /// cannot see: look-alikes within one script, and a name written entirely in another script to
@@ -24,14 +24,6 @@ namespace Hexagon.V2.Application;
 /// </summary>
 public static class CharacterNameSkeleton
 {
-	/// <summary>
-	/// Raised on every reduction, so an operator can see from the log what a name collapsed to and
-	/// therefore why a rejected name was judged a look-alike. Reduction happens only at character
-	/// creation, so this is rare enough to log unconditionally. Arguments are
-	/// (canonicalName, skeleton, foldedConfusables).
-	/// </summary>
-	public static Action<string, string, bool>? ReductionObserver { get; set; }
-
 	/// <summary>
 	/// The comparison key for a canonical name, or an empty string when the name carries no
 	/// identity-bearing characters at all. Callers must treat empty as a rejected name.
@@ -72,9 +64,7 @@ public static class CharacterNameSkeleton
 				builder.Append( char.ConvertFromUtf32( codePoint ) );
 		}
 
-		var skeleton = builder.ToString().ToLowerInvariant();
-		ReductionObserver?.Invoke( canonicalName, skeleton, foldConfusables );
-		return skeleton;
+		return builder.ToString().ToLowerInvariant();
 	}
 
 	private static string MapConfusables( string value )

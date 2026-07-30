@@ -44,6 +44,52 @@ public sealed class CharacterNameUniquenessTests
 	}
 
 	[TestMethod]
+	public async Task EnablingUniquenessProtectsNamesThatPredateIt()
+	{
+		// The upgrade path, and the one an existing server actually meets: run with uniqueness off,
+		// accumulate characters, then turn it on. Those characters hold no reservation, because a
+		// reservation is only ever written at creation. Deciding from the reservation index would
+		// therefore leave exactly them - the oldest names on the server, typically the operators'
+		// own - free for anyone to take.
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var beforeUpgrade = environment.CreateCharacterService(
+			nameUniqueness: CharacterRules.NameUniqueness.None );
+		Assert.IsTrue( (await beforeUpgrade.CreateAsync( new AccountId( 8300 ),
+			ApplicationServiceTestEnvironment.Request() with { Name = "Alyx Vance" } )).Succeeded );
+		Assert.IsEmpty( environment.Repositories.UniqueReservations.All()
+			.Where( document => document.Value.Namespace == "hexagon.character-name" ).ToArray() );
+
+		var afterUpgrade = environment.CreateCharacterService(
+			nameUniqueness: CharacterRules.NameUniqueness.Skeleton );
+		var impersonation = await afterUpgrade.CreateAsync( new AccountId( 8301 ),
+			ApplicationServiceTestEnvironment.Request() with { Name = "A1yx Vance" } );
+		Assert.IsTrue( impersonation.Failed );
+		Assert.AreEqual( ErrorCode.Conflict, impersonation.Error!.Code );
+	}
+
+	[TestMethod]
+	public async Task TighteningFromExactToSkeletonProtectsNamesReservedUnderTheLooserScheme()
+	{
+		// The same drift without the feature ever being off. A reservation stores the key the
+		// scheme in force produced, and tightening does not rewrite it.
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var loose = environment.CreateCharacterService(
+			nameUniqueness: CharacterRules.NameUniqueness.Exact );
+		Assert.IsTrue( (await loose.CreateAsync( new AccountId( 8400 ),
+			ApplicationServiceTestEnvironment.Request() with { Name = "A1yx Vance" } )).Succeeded );
+		// Stored unfolded, so the digit survives in the key.
+		Assert.AreEqual( "a1yxvance", environment.Repositories.UniqueReservations.All()
+			.Single( document => document.Value.Namespace == "hexagon.character-name" ).Value.Value );
+
+		var tight = environment.CreateCharacterService(
+			nameUniqueness: CharacterRules.NameUniqueness.Skeleton );
+		var lookAlike = await tight.CreateAsync( new AccountId( 8401 ),
+			ApplicationServiceTestEnvironment.Request() with { Name = "Alyx Vance" } );
+		Assert.IsTrue( lookAlike.Failed );
+		Assert.AreEqual( ErrorCode.Conflict, lookAlike.Error!.Code );
+	}
+
+	[TestMethod]
 	public void LooseningNeverWeakensWhatMakesANameWellFormed()
 	{
 		// The setting governs how CLOSE two names may be. Whether a name is well-formed at all is

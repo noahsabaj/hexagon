@@ -32,6 +32,15 @@ public sealed class CharacterService
 	/// </summary>
 	private const string NameReservationNamespace = "hexagon.character-name";
 
+	/// <summary>
+	/// Raised once per creation attempt with the name that was submitted, the key it reduced to,
+	/// the scheme that produced that key, and whether an existing character already holds it. This
+	/// is the whole uniqueness decision in one line, which is what an operator needs to answer "why
+	/// was that name refused" - and, when nothing is ever refused, to see that the check runs at
+	/// all. A rule that only ever says yes is indistinguishable from a rule that was never wired.
+	/// </summary>
+	public static Action<string, string, CharacterRules.NameUniqueness, bool>? NameDecisionObserver { get; set; }
+
 	private readonly DomainRepositories _repositories;
 	private readonly CompiledSchema _schema;
 	private readonly ICharacterModelCatalog _models;
@@ -86,6 +95,14 @@ public sealed class CharacterService
 		_inventoryWidth = inventoryWidth;
 		_inventoryHeight = inventoryHeight;
 	}
+
+	/// <summary>
+	/// The comparison key for a name under the configured scheme. Applied to the submitted name and
+	/// to every existing one from the same method, so the two sides of the comparison cannot drift.
+	/// </summary>
+	private string NameKey( string name ) => _nameUniqueness == CharacterRules.NameUniqueness.Skeleton
+		? CharacterNameSkeleton.Of( name )
+		: CharacterNameSkeleton.Exact( name );
 
 	public IReadOnlyList<CharacterRecord> ListForAccount( AccountId accountId )
 	{
@@ -355,18 +372,25 @@ public sealed class CharacterService
 		var reservationPlans = contributions.SelectMany( contribution => contribution.Reservations ).ToList();
 		if ( _nameUniqueness != CharacterRules.NameUniqueness.None )
 		{
-			var nameKey = _nameUniqueness == CharacterRules.NameUniqueness.Skeleton
-				? CharacterNameSkeleton.Of( character.Name )
-				: CharacterNameSkeleton.Exact( character.Name );
+			var nameKey = NameKey( character.Name );
 			if ( nameKey.Length == 0 )
 				return OperationResult<CharacterCreationReceipt>.Failure(
 					ErrorCode.InvalidArgument, "Name has no identity-bearing characters." );
-			// Checked here rather than left to the generic reservation loop below so the caller is
-			// told the name is taken instead of being handed an opaque reservation conflict. The
-			// commit is still the real guard: two concurrent creations both pass this read and the
+			// Decided against the CHARACTERS, not against the reservation index. A name reservation
+			// is written only when a character is created, so it preserves whatever scheme was in
+			// force at that moment: a character that predates this setting being enabled holds no
+			// reservation at all, and a store switched between Exact and Skeleton holds keys
+			// computed the other way. Reading the index would therefore admit a name that reads
+			// exactly like one already in use - the single thing this feature exists to prevent -
+			// and the first characters on any upgraded server, typically the operators' own, are
+			// precisely the ones it would leave unprotected. The characters are the source of truth
+			// for which names are in use. The reservation below stays, but only as the atomic guard
+			// that settles two concurrent creations of the same name: both pass this read, and the
 			// second loses on the reservation Create.
-			if ( _repositories.UniqueReservations.Find(
-				DomainKeys.UniqueReservation( NameReservationNamespace, nameKey ) ) is not null )
+			var conflicting = _repositories.Characters.All()
+				.Any( document => NameKey( document.Value.Name ) == nameKey );
+			NameDecisionObserver?.Invoke( character.Name, nameKey, _nameUniqueness, conflicting );
+			if ( conflicting )
 				return OperationResult<CharacterCreationReceipt>.Failure(
 					ErrorCode.Conflict,
 					_nameUniqueness == CharacterRules.NameUniqueness.Skeleton

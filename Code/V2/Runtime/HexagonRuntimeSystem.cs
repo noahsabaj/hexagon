@@ -68,10 +68,12 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		// O2: the scoped commit gate. One-shot, so it costs nothing after the first commit.
 		TransactionalPersistenceProvider.FirstCommitGateObserver ??= () =>
 			Log.Info( "HEXAGON_COMMIT_GATE_TAKEN scoped=true reentrant=false" );
-		// F1: name canonicalisation and confusable folding. Logs what a name collapses to, which is
-		// the thing worth seeing - a skeleton collision is what rejects an impersonating name.
-		CharacterNameSkeleton.ReductionObserver ??= ( name, skeleton, folded ) =>
-			Log.Info( $"HEXAGON_NAME_SKELETON name=\"{name}\" skeleton=\"{skeleton}\" folded={folded}" );
+		// F1: name canonicalisation and confusable folding. Not one-shot, because the interesting
+		// line is the one where taken=True - that is the impersonation being refused, and it is
+		// also the only moment an operator can see the rule was load-bearing rather than merely
+		// present.
+		CharacterService.NameDecisionObserver ??= ( name, key, scheme, taken ) =>
+			Log.Info( $"HEXAGON_NAME_DECISION name=\"{name}\" key=\"{key}\" scheme={scheme} taken={taken}" );
 	}
 
 	public HexRuntimeReadiness HostReadiness { get; private set; } = HexRuntimeReadiness.Absent;
