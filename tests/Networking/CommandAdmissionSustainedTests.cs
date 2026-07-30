@@ -36,7 +36,7 @@ public sealed class CommandAdmissionSustainedTests
 		// Reading the numbers out of the document makes the prose a claim this suite owns: editing
 		// either side without the other fails here rather than shipping a document that describes a
 		// system nobody built.
-		var document = File.ReadAllText( Path.Combine( RepositoryRoot(), "docs", "security.md" ) );
+		var document = File.ReadAllText( Path.Combine( RepositoryRoots.FindHexagon(), "docs", "security.md" ) );
 
 		var match = Regex.Match( document,
 			@"(?<burst>\d+)-unit burst,\s*(?<refill>\d+)\s*units?/second refill,\s*and at most\s*(?<active>\d+)\s*active requests" );
@@ -115,12 +115,4 @@ public sealed class CommandAdmissionSustainedTests
 			"A full-burst-cost command should be admissible exactly once from a full bucket." );
 	}
 
-	private static string RepositoryRoot()
-	{
-		var directory = new DirectoryInfo( AppContext.BaseDirectory );
-		while ( directory is not null && !File.Exists( Path.Combine( directory.FullName, "hexagon.sbproj" ) ) )
-			directory = directory.Parent;
-		Assert.IsNotNull( directory, "Could not locate the Hexagon repository root." );
-		return directory!.FullName;
-	}
 }

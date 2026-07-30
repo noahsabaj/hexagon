@@ -47,7 +47,7 @@ public sealed class SandboxCompatibilityTests
 	[TestMethod]
 	public void SandboxIndependentV2CodeAvoidsKnownWhitelistViolations()
 	{
-		var root = FindHexagonRoot();
+		var root = RepositoryRoots.FindHexagon();
 		var sourceRoots = new[] { Path.Combine( root, "Code", "V2" ) }
 			.Where( Directory.Exists )
 			.ToArray();
@@ -146,13 +146,4 @@ public sealed class SandboxCompatibilityTests
 		.Select( signature => signature.Name )
 		.ToArray();
 
-	private static string FindHexagonRoot()
-	{
-		var directory = new DirectoryInfo( AppContext.BaseDirectory );
-		while ( directory is not null && !File.Exists( Path.Combine( directory.FullName, "hexagon.sbproj" ) ) )
-			directory = directory.Parent;
-
-		Assert.IsNotNull( directory, "Could not locate the Hexagon repository root." );
-		return directory.FullName;
-	}
 }

@@ -1,7 +1,11 @@
 #nullable enable
 
 using System;
+using System.Globalization;
+using System.IO;
+using System.Text.RegularExpressions;
 using Hexagon.V2.Runtime;
+using Hexagon.V2.Tests.Foundation;
 using static Hexagon.V2.Tests.Foundation.SustainedEnvelope.EngineDefaults;
 
 namespace Hexagon.V2.Tests.Runtime;
@@ -181,5 +185,56 @@ public sealed class HexMovementValidatorTests
 
 		var blind = HexMovementEnvelope.Default with { AuditWindowSeconds = 999f };
 		Assert.IsFalse( blind.IsWellFormed( out _ ) );
+	}
+
+	/// <summary>
+	/// Pins the residual <c>docs/security.md</c> publishes to the arithmetic that produces it.
+	/// <para>
+	/// The document used to say "roughly a 25% margin over run speed", which is the tolerance read on
+	/// its own. The budget is <c>run speed * tolerance + interpolation slack</c>, and the slack is
+	/// another 96 units on a 320-unit run speed, so the real margin is 55%. Both numbers are defensible
+	/// sentences about the same envelope, which is exactly why prose cannot be trusted to carry a bound:
+	/// the same failure shape as the per-tick allowance that read as a bound and behaved as a rate.
+	/// </para>
+	/// <para>
+	/// So this asserts the DERIVATION, not merely the inputs. Pinning tolerance and slack alone would
+	/// have left the published 25% passing, because every input in it was correct and only the
+	/// arithmetic was wrong.
+	/// </para>
+	/// </summary>
+	[TestMethod]
+	public void TheSecurityDocumentPublishesTheMovementResidualThatTheEnvelopeActuallyPermits()
+	{
+		var document = File.ReadAllText(
+			Path.Combine( RepositoryRoots.FindHexagon(), "docs", "security.md" ) );
+
+		var match = Regex.Match( document,
+			@"\((?<run>[\d.]+) unit/second run speed, (?<tolerance>[\d.]+) tolerance, " +
+			@"(?<slack>[\d.]+)-unit slack\) is (?<budget>[\d.]+) units per second, " +
+			@"a (?<margin>[\d.]+)% margin over run speed" );
+		Assert.IsTrue( match.Success,
+			"docs/security.md no longer states the movement residual in the form this guard reads. " +
+			"Update the guard deliberately rather than letting the published residual go unchecked." );
+
+		float Published( string group ) =>
+			float.Parse( match.Groups[group].Value, CultureInfo.InvariantCulture );
+
+		Assert.AreEqual( RunSpeed, Published( "run" ),
+			"Documented run speed does not match the engine default the validator reads." );
+		Assert.AreEqual( HexMovementEnvelope.DefaultHorizontalTolerance, Published( "tolerance" ),
+			"Documented tolerance does not match the enforced constant." );
+		Assert.AreEqual( HexMovementEnvelope.DefaultInterpolationSlack, Published( "slack" ),
+			"Documented interpolation slack does not match the enforced constant." );
+
+		// The derivation, which is where the published claim actually went wrong.
+		var budget = (RunSpeed * HexMovementEnvelope.DefaultHorizontalTolerance)
+			+ HexMovementEnvelope.DefaultInterpolationSlack;
+		Assert.AreEqual( budget, Published( "budget" ),
+			"Documented per-window budget is not run speed * tolerance + slack." );
+
+		var margin = ((budget / RunSpeed) - 1f) * 100f;
+		Assert.AreEqual( margin, Published( "margin" ), 0.5f,
+			"Documented margin over run speed does not follow from the envelope. Counting the tolerance " +
+			"without the slack is what understated this by more than twofold." );
 	}
 }
