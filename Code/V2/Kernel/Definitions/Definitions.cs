@@ -68,9 +68,36 @@ public sealed record PermissionDefinition(
 	string Id
 ) : IDefinition;
 
+/// <summary>
+/// Everything that is true of a chat channel, in one place.
+/// <para>
+/// This used to be only <c>(Id, PermissionId)</c>, with a game holding a PARALLEL table of ranges
+/// keyed by the same ids — so "what is the yell channel" had two answers in two repositories and
+/// nothing kept them agreeing. Range, the typed prefixes, the display name, the colour and whether
+/// the dead may speak are all properties OF the channel, so they live on its definition.
+/// </para>
+/// </summary>
+/// <param name="Prefixes">
+/// What a player types to address this channel, without the leading slash. Resolved BEFORE the
+/// command catalogue, so a prefix that collides with a command name would shadow it — a guard test
+/// forbids that rather than leaving it to review.
+/// </param>
+/// <param name="Range">
+/// Audible radius in world units, or null for a channel that is not positional. A ranged channel
+/// with no range would silently reach nobody, so the schema compiler is the place to catch it.
+/// </param>
+/// <param name="AllowedWhileDead">
+/// Default false: death silences. Kept per-channel because "OOC works while dead" is a common house
+/// rule, and a game should not have to fork the framework to have it.
+/// </param>
 public sealed record ChatChannelDefinition(
 	string Id,
-	string? PermissionId = null
+	string? PermissionId = null,
+	string? DisplayName = null,
+	IReadOnlyList<string>? Prefixes = null,
+	float? Range = null,
+	string? Colour = null,
+	bool AllowedWhileDead = false
 ) : IDefinition;
 
 public enum CommandCostClass

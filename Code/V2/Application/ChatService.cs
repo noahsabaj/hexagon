@@ -263,7 +263,6 @@ public sealed record ChatDelivery(
 	Guid MessageId,
 	string ChannelId,
 	CharacterId AuthorCharacterId,
-	string AuthorName,
 	string Text,
 	DateTimeOffset SentAtUtc,
 	IReadOnlyList<ConnectionId> Recipients );
@@ -373,8 +372,12 @@ public sealed class ChatService
 		var recipients = _recipients.Resolve( context, rule, inventory )
 			.Distinct()
 			.ToArray();
+		// No author NAME on the delivery. It is resolved per recipient at the point of send, because
+		// who a viewer thinks the speaker is depends on the viewer — a Civil Protection unit reads as
+		// their true name only to someone who has been introduced. Carrying one name for the whole
+		// recipient list invited a reader to use it and quietly bypass that.
 		var delivery = new ChatDelivery(
-			Guid.NewGuid(), channelId, character.Id, character.Name, normalized.Value, now, recipients );
+			Guid.NewGuid(), channelId, character.Id, normalized.Value, now, recipients );
 		admission.Commit( now );
 		_events.Publish( new ChatDeliveredEvent( delivery ) );
 		return OperationResult<ChatDelivery>.Success( delivery );
