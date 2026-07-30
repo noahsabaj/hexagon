@@ -159,15 +159,35 @@ public sealed class LayerBoundaryTests
 		StringAssert.Contains( collision, "\"r\": \"Ignore\"" );
 	}
 
+	/// <summary>
+	/// The RPC surface is the runtime system itself, not a spawned object.
+	/// <para>
+	/// This used to pin the opposite: a "Hexagon v2 Host Services" GameObject, a NetworkSpawn, a
+	/// publication guard that failed host init if the spawn was refused, and a destroy on teardown.
+	/// All of that solved a problem s&amp;box does not have — <c>[Rpc.*]</c> works directly on a
+	/// GameObjectSystem, addressed by an Id every peer already agrees on. The old shape also carried a
+	/// host-migration hole: the component's back-pointer to the runtime was not networked, so after a
+	/// migration it was null and every RPC silently no-opped.
+	/// </para>
+	/// </summary>
 	[TestMethod]
-	public void HostServicePublicationAndRpcShutdownAreFailClosed()
+	public void RpcSurfaceIsTheRuntimeSystemAndShutdownIsFailClosed()
 	{
 		var runtime = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.cs" ) );
-		StringAssert.Contains( runtime, "OperationResult<HexHostServicesComponent> CreateHostServices()" );
-		StringAssert.Contains( runtime, "HostServicePublication.RequirePublished" );
-		StringAssert.Contains( runtime, "servicesObject.NetworkSpawn" );
-		StringAssert.Contains( runtime, "if ( servicesObject.IsValid() ) servicesObject.Destroy()" );
-		StringAssert.Contains( runtime, "if ( hostServices.Failed )" );
+		var rpc = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.Rpc.cs" ) );
+		StringAssert.Contains( rpc, "public sealed partial class HexagonRuntimeSystem" );
+		StringAssert.Contains( runtime, "IHexHostTransport" );
+		foreach ( var gone in new[]
+		{
+			"CreateHostServices", "HostServicePublication", "servicesObject",
+			"Hexagon v2 Host Services", "HexHostServicesComponent"
+		} )
+		{
+			Assert.IsFalse( runtime.Contains( gone, StringComparison.Ordinal ),
+				$"'{gone}' is the spawned-endpoint shape the RPC surface no longer uses." );
+			Assert.IsFalse( rpc.Contains( gone, StringComparison.Ordinal ),
+				$"'{gone}' is the spawned-endpoint shape the RPC surface no longer uses." );
+		}
 
 		var shutdown = runtime.IndexOf( "private async Task<OperationResult> ShutdownHostAsync()", StringComparison.Ordinal );
 		var commandDrain = runtime.IndexOf( "_hostOperations.DrainAsync()", shutdown, StringComparison.Ordinal );
@@ -187,7 +207,7 @@ public sealed class LayerBoundaryTests
 		Assert.IsLessThan( persistenceDispose, persistenceDrain, "Persistence must stop before it is disposed." );
 		Assert.IsLessThan( quiescedEvidence, persistenceDispose, "Quiesced evidence must follow persistence disposal." );
 
-		var services = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexHostServicesComponent.cs" ) );
+		var services = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.Rpc.cs" ) );
 		StringAssert.Contains( services, "runtime.TryStartHostOperation" );
 		Assert.IsFalse( services.Contains( "_ = DispatchAsync", StringComparison.Ordinal ) );
 	}
@@ -195,7 +215,7 @@ public sealed class LayerBoundaryTests
 	[TestMethod]
 	public void ClientStateSyncShellAppliesOnlyAfterScopeCaptureAndEncodeAborts()
 	{
-		var services = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexHostServicesComponent.cs" ) );
+		var services = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.Rpc.cs" ) );
 		var send = services.IndexOf( "public void SendClientState(", StringComparison.Ordinal );
 		Assert.IsGreaterThanOrEqualTo( 0, send );
 		var scopeCapture = services.IndexOf( "runtime.CaptureClientScope( recipient )", send, StringComparison.Ordinal );

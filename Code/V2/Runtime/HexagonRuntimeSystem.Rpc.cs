@@ -17,12 +17,30 @@ using ClientInventorySnapshot = Hexagon.V2.Networking.InventorySnapshot;
 namespace Hexagon.V2.Runtime;
 
 /// <summary>
-/// Single host-owned RPC surface for framework commands. Every entry point
-/// derives its actor through RpcGuard before dispatching client intent.
+/// The framework's RPC surface. Every entry point derives its actor through RpcGuard before
+/// dispatching client intent.
+/// <para>
+/// These used to live on a network-spawned <c>Component</c> that existed only to BE an RPC endpoint,
+/// reached by scanning the scene for it and holding a back-pointer to the runtime. s&amp;box supports
+/// <c>[Rpc.*]</c> directly on a <c>GameObjectSystem</c>, addressed by the system's Id, which every
+/// peer already agrees on because the join snapshot carries it. So the endpoint is the runtime
+/// itself: no spawn, no publication guard, no scene scans, and no back-pointer that could be null on
+/// a migrated host.
+/// </para>
 /// </summary>
-public sealed class HexHostServicesComponent : Component, IHexHostTransport
+public sealed partial class HexagonRuntimeSystem
 {
-	internal HexagonRuntimeSystem? Runtime { get; set; }
+	/// <summary>
+	/// The runtime these entry points dispatch into — now simply this object.
+	/// <para>
+	/// Kept as a named member rather than rewriting thirty call sites to <c>this</c>: this is a
+	/// breaking wire-surface change that cannot be verified until the two-client run, so the bodies
+	/// are deliberately left byte-identical and the diff stays reviewable. It is typed nullable only
+	/// so the existing guards still compile; they are now unreachable, and removing them is a
+	/// follow-up for after the migration is proven, not something to do blind in the same change.
+	/// </para>
+	/// </summary>
+	private HexagonRuntimeSystem? Runtime => this;
 
 	[Rpc.Host]
 	public void ReportClientBootstrapDiagnostic(
@@ -266,13 +284,11 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 
 	private void Dispatch( ClientCommandHeader header, int cost, Func<ClientCommand> commandFactory )
 	{
-		var runtime = Runtime;
-		if ( runtime is null ) return;
 		// The pipeline itself (charge → resolve → payload-validate → re-resolve → tracked
 		// host operation → lease re-check → execute → complete) lives in the engine-neutral
 		// orchestrator so its ordering is compiled and pinned by the unit test suite.
 		CommandDispatchOrchestrator.Dispatch(
-			new RuntimeDispatchHost( runtime, this, Rpc.Caller ),
+			new RuntimeDispatchHost( this, Rpc.Caller ),
 			header,
 			cost,
 			commandFactory );
@@ -281,20 +297,19 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 	/// <summary>
 	/// Engine adapter for the neutral dispatch orchestrator: derives caller identity,
 	/// forwards host hooks to the runtime, and sends results over the RPC transport.
+	/// <para>
+	/// It used to take the runtime and the RPC surface as two objects. They are the same object now,
+	/// so it takes one.
+	/// </para>
 	/// </summary>
 	private sealed class RuntimeDispatchHost : ICommandDispatchHost<RpcActor>
 	{
 		private readonly HexagonRuntimeSystem runtime;
-		private readonly HexHostServicesComponent _services;
 		private readonly Connection? _caller;
 
-		public RuntimeDispatchHost(
-			HexagonRuntimeSystem runtime,
-			HexHostServicesComponent services,
-			Connection? caller )
+		public RuntimeDispatchHost( HexagonRuntimeSystem runtime, Connection? caller )
 		{
 			this.runtime = runtime;
-			_services = services;
 			_caller = caller;
 		}
 
@@ -335,11 +350,11 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 		public void SendResultToCaller( ClientSessionScope scope, CommandRequestId requestId, OperationResult result )
 		{
 			if ( _caller is null ) return;
-			_services.SendOperationResult( _caller, scope, requestId, result );
+			runtime.SendOperationResult( _caller, scope, requestId, result );
 		}
 
 		public void SendResult( RpcActor actor, CommandRequestId requestId, OperationResult result ) =>
-			_services.SendOperationResult( actor.Connection, actor.ClientScope, requestId, result );
+			runtime.SendOperationResult( actor.Connection, actor.ClientScope, requestId, result );
 
 		public void OnMalformedPayload( Exception exception ) =>
 			Log.Warning( exception, "Hexagon rejected a malformed client command payload." );
@@ -462,7 +477,7 @@ public sealed class SandboxClientCommandTransport : IClientCommandTransport, IDi
 	internal void PollSession( long timestamp )
 	{
 		if ( !SessionRetry.TryBeginAttempt( timestamp ) ) return;
-		var services = _scene.GetAll<HexHostServicesComponent>().FirstOrDefault();
+		var services = HexagonRuntimeSystem.Current;
 		if ( services is null ) return;
 		services.RequestEstablishSession( _nonce );
 	}
@@ -507,7 +522,7 @@ public sealed class SandboxClientCommandTransport : IClientCommandTransport, IDi
 		if ( registered.Failed ) return ValueTask.FromResult(
 			OperationResult.Failure( registered.Error!.Code, registered.Error.Message ) );
 		var pending = registered.Value;
-		var services = _scene.GetAll<HexHostServicesComponent>().FirstOrDefault();
+		var services = HexagonRuntimeSystem.Current;
 		if ( services is null )
 		{
 			_pending.Complete( pending.RequestId,

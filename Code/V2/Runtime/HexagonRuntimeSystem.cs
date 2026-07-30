@@ -33,7 +33,8 @@ public enum HexRuntimeReadiness
 /// Scene-scoped host/client composition root. Listen servers receive independent
 /// scopes, while each host connection owns an ephemeral command and character epoch.
 /// </summary>
-public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem>, ISceneStartup, Component.INetworkListener
+public sealed partial class HexagonRuntimeSystem
+	: GameObjectSystem<HexagonRuntimeSystem>, ISceneStartup, Component.INetworkListener, IHexHostTransport
 {
 	private readonly Scene _runtimeScene;
 	private readonly Dictionary<Guid, RuntimePlayerSession<HexPlayerBody>> _sessions = new();
@@ -45,7 +46,6 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 	private Task<OperationResult>? _resourceShutdown;
 	private IPersistenceProvider? _persistence;
 	private CompiledSchema? _hostSchema;
-	private HexHostServicesComponent? _hostServices;
 	private HexClientRootComponent? _clientRoot;
 	private HexClientController? _clientController;
 	private bool _hostFailureLogged;
@@ -203,20 +203,13 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			persistenceInvariants );
 		HostReadiness = HexRuntimeReadiness.Initializing;
 		_hostSchema = compiled.Value;
-		var hostServices = CreateHostServices();
-		if ( hostServices.Failed )
-		{
-			FailHost( hostServices.Error!.Message );
-			_hostInitialization = ShutdownResourcesOnceAsync();
-			return;
-		}
-		_hostServices = hostServices.Value;
+		// No host-services object to spawn or publish any more: this system IS the RPC endpoint, and
+		// it exists on every peer from scene start with an Id the join snapshot already carries.
 		_hostInitialization = InitializeHostAsync(
 			descriptorResult.Value,
 			compiled.Value,
 			bindings.Value,
 			_persistence,
-			_hostServices,
 			_runtimeScene,
 			_persistenceRoot,
 			hostOptions.Value.VerificationProbe );
@@ -584,7 +577,6 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		CompiledSchema schema,
 		SchemaPersistenceBindings persistenceBindings,
 		IPersistenceProvider persistence,
-		HexHostServicesComponent services,
 		Scene scene,
 		string persistenceRoot,
 		string verificationProbe )
@@ -692,7 +684,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			persistence,
 			repositories,
 			configuration,
-			services,
+			this,
 			persistenceRoot,
 			verificationProbe );
 		var created = await AsyncOperation.Capture(
@@ -847,18 +839,10 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 				$"canceled={failure.WasCanceled} message={failure.Exception.Message}" );
 		}
 
-		var hostServices = _hostServices;
-		_hostServices = null;
-		if ( hostServices is not null )
-		{
-			try
-			{
-				hostServices.Runtime = null;
-				if ( hostServices.GameObject.IsValid() ) hostServices.GameObject.Destroy();
-			}
-			catch ( Exception exception ) { firstFailure ??= exception; }
-		}
-
+		// Nothing to tear down for the RPC surface any more. It was a spawned GameObject holding a
+		// back-pointer that had to be nulled and destroyed here; the surface is now this system, whose
+		// lifetime the scene owns. That also closes the host-migration hole where the back-pointer was
+		// null on the new host and every RPC silently no-opped.
 		HostApplication = null;
 		if ( application is not null )
 		{
@@ -925,32 +909,6 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		return OperationResult.Success();
 	}
 
-	private OperationResult<HexHostServicesComponent> CreateHostServices()
-	{
-		GameObject? servicesObject = null;
-		try
-		{
-			servicesObject = new GameObject( true, "Hexagon v2 Host Services" );
-			var services = servicesObject.AddComponent<HexHostServicesComponent>();
-			services.Runtime = this;
-			return HostServicePublication.RequirePublished(
-				services,
-				servicesObject.NetworkSpawn,
-				() =>
-				{
-					services.Runtime = null;
-					if ( servicesObject.IsValid() ) servicesObject.Destroy();
-				} );
-		}
-		catch ( Exception exception )
-		{
-			try { if ( servicesObject is not null && servicesObject.IsValid() ) servicesObject.Destroy(); }
-			catch ( Exception ) { }
-			return OperationResult<HexHostServicesComponent>.Failure(
-				ErrorCode.InternalError,
-				$"Hexagon host services could not be created: {exception.Message}" );
-		}
-	}
 
 	private void ReportClientBootstrapFailure(
 		ClientBootstrapDiagnosticPhase phase,
@@ -959,9 +917,8 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 	{
 		try
 		{
-			var services = _runtimeScene.GetAll<HexHostServicesComponent>().FirstOrDefault();
-			if ( services is null ) return;
-			services.ReportClientBootstrapDiagnostic(
+			// No scan: the RPC surface is this system.
+			ReportClientBootstrapDiagnostic(
 				phase,
 				code,
 				ClientBootstrapDiagnosticContract.PrepareDetail( code, detail ) );

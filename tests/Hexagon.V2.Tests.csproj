@@ -46,7 +46,6 @@
     <Compile Include="../Code/V2/Client/**/*.cs" Link="Product/Client/%(RecursiveDir)%(Filename)%(Extension)" />
 	<Compile Include="../Code/V2/Runtime/SpawnSlotAllocator.cs" Link="Product/Runtime/SpawnSlotAllocator.cs" />
 	<Compile Include="../Code/V2/Runtime/HexMovementValidator.cs" Link="Product/Runtime/HexMovementValidator.cs" />
-	<Compile Include="../Code/V2/Runtime/HostServicePublication.cs" Link="Product/Runtime/HostServicePublication.cs" />
 	<Compile Include="../Code/V2/Runtime/RuntimePlayerSession.cs" Link="Product/Runtime/RuntimePlayerSession.cs" />
 	<Compile Include="../Code/V2/Runtime/SceneShutdownBarrier.cs" Link="Product/Runtime/SceneShutdownBarrier.cs" />
 	<Compile Include="../Code/V2/Runtime/SceneHandoffPolicy.cs" Link="Product/Runtime/SceneHandoffPolicy.cs" />
