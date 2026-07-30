@@ -22,15 +22,21 @@
 	}
 
 	.hex-chat__line {
-		min-height: 21px;
-		align-items: baseline;
+		// No fixed height. A long line wraps, and with a floor-height row the wrapped half drew over
+		// the next line's channel label. Height follows content; flex-start keeps the channel tag on
+		// the FIRST line of a wrapped message rather than centring it against the whole block.
+		align-items: flex-start;
+		padding: 2px 0;
 		gap: 6px;
 		// Shadow rather than a panel background, so text stays readable over any world.
 		text-shadow: 0 1px 3px rgba( 0, 0, 0, 0.85 );
 	}
 
 	.hex-chat__channel {
+		// Fixed width so the message column aligns; flex-shrink 0 or a long channel name would
+		// squeeze it and re-introduce the ragged left edge this column exists to prevent.
 		width: 46px;
+		flex-shrink: 0;
 		font-family: "Roboto Mono";
 		font-size: 8px;
 		letter-spacing: 1px;
@@ -44,6 +50,9 @@
 	}
 
 	.hex-chat__text {
+		// Takes the remaining width so it wraps INSIDE the row and grows it, instead of overflowing
+		// past the row's height and drawing over whatever is underneath.
+		flex-grow: 1;
 		color: #dce2e3;
 		font-size: 12px;
 	}
