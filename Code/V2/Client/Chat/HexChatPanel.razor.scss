@@ -1,0 +1,94 @@
+// Default styling for the framework chat panel. A game that wants its own look replaces the panel;
+// a game that just wants different colours overrides these selectors.
+//
+// Two states, one buffer: closed is a bare fading log with no chrome, open is scrollback with a
+// background and an entry. That is the model every game in this genre uses.
+
+.hex-chat {
+	position: absolute;
+	left: 28px;
+	bottom: 220px;
+	width: 570px;
+	flex-direction: column;
+	justify-content: flex-end;
+	// Closed chat must never eat clicks: it is a passive overlay the player reads through.
+	pointer-events: none;
+
+	.hex-chat__log {
+		flex-direction: column;
+		justify-content: flex-end;
+		max-height: 260px;
+		padding: 6px 8px;
+	}
+
+	.hex-chat__line {
+		min-height: 21px;
+		align-items: baseline;
+		gap: 6px;
+		// Shadow rather than a panel background, so text stays readable over any world.
+		text-shadow: 0 1px 3px rgba( 0, 0, 0, 0.85 );
+	}
+
+	.hex-chat__channel {
+		width: 46px;
+		font-family: "Roboto Mono";
+		font-size: 8px;
+		letter-spacing: 1px;
+	}
+
+	.hex-chat__author {
+		color: #cbd4d7;
+		font-weight: 700;
+		font-size: 12px;
+		&::after { content: ":"; }
+	}
+
+	.hex-chat__text {
+		color: #dce2e3;
+		font-size: 12px;
+	}
+
+	&.is-open {
+		// Only the OPEN panel takes input, and only then does it need a background.
+		pointer-events: all;
+
+		.hex-chat__log {
+			max-height: 300px;
+			overflow: scroll;
+			background-color: rgba( 7, 10, 13, 0.86 );
+			border: 1px solid rgba( 176, 197, 205, 0.18 );
+			// Fades the TOP of the scrollback. Ramps luminance black -> white, because s&box's default
+			// mask-mode is MatchSource and its shader treats that as Luminance, not alpha. A
+			// transparent -> black gradient produces luminance 0 at every stop and erases the whole
+			// subtree, which is exactly how the previous chat log managed to render nothing at all.
+			mask-image: linear-gradient( to bottom, black 0%, white 8% );
+		}
+	}
+
+	.hex-chat__entry {
+		height: 40px;
+		align-items: center;
+		gap: 8px;
+		padding: 0 8px;
+		background-color: rgba( 7, 10, 13, 0.94 );
+		border: 1px solid rgba( 176, 197, 205, 0.18 );
+	}
+
+	.hex-chat__target {
+		min-width: 46px;
+		color: #d7a84b;
+		font-family: "Roboto Mono";
+		font-size: 8px;
+		letter-spacing: 1px;
+	}
+
+	.hex-chat__entry textentry {
+		flex-grow: 1;
+		height: 38px;
+		padding: 0 4px;
+		border: 0;
+		background-color: transparent;
+		color: #edf3f4;
+		font-size: 12px;
+	}
+}

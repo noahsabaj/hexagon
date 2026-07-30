@@ -1,0 +1,143 @@
+@using System
+@using System.Collections.Generic
+@using System.Linq
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.V2.Client.Chat
+@inherits Panel
+
+@*
+	Hexagon's default chat panel. A game may replace it wholesale and keep HexChatComposer; what it
+	must not do is reinvent the two behaviours below, which are the ones every game in this genre has
+	and this project spent a long time not having.
+
+	1. The ENTRY is transient. It exists only while you are typing. An always-mounted compose box is a
+	   desktop idiom, and the previous one could not even be reached: the cursor is hidden while
+	   embodied, so it could not be clicked, and nothing bound the Chat action.
+	2. The LOG outlives the entry but fades. You see other people talking with no chrome; open chat
+	   and you get the retained scrollback with a background.
+*@
+
+<root class="hex-chat @(IsOpen ? "is-open" : string.Empty)">
+	<div class="hex-chat__log">
+		@foreach ( var line in Visible() )
+		{
+			<div class="hex-chat__line" style="opacity: @(Opacity( line ).ToString( "0.00" ));">
+				@if ( !string.IsNullOrEmpty( line.ChannelLabel ) )
+				{
+					<label class="hex-chat__channel" style="color: @(line.Colour ?? "#82919a");">@line.ChannelLabel</label>
+				}
+				@if ( !string.IsNullOrEmpty( line.Author ) )
+				{
+					<label class="hex-chat__author">@line.Author</label>
+				}
+				<label class="hex-chat__text">@line.Text</label>
+			</div>
+		}
+	</div>
+
+	@if ( IsOpen )
+	{
+		<div class="hex-chat__entry">
+			<label class="hex-chat__target">@TargetLabel</label>
+			<TextEntry @ref="Entry" Value:bind="@Draft" MaxLength="@MaxLength" onsubmit="@Submit" />
+		</div>
+	}
+</root>
+
+@code
+{
+	/// <summary>Lines to render. The newest is last.</summary>
+	[Parameter] public IReadOnlyList<HexChatLine> Lines { get; set; } = Array.Empty<HexChatLine>();
+	/// <summary>Channel the entry will send to — shown so nobody speaks IC into OOC by accident.</summary>
+	[Parameter] public string TargetLabel { get; set; } = string.Empty;
+	[Parameter] public int MaxLength { get; set; } = 512;
+	/// <summary>Seconds a line stays fully visible once chat is closed, then it fades out.</summary>
+	[Parameter] public float FadeSeconds { get; set; } = 8f;
+	[Parameter] public int MaxVisibleWhenClosed { get; set; } = 8;
+	[Parameter] public Action<string>? OnSubmit { get; set; }
+	[Parameter] public Action? OnCycleChannel { get; set; }
+	/// <summary>Input action that opens chat. The game owns its bindings, so it names the action.</summary>
+	[Parameter] public string OpenAction { get; set; } = "Chat";
+	[Parameter] public string CycleAction { get; set; } = "";
+
+	public bool IsOpen { get; private set; }
+
+	// A property, not a field: the Razor @ref generator only assigns properties, and a field target
+	// compiles with nothing worse than CS0649 and then stays null forever.
+	private TextEntry? Entry { get; set; }
+	private string Draft { get; set; } = string.Empty;
+	private bool _focusPending;
+
+	public override void Tick()
+	{
+		base.Tick();
+
+		if ( !IsOpen && Input.Pressed( OpenAction ) )
+		{
+			IsOpen = true;
+			_focusPending = true;
+			// Clear it, or the same press that opened the box also submits the empty box.
+			Input.Clear( OpenAction );
+			StateHasChanged();
+			return;
+		}
+
+		if ( IsOpen && !string.IsNullOrEmpty( CycleAction ) && Input.Pressed( CycleAction ) )
+		{
+			OnCycleChannel?.Invoke();
+			Input.Clear( CycleAction );
+			StateHasChanged();
+		}
+
+		if ( IsOpen && Input.EscapePressed )
+		{
+			Input.EscapePressed = false;
+			Close();
+			return;
+		}
+
+		// Focusing programmatically is what lets the entry work with NO cursor: the player is
+		// embodied, the mouse is hidden, and a focused TextEntry stops propagation on typed buttons
+		// so movement keys do not leak into the character while typing.
+		if ( _focusPending && Entry is not null )
+		{
+			_focusPending = false;
+			Entry.Focus();
+		}
+	}
+
+	// Rebuild while a fade is in flight; the base returns a constant, so without this the log would
+	// freeze between store pushes and lines would never visibly fade.
+	protected override int BuildHash() => HashCode.Combine(
+		Lines.Count, IsOpen, TargetLabel, Lines.Count == 0 ? 0 : (int)FadeClock() );
+
+	private void Submit()
+	{
+		var text = Draft;
+		Draft = string.Empty;
+		Close();
+		if ( !string.IsNullOrWhiteSpace( text ) ) OnSubmit?.Invoke( text );
+	}
+
+	private void Close()
+	{
+		IsOpen = false;
+		Entry?.Blur();
+		StateHasChanged();
+	}
+
+	private float FadeClock() => RealTime.Now;
+
+	private IEnumerable<HexChatLine> Visible() =>
+		IsOpen ? Lines : Lines.Where( line => Opacity( line ) > 0.01f ).TakeLast( MaxVisibleWhenClosed );
+
+	/// <summary>Open chat shows everything at full strength; closed chat fades a line out as it ages.</summary>
+	private float Opacity( HexChatLine line )
+	{
+		if ( IsOpen ) return 1f;
+		var age = RealTime.Now - line.ReceivedAt;
+		if ( age <= FadeSeconds ) return 1f;
+		return Math.Clamp( 1f - ((age - FadeSeconds) / 1.5f), 0f, 1f );
+	}
+}
