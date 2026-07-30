@@ -200,10 +200,16 @@ public sealed class HexPlayerBody : Component, IRuntimePlayer
 				renderer.Enabled = true;
 				controller.Renderer = renderer;
 			}
-			// Seat the framework walk mode BEFORE the controller enables: PlayerController runs
-			// GetOrAddComponent<MoveModeWalk>() as it starts, so a mode present by then is the one it
-			// adopts and no stock duplicate is created. It carries the host-published step height and
-			// ground angle, keeping client physics and host validation on one envelope.
+			// Seat the framework walk mode. It carries the host-published step height and ground angle,
+			// keeping client physics and host validation on one envelope.
+			//
+			// This comment used to claim that seating it before the controller enables means "no stock
+			// duplicate is created". That is FALSE, observed live: the body carries both a stock
+			// MoveModeWalk and a HexMoveModeWalk, because PlayerController's GetOrAddComponent does not
+			// match our derived type and adds its own. What actually makes ours win is PRIORITY -
+			// PlayerController picks its mode with MaxBy( Score ), MoveModeWalk.Score returns Priority,
+			// stock is 0 and HexagonWalkPriority is 10. Harmless, but do not "fix" the duplicate by
+			// reordering: the ordering was never what selected the mode.
 			GameObject.GetOrAddComponent<HexMoveModeWalk>();
 			controller.Enabled = true;
 			IsMovementLocked = false;
