@@ -130,9 +130,25 @@ public sealed class CommandAdmissionController
 		get { lock ( _sync ) return _tokens; }
 	}
 
+	/// <summary>
+	/// Raised the first time this controller charges anything, so a reader can confirm from a live
+	/// log that admission metering actually runs rather than inferring it from a green suite. Audit
+	/// round 2 (O3) has never been observed executing, and the one round-2 item that WAS watched
+	/// immediately exposed a defect the suites could not reach.
+	/// </summary>
+	public static Action<int, int>? FirstChargeObserver { get; set; }
+
+	private bool _observedFirstCharge;
+
 	public CommandAdmissionResult TryBegin( CommandRequestId requestId, int cost, long timestamp )
 	{
 		if ( cost <= 0 || cost > BurstUnits ) throw new ArgumentOutOfRangeException( nameof(cost) );
+		if ( !_observedFirstCharge )
+		{
+			_observedFirstCharge = true;
+			FirstChargeObserver?.Invoke( cost, BurstUnits );
+		}
+
 		lock ( _sync )
 		{
 			Refill( timestamp );

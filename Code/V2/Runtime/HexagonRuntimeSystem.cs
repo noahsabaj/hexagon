@@ -58,6 +58,11 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 	{
 		_runtimeScene = scene;
 		Listen( Stage.FinishUpdate, 100, PollLifecycle, "Hexagon v2 lifecycle" );
+		// Audit round 2's O3 (admission metering) has never been watched executing. Watching O1 run
+		// found a defect that had survived the project's whole life, so these markers exist to make
+		// "it is wired" an observation rather than an inference.
+		CommandAdmissionController.FirstChargeObserver ??= ( cost, burst ) =>
+			Log.Info( $"HEXAGON_ADMISSION_CHARGED cost={cost} burst={burst} refill={CommandAdmissionController.RefillUnitsPerSecond}/s" );
 	}
 
 	public HexRuntimeReadiness HostReadiness { get; private set; } = HexRuntimeReadiness.Absent;
