@@ -74,6 +74,19 @@ public sealed class SceneTagSpawnSelector : IHexSpawnSelector
 			position += point.WorldRotation * offset;
 		}
 
+		// Both the connect and the respawn call sites converge here, so this line is what
+		// distinguishes "one rule answered both" from a connect-time answer replayed on respawn.
+		// With a single connection the lease is reused and both paths land on the same point, so
+		// the position alone cannot tell those apart - the path and slot are the evidence.
+		var positionText = FormattableString.Invariant(
+			$"{position.x:0.###},{position.y:0.###},{position.z:0.###}" );
+		Log.Info(
+			$"HEXAGON_SPAWN_RESOLVED path={(request.IsRespawn ? "respawn" : "connect")} " +
+			$"connection={request.ConnectionId} slot={slot} active_points={points.Length} " +
+			$"tagged={candidates.Count( candidate => candidate.IsNamespaced )} " +
+			$"candidate={selection.CandidateIndex} ring={selection.Placement.Ring} " +
+			$"position={positionText}" );
+
 		return OperationResult<Transform>.Success(
 			point.WorldTransform.WithPosition( position ).WithScale( 1 ) );
 	}
