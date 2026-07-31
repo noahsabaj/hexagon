@@ -76,20 +76,20 @@ public sealed record PermissionDefinition(
 /// nothing kept them agreeing. Range, the typed prefixes, the display name, the colour and whether
 /// the dead may speak are all properties OF the channel, so they live on its definition.
 /// </para>
+/// <para>
+/// <c>Prefixes</c> is what a player types to address the channel, without the leading slash.
+/// Resolved BEFORE the command catalogue, so a prefix colliding with a command name would shadow
+/// it — a guard test forbids that rather than leaving it to review.
+/// </para>
+/// <para>
+/// <c>Range</c> is the audible radius in world units, or null for a channel that is not positional.
+/// A ranged channel with no range would silently reach nobody, so the schema compiler catches it.
+/// </para>
+/// <para>
+/// <c>AllowedWhileDead</c> defaults to false: death silences. It is per-channel because "OOC works
+/// while dead" is a common house rule, and a game should not have to fork the framework to have it.
+/// </para>
 /// </summary>
-/// <param name="Prefixes">
-/// What a player types to address this channel, without the leading slash. Resolved BEFORE the
-/// command catalogue, so a prefix that collides with a command name would shadow it — a guard test
-/// forbids that rather than leaving it to review.
-/// </param>
-/// <param name="Range">
-/// Audible radius in world units, or null for a channel that is not positional. A ranged channel
-/// with no range would silently reach nobody, so the schema compiler is the place to catch it.
-/// </param>
-/// <param name="AllowedWhileDead">
-/// Default false: death silences. Kept per-channel because "OOC works while dead" is a common house
-/// rule, and a game should not have to fork the framework to have it.
-/// </param>
 public sealed record ChatChannelDefinition(
 	string Id,
 	string? PermissionId = null,

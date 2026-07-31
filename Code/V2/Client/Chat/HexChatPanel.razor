@@ -22,7 +22,7 @@
 	<div class="hex-chat__log">
 		@foreach ( var line in Visible() )
 		{
-			<div class="hex-chat__line" style="opacity: @(Opacity( line ).ToString( "0.00" ));">
+			<div class="hex-chat__line" style="opacity: @(LineOpacity( line ).ToString( "0.00" ));">
 				@if ( !string.IsNullOrEmpty( line.ChannelLabel ) )
 				{
 					<label class="hex-chat__channel" style="color: @(line.Colour ?? "#82919a");">@line.ChannelLabel</label>
@@ -129,14 +129,41 @@
 
 	private float FadeClock() => RealTime.Now;
 
-	private IEnumerable<HexChatLine> Visible() =>
-		IsOpen ? Lines : Lines.Where( line => Opacity( line ) > 0.01f ).TakeLast( MaxVisibleWhenClosed );
+	// When this panel first saw each key. Owned here rather than passed in: the fade is about how
+	// long THIS client has had a line on screen, which only the thing doing the rendering knows.
+	private readonly Dictionary<string, float> _firstSeen = new();
 
-	/// <summary>Open chat shows everything at full strength; closed chat fades a line out as it ages.</summary>
-	private float Opacity( HexChatLine line )
+	private float ArrivalOf( HexChatLine line )
+	{
+		if ( _firstSeen.TryGetValue( line.Key, out var seen ) ) return seen;
+		var now = RealTime.Now;
+		_firstSeen[line.Key] = now;
+		return now;
+	}
+
+	private IEnumerable<HexChatLine> Visible()
+	{
+		// Retire stamps for lines the consumer has dropped, so the table cannot outgrow the log.
+		if ( _firstSeen.Count > Lines.Count )
+		{
+			var live = Lines.Select( line => line.Key ).ToHashSet();
+			foreach ( var stale in _firstSeen.Keys.Where( key => !live.Contains( key ) ).ToArray() )
+				_firstSeen.Remove( stale );
+		}
+
+		return IsOpen ? Lines : Lines.Where( line => LineOpacity( line ) > 0.01f ).TakeLast( MaxVisibleWhenClosed );
+	}
+
+	/// <summary>
+	/// Open chat shows everything at full strength; closed chat fades a line out as it ages.
+	/// Named LineOpacity rather than Opacity because <c>Panel</c> already has an <c>Opacity</c>
+	/// property: a method of the same name compiles, but shadows it, and the release build treats
+	/// warnings as errors precisely so an accidental shadow of an engine member cannot ship.
+	/// </summary>
+	private float LineOpacity( HexChatLine line )
 	{
 		if ( IsOpen ) return 1f;
-		var age = RealTime.Now - line.ReceivedAt;
+		var age = RealTime.Now - ArrivalOf( line );
 		if ( age <= FadeSeconds ) return 1f;
 		return Math.Clamp( 1f - ((age - FadeSeconds) / 1.5f), 0f, 1f );
 	}
