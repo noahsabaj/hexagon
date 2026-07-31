@@ -16,6 +16,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Shares one definition of "generated build artifact" with the release-material gate, which
+# reads it out of each repository's .gitignore. Two hand-maintained copies of that list had
+# already drifted from the .gitignore and from each other.
+. (Join-Path $PSScriptRoot 'release-inputs.ps1')
+
 $script:Failures = [System.Collections.Generic.List[string]]::new()
 $pathComparer = [System.StringComparer]::OrdinalIgnoreCase
 
@@ -201,18 +206,31 @@ function Test-AssetNamespaces {
         [Parameter(Mandatory)][string] $GameRoot
     )
 
+    # The editor writes generated artifacts beside their sources inside Assets: a compiled
+    # asset, its dependency manifest, a lightmap, a packed archive. Each is gitignored, never
+    # ships as a path of its own, and is therefore outside anything a namespace rule can be
+    # about. The suffix set comes from each repository's own .gitignore rather than from a
+    # copy here, because the copy this replaces named 'scenes/main.scene_c' literally and so
+    # failed the first time the editor wrote 'scenes/main.scene_d' beside it.
+    $libraryGenerated = Get-GeneratedAssetPattern -Root $LibraryRoot
+    $gameGenerated = Get-GeneratedAssetPattern -Root $GameRoot
+
     $libraryAssetsRoot = Join-Path $LibraryRoot 'Assets'
     foreach ($file in Get-ChildItem -LiteralPath $libraryAssetsRoot -Recurse -File -ErrorAction SilentlyContinue) {
         $path = Get-NormalizedAssetPath -AssetsRoot $libraryAssetsRoot -Path $file.FullName
-        if (-not $path.StartsWith('hexagon/', [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($path -notmatch $libraryGenerated -and
+            -not $path.StartsWith('hexagon/', [System.StringComparison]::OrdinalIgnoreCase)) {
             Add-Failure "Hexagon library asset '$path' is outside the required 'hexagon/' namespace."
         }
     }
 
+    # 'scenes/main.scene' is the one authored asset outside the namespace, because it is the
+    # launch scene the project settings point at, and it is the only tracked file there.
     $gameAssetsRoot = Join-Path $GameRoot 'Assets'
     foreach ($file in Get-ChildItem -LiteralPath $gameAssetsRoot -Recurse -File -ErrorAction SilentlyContinue) {
         $path = Get-NormalizedAssetPath -AssetsRoot $gameAssetsRoot -Path $file.FullName
-        if ($path -notin @('scenes/main.scene', 'scenes/main.scene_c') -and
+        if ($path -ne 'scenes/main.scene' -and
+            $path -notmatch $gameGenerated -and
             -not $path.StartsWith('hl2rp/', [System.StringComparison]::OrdinalIgnoreCase)) {
             Add-Failure "HL2RP asset '$path' is outside the required 'hl2rp/' namespace."
         }

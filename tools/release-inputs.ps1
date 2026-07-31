@@ -24,14 +24,58 @@ function Invoke-ReleaseInputGit {
     return $output
 }
 
+function Get-GeneratedAssetPattern {
+    <#
+    .SYNOPSIS
+    Derives, from a repository's own .gitignore, which suffixes mark a file under Assets as
+    engine build output rather than authored content.
+
+    .DESCRIPTION
+    Reading the classification rather than restating it is deliberate. '/Assets/**/*_d' was
+    added to hl2rp's .gitignore the first time the editor wrote a scene dependency file, and
+    both guards that carried their own copy of the list — the release-material gate below and
+    the namespace check in validate-project.ps1 — kept passing in CI, where no clone ever has
+    such a file, and then failed the release pipeline on the one machine that had run the
+    editor. A list maintained in three places is maintained in none of them.
+    #>
+    param([Parameter(Mandatory)][string] $Root)
+
+    # Absence of information means nothing is exempt, never an error: this function answers
+    # "what may be waved through", so no .gitignore and a .gitignore declaring no Assets
+    # rules are the same answer - none of it - and both fall through to the pattern below.
+    $ignorePath = Join-Path $Root '.gitignore'
+    if (-not (Test-Path -LiteralPath $ignorePath -PathType Leaf)) { return '(?!)' }
+
+    # Only extension-shaped rules count. A rule that names a particular file is ignored for
+    # some reason of its own, and must keep failing the release gate rather than being waved
+    # through as build output.
+    $suffixes = @(Get-Content -LiteralPath $ignorePath |
+        ForEach-Object { $_.Trim() } |
+        ForEach-Object {
+            if ($_ -cmatch '^/Assets/\*\*/\*(?<suffix>[_.][A-Za-z0-9_.]+)$') { $Matches['suffix'] }
+        })
+
+    # No such rules means nothing under Assets is build output, so nothing is exempt. That is
+    # the STRICT end of this function, not a vacuous one: every ignored file under Assets then
+    # fails the release gate, which is what a repository that declares no generated assets
+    # should get. Returning a never-matching pattern says exactly that.
+    if ($suffixes.Count -eq 0) { return '(?!)' }
+
+    return '(?:' + (($suffixes | Sort-Object -Unique |
+        ForEach-Object { [Regex]::Escape($_) }) -join '|') + ')$'
+}
+
 function Test-IsAllowedIgnoredReleaseInput {
-    param([Parameter(Mandatory)][string] $RelativePath)
+    param(
+        [Parameter(Mandatory)][string] $RelativePath,
+        [Parameter(Mandatory)][string] $GeneratedAssetPattern
+    )
 
     $path = $RelativePath.Replace('\', '/')
     return $path -cmatch '^(?:Code|Editor|tests)/(?:obj|bin)/' -or
         $path -ceq 'Code/Properties/launchSettings.json' -or
         $path -cmatch '^Code/[^/]+\.csproj$' -or
-        $path -cmatch '^Assets/.+(?:_c|\.vpk|\.los)$'
+        ($path -cmatch '^Assets/.+' -and $path -cmatch $GeneratedAssetPattern)
 }
 
 function Test-IsReleaseRelevantIgnoredPath {
@@ -269,12 +313,14 @@ function Get-RepositoryReleaseInputSet {
     # environment-sensitive (a hosted runner returned nothing for 'Code/**'/'*.cs'
     # while literal pathspecs matched), so relevance is filtered in-process instead.
     Assert-IgnoredEnumerationContract
+    $generatedAssetPattern = Get-GeneratedAssetPattern -Root $resolved
     $ignoredMaterial = @(
         Invoke-ReleaseInputGit -Root $resolved -Arguments @(
             'ls-files', '--others', '--ignored', '--exclude-standard') |
             ForEach-Object { $_.Replace('\', '/') } |
             Where-Object { (Test-IsReleaseRelevantIgnoredPath -RelativePath $_) -and
-                -not (Test-IsAllowedIgnoredReleaseInput -RelativePath $_) } |
+                -not (Test-IsAllowedIgnoredReleaseInput -RelativePath $_ `
+                    -GeneratedAssetPattern $generatedAssetPattern) } |
             Sort-Object -Unique
     )
     if ($ignoredMaterial.Count -ne 0) {

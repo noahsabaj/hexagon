@@ -141,6 +141,31 @@ ProjectSettings/Platform.config
     [void](Get-EffectiveReleaseInputs -Repositories $repositories -RequireClean)
     Remove-Item -LiteralPath (Join-Path $sourceRoot 'scratch.generated.txt') -Force
 
+    # The generated-asset exemption is DERIVED from the repository's own .gitignore rather
+    # than restated in the tooling. Two guards used to carry private copies of that list;
+    # both went stale the day '/Assets/**/*_d' was added to a project .gitignore, and both
+    # then failed the release pipeline on the only machine that had run the editor. Prove
+    # the derivation in both directions.
+    [void](New-Item -ItemType Directory -Path (Join-Path $sourceRoot 'Assets') -Force)
+    'compiled' | Set-Content -LiteralPath (Join-Path $sourceRoot 'Assets/map.scene_d') -Encoding utf8
+
+    # Ignored by a rule that is not extension-shaped, so nothing declares it build output.
+    # A repository that declares no generated assets exempts none of them: fail closed.
+    Add-Content -LiteralPath (Join-Path $sourceRoot '.gitignore') -Value 'Assets/map.scene_d'
+    Invoke-GitFixture -Arguments @('add', '.gitignore')
+    Invoke-GitFixture -Arguments @('commit', '-q', '-m', 'ignore the artifact by name')
+    Assert-ThrowsLike -Expected 'Ignored release material exists' -Action {
+        Get-EffectiveReleaseInputs -Repositories $repositories -RequireClean | Out-Null
+    }
+
+    # Declaring the suffix the way a project actually does teaches the gate, with no change
+    # to the tooling. This is the assertion the stale private copies could not have passed.
+    Add-Content -LiteralPath (Join-Path $sourceRoot '.gitignore') -Value '/Assets/**/*_d'
+    Invoke-GitFixture -Arguments @('add', '.gitignore')
+    Invoke-GitFixture -Arguments @('commit', '-q', '-m', 'declare the generated suffix')
+    [void](Get-EffectiveReleaseInputs -Repositories $repositories -RequireClean)
+    Remove-Item -LiteralPath (Join-Path $sourceRoot 'Assets/map.scene_d') -Force
+
     [void](New-Item -ItemType Directory -Path (Join-Path $sourceRoot 'tests') -Force)
     'internal static class IgnoredTestSource { }' |
         Set-Content -LiteralPath (Join-Path $sourceRoot 'tests/Ignored.cs') -Encoding utf8
