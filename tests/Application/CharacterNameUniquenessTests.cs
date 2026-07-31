@@ -1,6 +1,10 @@
+using System.Globalization;
+using System.IO;
+using System.Text.RegularExpressions;
 using Hexagon.V2.Application;
 using Hexagon.V2.Domain;
 using Hexagon.V2.Kernel;
+using Hexagon.V2.Tests.Foundation;
 
 namespace Hexagon.V2.Tests.Application;
 
@@ -87,6 +91,41 @@ public sealed class CharacterNameUniquenessTests
 			ApplicationServiceTestEnvironment.Request() with { Name = "Alyx Vance" } );
 		Assert.IsTrue( lookAlike.Failed );
 		Assert.AreEqual( ErrorCode.Conflict, lookAlike.Error!.Code );
+	}
+
+	[TestMethod]
+	public void TheSecurityDocumentPublishesTheIdentityRulesThatAreEnforced()
+	{
+		// The same treatment the command budget gets: published numbers are read out of the
+		// document and asserted against what enforces them, so editing either side alone fails
+		// here rather than shipping prose that describes a system nobody built.
+		var document = File.ReadAllText(
+			Path.Combine( RepositoryRoots.FindHexagon(), "docs", "security.md" ) );
+
+		var table = Regex.Match( document,
+			@"confusables table \(version (?<version>[\d.]+), (?<entries>[\d,]+) entries\)" );
+		Assert.IsTrue( table.Success,
+			"docs/security.md no longer states the confusables table in the form this guard reads. " +
+			"Update the guard deliberately rather than letting the published numbers go unchecked." );
+		Assert.AreEqual( ConfusableMappings.UnicodeVersion, table.Groups["version"].Value,
+			"Documented Unicode version does not match the pinned table." );
+		Assert.AreEqual( ConfusableMappings.EntryCount,
+			int.Parse( table.Groups["entries"].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture ),
+			"Documented entry count does not match the pinned table." );
+
+		// Both directions: a strictness the document offers must exist, and one the framework
+		// has must be documented. An undocumented mode is as much a defect as an imaginary one.
+		var modes = Regex.Match( document, @"Strictness is operator-selectable \((?<modes>[^)]+)\)" );
+		Assert.IsTrue( modes.Success,
+			"docs/security.md no longer lists the selectable name-uniqueness modes where this guard reads them." );
+		var documented = modes.Groups["modes"].Value
+			.Split( ',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries )
+			.Select( mode => mode.Trim( '`', ' ' ) )
+			.ToArray();
+		CollectionAssert.AreEquivalent(
+			Enum.GetNames<CharacterRules.NameUniqueness>(),
+			documented,
+			"The documented strictness settings and CharacterRules.NameUniqueness have diverged." );
 	}
 
 	[TestMethod]
