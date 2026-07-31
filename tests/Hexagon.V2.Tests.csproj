@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Hexagon.V2.Tests</RootNamespace>
+    <LangVersion>14</LangVersion>
+    <!-- Match generated s&box projects so unit builds cannot hide missing product imports. -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MSTest" Version="4.0.2" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+  </ItemGroup>
+
+  <!-- Keep the unit-test boundary independent of Sandbox. Infrastructure and Runtime
+       are compiled exclusively by the generated s&box project. -->
+  <ItemGroup>
+    <Compile Include="MSTestSettings.cs" />
+    <Compile Include="Foundation/**/*.cs" />
+    <Compile Include="Kernel/**/*.cs" />
+    <Compile Include="Persistence/**/*.cs" />
+    <Compile Include="Domain/**/*.cs" />
+    <Compile Include="Application/**/*.cs" />
+    <Compile Include="Composition/**/*.cs" />
+    <Compile Include="Networking/**/*.cs" />
+    <Compile Include="Client/**/*.cs" />
+    <Compile Include="Architecture/**/*.cs" />
+	<Compile Include="Runtime/**/*.cs" />
+	<Compile Include="Infrastructure/**/*.cs" />
+    <Compile Include="../Code/V2/Kernel/**/*.cs" Link="Product/Kernel/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../Code/V2/Persistence/**/*.cs" Link="Product/Persistence/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../Code/V2/Domain/**/*.cs" Link="Product/Domain/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../Code/V2/Application/**/*.cs" Link="Product/Application/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../Code/V2/Composition/**/*.cs" Link="Product/Composition/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../Code/V2/Networking/**/*.cs" Link="Product/Networking/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../Code/V2/Client/**/*.cs" Link="Product/Client/%(RecursiveDir)%(Filename)%(Extension)" />
+	<Compile Include="../Code/V2/Runtime/SpawnSlotAllocator.cs" Link="Product/Runtime/SpawnSlotAllocator.cs" />
+	<Compile Include="../Code/V2/Runtime/HexMovementValidator.cs" Link="Product/Runtime/HexMovementValidator.cs" />
+	<Compile Include="../Code/V2/Runtime/HostServicePublication.cs" Link="Product/Runtime/HostServicePublication.cs" />
+	<Compile Include="../Code/V2/Runtime/RuntimePlayerSession.cs" Link="Product/Runtime/RuntimePlayerSession.cs" />
+	<Compile Include="../Code/V2/Runtime/SceneShutdownBarrier.cs" Link="Product/Runtime/SceneShutdownBarrier.cs" />
+	<Compile Include="../Code/V2/Runtime/SceneHandoffPolicy.cs" Link="Product/Runtime/SceneHandoffPolicy.cs" />
+	<Compile Include="../Code/V2/Infrastructure/PrefixedPersistenceStorage.cs" Link="Product/Infrastructure/PrefixedPersistenceStorage.cs" />
+  </ItemGroup>
+
+</Project>

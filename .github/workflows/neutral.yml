@@ -1,0 +1,75 @@
+name: hexagon
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  neutral:
+    name: hexagon / neutral
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out Hexagon
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: tests/packages.lock.json
+      - name: Run locked portable verification
+        shell: pwsh
+        run: ./tools/verify-portable.ps1
+      - name: Require a clean generated-file diff
+        shell: bash
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
+
+  # Advisory only: surfaces consumer breakage against the HL2RP head between lock bumps.
+  # This job must NEVER be added to branch protection — intentional breaking changes
+  # paired with an hl2rp update would otherwise deadlock; the release gate already
+  # refuses to publish an unmatched pair.
+  #
+  # Tracks HL2RP_CONSUMER_REF rather than main because main is still the pre-v2 gamemode and
+  # carries no tests/ directory at all: pointed at it, this job died in setup-dotnet on every
+  # run since it was added and never once reached a restore, so it asserted a safety net that
+  # did not exist while showing a permanently red check. Point this back at main once the v2
+  # rewrite lands there.
+  cross-head-canary:
+    name: hexagon / cross-head-canary (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+    env:
+      HL2RP_CONSUMER_REF: agent/v2-audit-remediation
+    steps:
+      - name: Check out candidate Hexagon
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          path: hexagon
+      - name: Check out the HL2RP consumer head
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: noahsabaj/hl2rp-hexagon
+          ref: ${{ env.HL2RP_CONSUMER_REF }}
+          path: hl2rp-hexagon
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: hl2rp-hexagon/tests/packages.lock.json
+      - name: Build and test HL2RP against the candidate Hexagon
+        shell: pwsh
+        run: |
+          # Runs the consumer csproj directly: hl2rp's lock-enforcing verifier script
+          # must stay strict, so the canary bypasses it rather than weakening it.
+          dotnet restore hl2rp-hexagon/tests/HL2RP.V2.Tests.csproj --locked-mode --nologo
+          dotnet test hl2rp-hexagon/tests/HL2RP.V2.Tests.csproj --configuration Release --no-restore --nologo

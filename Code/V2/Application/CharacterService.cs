@@ -1,0 +1,611 @@
+#nullable enable
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Hexagon.V2.Domain;
+using Hexagon.V2.Kernel;
+using Hexagon.V2.Kernel.Events;
+using Hexagon.V2.Kernel.Policies;
+using Hexagon.V2.Kernel.Schema;
+using Hexagon.V2.Persistence;
+
+namespace Hexagon.V2.Application;
+
+/// <summary>
+/// Owns the complete character creation/deletion transaction. It publishes only
+/// immutable post-commit facts and never trusts an account identifier from a request.
+/// </summary>
+public sealed class CharacterService
+{
+	private const string MainInventoryRole = InventoryRoles.Main;
+	private const string BagInventoryRole = InventoryRoles.Bag;
+	private const string ClassCapacityReservationNamespace = "hexagon.class-capacity";
+
+	/// <summary>
+	/// Reserves the look-alike skeleton of a character name rather than the name itself, so a
+	/// name that merely renders like an existing one is refused along with an exact duplicate.
+	/// Deleting a character releases every reservation it holds, so the name becomes available
+	/// again with the character that held it.
+	/// </summary>
+	private const string NameReservationNamespace = "hexagon.character-name";
+
+	/// <summary>
+	/// Raised once per creation attempt with the name that was submitted, the key it reduced to,
+	/// the scheme that produced that key, and whether an existing character already holds it. This
+	/// is the whole uniqueness decision in one line, which is what an operator needs to answer "why
+	/// was that name refused" - and, when nothing is ever refused, to see that the check runs at
+	/// all. A rule that only ever says yes is indistinguishable from a rule that was never wired.
+	/// </summary>
+	public static Action<string, string, CharacterRules.NameUniqueness, bool>? NameDecisionObserver { get; set; }
+
+	private readonly DomainRepositories _repositories;
+	private readonly CompiledSchema _schema;
+	private readonly ICharacterModelCatalog _models;
+	private readonly ICharacterStateFactory _stateFactory;
+	private readonly IReadOnlyList<ICharacterInitializer> _initializers;
+	private readonly IAggregateIdGenerator _ids;
+	private readonly IHexClock _clock;
+	private readonly InventoryLayoutService _layout;
+	private readonly PolicyPipeline<CharacterCreationContext> _creationPolicy;
+	private readonly PolicyPipeline<CharacterDeletionContext> _deletionPolicy;
+	private readonly PostCommitEventBus<CharacterCreatedEvent> _createdEvents;
+	private readonly PostCommitEventBus<CharacterDeletedEvent> _deletedEvents;
+	private readonly CharacterRules.NameUniqueness _nameUniqueness;
+	private readonly int _inventoryWidth;
+	private readonly int _inventoryHeight;
+
+	public CharacterService(
+		DomainRepositories repositories,
+		CompiledSchema schema,
+		ICharacterModelCatalog models,
+		ICharacterStateFactory stateFactory,
+		IEnumerable<ICharacterInitializer> initializers,
+		IAggregateIdGenerator ids,
+		IHexClock clock,
+		InventoryLayoutService layout,
+		PolicyPipeline<CharacterCreationContext> creationPolicy,
+		PolicyPipeline<CharacterDeletionContext> deletionPolicy,
+		PostCommitEventBus<CharacterCreatedEvent>? createdEvents = null,
+		PostCommitEventBus<CharacterDeletedEvent>? deletedEvents = null,
+		int inventoryWidth = 8,
+		int inventoryHeight = 6,
+		CharacterRules.NameUniqueness nameUniqueness = CharacterRules.NameUniqueness.Skeleton )
+	{
+		_repositories = repositories ?? throw new ArgumentNullException( nameof(repositories) );
+		_schema = schema ?? throw new ArgumentNullException( nameof(schema) );
+		_models = models ?? throw new ArgumentNullException( nameof(models) );
+		_stateFactory = stateFactory ?? throw new ArgumentNullException( nameof(stateFactory) );
+		_initializers = (initializers ?? throw new ArgumentNullException( nameof(initializers) ))
+			.OrderBy( initializer => initializer.Order )
+			.ThenBy( initializer => initializer.Id, StringComparer.Ordinal )
+			.ToArray();
+		_ids = ids ?? throw new ArgumentNullException( nameof(ids) );
+		_clock = clock ?? throw new ArgumentNullException( nameof(clock) );
+		_layout = layout ?? throw new ArgumentNullException( nameof(layout) );
+		_creationPolicy = creationPolicy ?? throw new ArgumentNullException( nameof(creationPolicy) );
+		_deletionPolicy = deletionPolicy ?? throw new ArgumentNullException( nameof(deletionPolicy) );
+		_createdEvents = createdEvents ?? new PostCommitEventBus<CharacterCreatedEvent>();
+		_deletedEvents = deletedEvents ?? new PostCommitEventBus<CharacterDeletedEvent>();
+		if ( inventoryWidth <= 0 ) throw new ArgumentOutOfRangeException( nameof(inventoryWidth) );
+		if ( inventoryHeight <= 0 ) throw new ArgumentOutOfRangeException( nameof(inventoryHeight) );
+		_nameUniqueness = nameUniqueness;
+		_inventoryWidth = inventoryWidth;
+		_inventoryHeight = inventoryHeight;
+	}
+
+	/// <summary>
+	/// The comparison key for a name under the configured scheme. Applied to the submitted name and
+	/// to every existing one from the same method, so the two sides of the comparison cannot drift.
+	/// </summary>
+	private string NameKey( string name ) => _nameUniqueness == CharacterRules.NameUniqueness.Skeleton
+		? CharacterNameSkeleton.Of( name )
+		: CharacterNameSkeleton.Exact( name );
+
+	public IReadOnlyList<CharacterRecord> ListForAccount( AccountId accountId )
+	{
+		// Bounded keyed probes over the dense slot key space; O(1) in store size and
+		// slot-ordered by construction, replacing a full character-table scan and sort.
+		var characters = new List<CharacterRecord>();
+		for ( var slot = 0; slot < CharacterRules.MaximumSlots; slot++ )
+		{
+			var slotDocument = _repositories.CharacterSlots.Find( DomainKeys.CharacterSlot( accountId, slot ) );
+			if ( slotDocument is null ) continue;
+			var character = _repositories.Characters.Find(
+				DomainKeys.Character( slotDocument.Value.CharacterId ) );
+			if ( character is not null ) characters.Add( character.Value );
+		}
+
+		return characters;
+	}
+
+	public ValueTask<OperationResult<CharacterCreationReceipt>> CreateAsync(
+		AccountId authenticatedAccount,
+		CharacterCreationRequest request,
+		CancellationToken cancellationToken = default )
+	{
+		ArgumentNullException.ThrowIfNull( request );
+		return CreateCoreAsync( authenticatedAccount, request, cancellationToken );
+	}
+
+	public async ValueTask<OperationResult<CharacterDeletionReceipt>> DeleteAsync(
+		AccountId authenticatedAccount,
+		CharacterId characterId,
+		CancellationToken cancellationToken = default )
+	{
+		var characterDocument = _repositories.Characters.Find( DomainKeys.Character( characterId ) );
+			if ( characterDocument is null || characterDocument.Value.AccountId != authenticatedAccount )
+				return OperationResult<CharacterDeletionReceipt>.Failure(
+					ErrorCode.NotFound, "Character was not found for the authenticated account." );
+
+			var character = characterDocument.Value;
+			var policy = _deletionPolicy.Evaluate( new CharacterDeletionContext( authenticatedAccount, character ) );
+			if ( policy.Failed )
+				return OperationResult<CharacterDeletionReceipt>.Failure( policy.Error!.Code, policy.Error.Message );
+
+			var inventories = FindOwnedInventoryGraph( character.Id );
+			var ownedItemIds = inventories
+				.SelectMany( inventory => inventory.Value.Placements )
+				.Select( placement => placement.ItemId )
+				.ToHashSet();
+			var slotDocument = _repositories.CharacterSlots.Find(
+				DomainKeys.CharacterSlot( character.AccountId, character.Slot ) );
+			if ( slotDocument is null )
+				return OperationResult<CharacterDeletionReceipt>.Failure(
+					ErrorCode.Conflict, "Character owner-slot guard is missing." );
+			var lifecycleGuard = _repositories.CharacterLifecycleGuards.Find(
+				DomainKeys.CharacterLifecycleGuard( character.Id ) );
+			if ( lifecycleGuard is null )
+				return OperationResult<CharacterDeletionReceipt>.Failure(
+					ErrorCode.Conflict, "Character lifecycle guard is missing." );
+			var ownerIndexes = inventories
+				.Select( inventory =>
+				{
+					var role = inventory.Value.Owner.Kind == InventoryOwnerKind.Character ? MainInventoryRole : BagInventoryRole;
+					return _repositories.OwnerInventories.Find(
+						DomainKeys.OwnerInventory( inventory.Value.Owner, role ) );
+				} )
+				.Where( document => document is not null )
+				.Select( document => document! )
+				.ToArray();
+			var itemDocuments = ownedItemIds
+				.Select( itemId => _repositories.Items.Find( DomainKeys.Item( itemId ) ) )
+				.Where( document => document is not null )
+				.Select( document => document! )
+				.ToArray();
+			var reservations = _repositories.UniqueReservations.All()
+				.Where( document => document.Value.CharacterId == character.Id )
+				.ToArray();
+			var references = _repositories.CharacterReferences.All()
+				.Where( document => document.Value.CharacterId == character.Id ||
+					document.Value.RelatedCharacterId == character.Id )
+				.ToArray();
+			var relatedGuardDocuments = references
+				.SelectMany( reference => new[]
+				{
+					reference.Value.CharacterId,
+					reference.Value.RelatedCharacterId
+				} )
+				.Where( target => target is not null && target.Value != character.Id )
+				.Select( target => target!.Value )
+				.Distinct()
+				.Select( target => _repositories.CharacterLifecycleGuards.Find(
+					DomainKeys.CharacterLifecycleGuard( target ) ) )
+				.Where( document => document is not null )
+				.Select( document => document! )
+				.ToArray();
+
+			var unitOfWork = _repositories.Provider.BeginUnitOfWork();
+			unitOfWork.Delete( _repositories.Characters, characterDocument );
+			unitOfWork.Delete( _repositories.CharacterSlots, slotDocument );
+			unitOfWork.Delete( _repositories.CharacterLifecycleGuards, lifecycleGuard );
+
+			foreach ( var inventory in inventories )
+				unitOfWork.Delete( _repositories.Inventories, inventory );
+			foreach ( var ownerIndex in ownerIndexes )
+				unitOfWork.Delete( _repositories.OwnerInventories, ownerIndex );
+
+			foreach ( var itemDocument in itemDocuments )
+				unitOfWork.Delete( _repositories.Items, itemDocument );
+
+			foreach ( var reservation in reservations )
+				unitOfWork.Delete( _repositories.UniqueReservations, reservation );
+
+			foreach ( var reference in references )
+				unitOfWork.Delete( _repositories.CharacterReferences, reference );
+			foreach ( var relatedGuard in relatedGuardDocuments )
+			{
+				var editor = unitOfWork.Edit( _repositories.CharacterLifecycleGuards, relatedGuard );
+				if ( editor is null )
+				{
+					await unitOfWork.DisposeAsync();
+					return OperationResult<CharacterDeletionReceipt>.Failure(
+						ErrorCode.Conflict, "Related character lifecycle guard changed." );
+				}
+				editor.Replace( editor.Value with
+				{
+					ReferenceRevision = checked(editor.Value.ReferenceRevision + 1)
+				} );
+				unitOfWork.Save( editor );
+			}
+
+			var committed = await unitOfWork.CommitAsync( cancellationToken );
+			await unitOfWork.DisposeAsync();
+			if ( !committed.Succeeded )
+				return PersistenceResultMapping.Failure<CharacterDeletionReceipt>( committed.Error! );
+
+			var receipt = new CharacterDeletionReceipt( character.Id, character.AccountId, committed.Value! );
+			_deletedEvents.Publish( new CharacterDeletedEvent( character.Id, character.AccountId, committed.Value! ) );
+			return OperationResult<CharacterDeletionReceipt>.Success( receipt );
+	}
+
+	private async ValueTask<OperationResult<CharacterCreationReceipt>> CreateCoreAsync(
+		AccountId authenticatedAccount,
+		CharacterCreationRequest request,
+		CancellationToken cancellationToken )
+	{
+		var allowedFields = _schema.CharacterFields.All
+			.Where( definition => definition.ShowInCreation )
+			.Select( definition => definition.Id )
+			.ToHashSet( StringComparer.Ordinal );
+		var basicValidation = CharacterRules.ValidateCreationRequest( request, allowedFields );
+		if ( basicValidation.Failed )
+			return OperationResult<CharacterCreationReceipt>.Failure(
+				basicValidation.Error!.Code, basicValidation.Error.Message );
+
+		var fieldValidation = ValidateCreationFields( request );
+		if ( fieldValidation.Failed )
+			return OperationResult<CharacterCreationReceipt>.Failure(
+				fieldValidation.Error!.Code, fieldValidation.Error.Message );
+
+		if ( !_schema.Factions.TryGet( request.Faction.Value, out var faction ) )
+			return OperationResult<CharacterCreationReceipt>.Failure( ErrorCode.UnknownDefinition, "Unknown faction." );
+
+		ClassId? selectedClass = request.Class;
+		Kernel.Definitions.ClassDefinition? selectedClassDefinition = null;
+		if ( selectedClass is null && faction!.DefaultClassId is not null )
+			selectedClass = new ClassId( faction.DefaultClassId );
+
+		if ( selectedClass is not null )
+		{
+			if ( !_schema.Classes.TryGet( selectedClass.Value.Value, out selectedClassDefinition ) ||
+				!string.Equals( selectedClassDefinition!.FactionId, request.Faction.Value, StringComparison.Ordinal ) )
+				return OperationResult<CharacterCreationReceipt>.Failure( ErrorCode.PolicyDenied, "Class is not valid for the selected faction." );
+		}
+
+		if ( !_models.IsAllowed( request.Model, request.Faction, selectedClass ) )
+			return OperationResult<CharacterCreationReceipt>.Failure( ErrorCode.PolicyDenied, "Model is not allowed for the selected faction and class." );
+
+		// ValidateCreationRequest above already proved both canonicalize, so persisting the
+		// same canonical form is what keeps the validated string and the stored string equal.
+		var normalizedRequest = request with
+		{
+			Name = CharacterRules.NormalizeName( request.Name ).Value,
+			Description = CharacterRules.NormalizeDescription( request.Description ).Value,
+			Class = selectedClass,
+			Fields = new Dictionary<string, CreationValue>( request.Fields, StringComparer.Ordinal )
+		};
+		var ownedCharacters = ListForAccount( authenticatedAccount );
+		var slot = CharacterRules.FindLowestFreeSlot( ownedCharacters );
+		if ( slot < 0 )
+			return OperationResult<CharacterCreationReceipt>.Failure(
+				ErrorCode.Conflict,
+				$"All {CharacterRules.MaximumSlots} character slots are occupied for this account." );
+		var now = _clock.UtcNow;
+		var context = new CharacterCreationContext( authenticatedAccount, normalizedRequest, slot, now );
+		var policy = _creationPolicy.Evaluate( context );
+		if ( policy.Failed )
+			return OperationResult<CharacterCreationReceipt>.Failure( policy.Error!.Code, policy.Error.Message );
+
+		var state = _stateFactory.Create( context );
+		if ( state.Failed )
+			return OperationResult<CharacterCreationReceipt>.Failure( state.Error!.Code, state.Error.Message );
+		if ( state.Value.StartingBalance < 0 )
+			return OperationResult<CharacterCreationReceipt>.Failure( ErrorCode.InvalidArgument, "Starting balance cannot be negative." );
+		var stateType = ValidateTypedPayload( state.Value.State );
+		if ( stateType.Failed )
+			return OperationResult<CharacterCreationReceipt>.Failure( stateType.Error!.Code, stateType.Error.Message );
+
+		var contributions = new List<CharacterInitializerContribution>();
+		foreach ( var initializer in _initializers )
+		{
+			var contribution = initializer.Build( context, state.Value );
+			if ( contribution.Failed )
+				return OperationResult<CharacterCreationReceipt>.Failure(
+					contribution.Error!.Code,
+					$"Initializer '{initializer.Id}' failed: {contribution.Error.Message}" );
+			contributions.Add( contribution.Value );
+		}
+
+		var characterId = _ids.NewCharacterId();
+		var inventoryId = _ids.NewInventoryId();
+		var character = new CharacterRecord
+		{
+			Id = characterId,
+			AccountId = authenticatedAccount,
+			Slot = slot,
+			Name = normalizedRequest.Name,
+			Description = normalizedRequest.Description,
+			Model = normalizedRequest.Model,
+			Faction = normalizedRequest.Faction,
+			Class = selectedClass,
+			Balance = state.Value.StartingBalance,
+			CreatedAt = now,
+			LastPlayedAt = now,
+			SchemaState = state.Value.State.DeepCopy(),
+			Revision = 0
+		};
+		var mainInventory = new InventoryRecord
+		{
+			Id = inventoryId,
+			Owner = InventoryOwner.Character( characterId ),
+			Width = _inventoryWidth,
+			Height = _inventoryHeight,
+			Placements = Array.Empty<InventoryPlacement>(),
+			Revision = 0
+		};
+
+		var items = new List<ItemRecord>();
+		var inventories = new List<InventoryRecord>();
+		var ownerIndexes = new List<OwnerInventoryRecord>();
+		var stagedDefinitions = new Dictionary<ItemId, DefinitionId>();
+		var fill = FillInventory(
+			mainInventory,
+			contributions.SelectMany( contribution => contribution.Items ),
+			items,
+			inventories,
+			ownerIndexes,
+			stagedDefinitions );
+		if ( fill.Failed )
+			return OperationResult<CharacterCreationReceipt>.Failure( fill.Error!.Code, fill.Error.Message );
+		mainInventory = fill.Value;
+		inventories.Insert( 0, mainInventory );
+		ownerIndexes.Insert( 0, new OwnerInventoryRecord
+		{
+			Role = MainInventoryRole,
+			Owner = mainInventory.Owner,
+			InventoryId = mainInventory.Id
+		} );
+
+		var reservationPlans = contributions.SelectMany( contribution => contribution.Reservations ).ToList();
+		if ( _nameUniqueness != CharacterRules.NameUniqueness.None )
+		{
+			var nameKey = NameKey( character.Name );
+			if ( nameKey.Length == 0 )
+				return OperationResult<CharacterCreationReceipt>.Failure(
+					ErrorCode.InvalidArgument, "Name has no identity-bearing characters." );
+			// Decided against the CHARACTERS, not against the reservation index. A name reservation
+			// is written only when a character is created, so it preserves whatever scheme was in
+			// force at that moment: a character that predates this setting being enabled holds no
+			// reservation at all, and a store switched between Exact and Skeleton holds keys
+			// computed the other way. Reading the index would therefore admit a name that reads
+			// exactly like one already in use - the single thing this feature exists to prevent -
+			// and the first characters on any upgraded server, typically the operators' own, are
+			// precisely the ones it would leave unprotected. The characters are the source of truth
+			// for which names are in use. The reservation below stays, but only as the atomic guard
+			// that settles two concurrent creations of the same name: both pass this read, and the
+			// second loses on the reservation Create.
+			var conflicting = _repositories.Characters.All()
+				.Any( document => NameKey( document.Value.Name ) == nameKey );
+			NameDecisionObserver?.Invoke( character.Name, nameKey, _nameUniqueness, conflicting );
+			if ( conflicting )
+				return OperationResult<CharacterCreationReceipt>.Failure(
+					ErrorCode.Conflict,
+					_nameUniqueness == CharacterRules.NameUniqueness.Skeleton
+						? "Another character already uses this name or one that reads like it."
+						: "Another character already uses this name." );
+			reservationPlans.Add( new UniqueReservationPlan( NameReservationNamespace, nameKey ) );
+		}
+		if ( selectedClassDefinition?.Capacity is int classCapacity )
+		{
+			var capacitySlot = Enumerable.Range( 0, classCapacity )
+				.FirstOrDefault( candidate => _repositories.UniqueReservations.Find(
+					DomainKeys.UniqueReservation(
+						ClassCapacityReservationNamespace,
+						$"{selectedClassDefinition.Id}.{candidate:D6}" ) ) is null, -1 );
+			if ( capacitySlot < 0 )
+				return OperationResult<CharacterCreationReceipt>.Failure(
+					ErrorCode.Conflict, $"Class '{selectedClassDefinition.Id}' is at capacity." );
+			reservationPlans.Add( new UniqueReservationPlan(
+				ClassCapacityReservationNamespace,
+				$"{selectedClassDefinition.Id}.{capacitySlot:D6}" ) );
+		}
+		var reservationKeys = new HashSet<string>( StringComparer.Ordinal );
+		foreach ( var reservation in reservationPlans )
+		{
+			var key = DomainKeys.UniqueReservation( reservation.Namespace, reservation.Value );
+			if ( !reservationKeys.Add( key ) || _repositories.UniqueReservations.Find( key ) is not null )
+				return OperationResult<CharacterCreationReceipt>.Failure(
+					ErrorCode.Conflict, $"Unique value '{reservation.Namespace}' is already reserved." );
+		}
+
+		var unitOfWork = _repositories.Provider.BeginUnitOfWork();
+		unitOfWork.Create( _repositories.CharacterSlots, DomainKeys.CharacterSlot( authenticatedAccount, slot ), new CharacterSlotRecord
+		{
+			AccountId = authenticatedAccount,
+			Slot = slot,
+			CharacterId = character.Id
+		} );
+		unitOfWork.Create( _repositories.Characters, DomainKeys.Character( character.Id ), character );
+		unitOfWork.Create(
+			_repositories.CharacterLifecycleGuards,
+			DomainKeys.CharacterLifecycleGuard( character.Id ),
+			new CharacterLifecycleGuardRecord { CharacterId = character.Id, ReferenceRevision = 0 } );
+
+		foreach ( var inventory in inventories )
+			unitOfWork.Create( _repositories.Inventories, DomainKeys.Inventory( inventory.Id ), inventory );
+		foreach ( var ownerIndex in ownerIndexes )
+			unitOfWork.Create(
+				_repositories.OwnerInventories,
+				DomainKeys.OwnerInventory( ownerIndex.Owner, ownerIndex.Role ),
+				ownerIndex );
+		foreach ( var item in items )
+			unitOfWork.Create( _repositories.Items, DomainKeys.Item( item.Id ), item );
+		foreach ( var reservation in reservationPlans )
+			unitOfWork.Create(
+				_repositories.UniqueReservations,
+				DomainKeys.UniqueReservation( reservation.Namespace, reservation.Value ),
+				new UniqueReservationRecord
+				{
+					Namespace = reservation.Namespace,
+					Value = reservation.Value,
+					CharacterId = character.Id
+				} );
+
+		var committed = await unitOfWork.CommitAsync( cancellationToken );
+		await unitOfWork.DisposeAsync();
+		if ( !committed.Succeeded ) return PersistenceResultMapping.Failure<CharacterCreationReceipt>( committed.Error! );
+
+		var committedInventories = inventories.ToArray();
+		var committedItems = items.ToArray();
+		var receipt = new CharacterCreationReceipt(
+			character, mainInventory, committedInventories, committedItems, committed.Value! );
+		_createdEvents.Publish( new CharacterCreatedEvent(
+			character, mainInventory, committedInventories, committedItems, committed.Value! ) );
+		return OperationResult<CharacterCreationReceipt>.Success( receipt );
+	}
+
+	private OperationResult<InventoryRecord> FillInventory(
+		InventoryRecord destination,
+		IEnumerable<ItemGrantPlan> grants,
+		ICollection<ItemRecord> items,
+		ICollection<InventoryRecord> childInventories,
+		ICollection<OwnerInventoryRecord> ownerIndexes,
+		IDictionary<ItemId, DefinitionId> stagedDefinitions )
+	{
+		var current = destination;
+		foreach ( var grant in grants )
+		{
+			if ( !_schema.Items.TryGet( grant.Definition.Value, out _ ) )
+				return OperationResult<InventoryRecord>.Failure(
+					ErrorCode.UnknownDefinition, $"Initializer requested unknown item '{grant.Definition}'." );
+			foreach ( var trait in grant.Traits )
+			{
+				var traitType = ValidateTypedPayload( trait.Value );
+				if ( traitType.Failed )
+					return OperationResult<InventoryRecord>.Failure(
+						traitType.Error!.Code, $"Trait '{trait.Key}' is invalid: {traitType.Error.Message}" );
+			}
+
+			var item = new ItemRecord
+			{
+				Id = _ids.NewItemId(),
+				Definition = grant.Definition,
+				Traits = grant.Traits.ToDictionary(
+					pair => pair.Key,
+					pair => pair.Value.DeepCopy(),
+					StringComparer.Ordinal ),
+				Revision = 0
+			};
+			if ( !stagedDefinitions.TryAdd( item.Id, item.Definition ) )
+				return OperationResult<InventoryRecord>.Failure( ErrorCode.Conflict, "ID generator produced a duplicate item ID." );
+
+			var firstFit = _layout.FindFirstFit( current, item, (IReadOnlyDictionary<ItemId, DefinitionId>)stagedDefinitions );
+			if ( firstFit.Failed )
+				return OperationResult<InventoryRecord>.Failure( firstFit.Error!.Code, firstFit.Error.Message );
+			var added = _layout.AddAt(
+				current, item, firstFit.Value.X, firstFit.Value.Y,
+				(IReadOnlyDictionary<ItemId, DefinitionId>)stagedDefinitions );
+			if ( added.Failed )
+				return OperationResult<InventoryRecord>.Failure( added.Error!.Code, added.Error.Message );
+			current = added.Value;
+			items.Add( item );
+
+			if ( grant.Bag is null ) continue;
+			if ( grant.Bag.Width <= 0 || grant.Bag.Height <= 0 )
+				return OperationResult<InventoryRecord>.Failure( ErrorCode.InvalidArgument, "Bag dimensions must be positive." );
+			var bagInventory = new InventoryRecord
+			{
+				Id = _ids.NewInventoryId(),
+				Owner = InventoryOwner.ParentItem( item.Id ),
+				Width = grant.Bag.Width,
+				Height = grant.Bag.Height,
+				Placements = Array.Empty<InventoryPlacement>(),
+				Revision = 0
+			};
+			var filledBag = FillInventory(
+				bagInventory, grant.Bag.Items, items, childInventories, ownerIndexes, stagedDefinitions );
+			if ( filledBag.Failed ) return filledBag;
+			childInventories.Add( filledBag.Value );
+			ownerIndexes.Add( new OwnerInventoryRecord
+			{
+				Role = BagInventoryRole,
+				Owner = filledBag.Value.Owner,
+				InventoryId = filledBag.Value.Id
+			} );
+		}
+
+		return OperationResult<InventoryRecord>.Success( current );
+	}
+
+	private OperationResult ValidateCreationFields( CharacterCreationRequest request )
+	{
+		foreach ( var definition in _schema.CharacterFields.All.Where( field => field.ShowInCreation ) )
+		{
+			if ( !request.Fields.TryGetValue( definition.Id, out var value ) )
+			{
+				if ( definition.Required && definition.DefaultValue is null )
+					return OperationResult.Failure( ErrorCode.InvalidArgument, $"Creation field '{definition.Id}' is required." );
+				continue;
+			}
+
+			var validType = value.Kind switch
+			{
+				CreationValueKind.String => definition.ValueKind == Kernel.Definitions.CharacterFieldValueKind.String,
+				CreationValueKind.Choice => definition.ValueKind == Kernel.Definitions.CharacterFieldValueKind.Choice,
+				CreationValueKind.Integer => definition.ValueKind == Kernel.Definitions.CharacterFieldValueKind.Integer,
+				CreationValueKind.Boolean => definition.ValueKind == Kernel.Definitions.CharacterFieldValueKind.Boolean,
+				_ => false
+			};
+			if ( !validType )
+				return OperationResult.Failure( ErrorCode.InvalidArgument, $"Creation field '{definition.Id}' has the wrong type." );
+		}
+
+		return OperationResult.Success();
+	}
+
+	private OperationResult ValidateTypedPayload( TypedPayload payload )
+	{
+		if ( !_schema.PersistedTypes.TryGet( payload.TypeId.Value, out var registration ) )
+			return OperationResult.Failure(
+				ErrorCode.PersistedTypeInvalid, $"Persisted type '{payload.TypeId}' is not registered." );
+		var registeredVersion = registration!.Version;
+		if ( payload.TypeVersion <= 0 || payload.TypeVersion > registeredVersion )
+			return OperationResult.Failure(
+				ErrorCode.PersistedTypeInvalid,
+				$"Payload '{payload.TypeId}' version {payload.TypeVersion} is incompatible with registered version {registeredVersion}." );
+		return OperationResult.Success();
+	}
+
+	private IReadOnlyList<DocumentSnapshot<InventoryRecord>> FindOwnedInventoryGraph( CharacterId characterId )
+	{
+		var all = _repositories.Inventories.All().ToArray();
+		var owned = new List<DocumentSnapshot<InventoryRecord>>();
+		var itemFrontier = new Queue<ItemId>();
+		foreach ( var inventory in all.Where( candidate =>
+			candidate.Value.Owner.Kind == InventoryOwnerKind.Character &&
+			candidate.Value.Owner.OwnerId == characterId.Value ) )
+		{
+			owned.Add( inventory );
+			foreach ( var placement in inventory.Value.Placements ) itemFrontier.Enqueue( placement.ItemId );
+		}
+
+		var seenInventories = owned.Select( inventory => inventory.Value.Id ).ToHashSet();
+		while ( itemFrontier.Count > 0 )
+		{
+			var parentItem = itemFrontier.Dequeue();
+			foreach ( var child in all.Where( candidate =>
+				candidate.Value.Owner.Kind == InventoryOwnerKind.ParentItem &&
+				candidate.Value.Owner.OwnerId == parentItem.Value ) )
+			{
+				if ( !seenInventories.Add( child.Value.Id ) ) continue;
+				owned.Add( child );
+				foreach ( var placement in child.Value.Placements ) itemFrontier.Enqueue( placement.ItemId );
+			}
+		}
+
+		return owned;
+	}
+}
