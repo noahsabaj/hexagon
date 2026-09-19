@@ -50,7 +50,7 @@ itself to.
 | Rules with no engine in them: names, inventory grid, transfers, journal, capabilities, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
 | Components: game manager, player, door, chat, operator commands | `Code` | Compiled against the installed engine, warnings as errors |
 | Default HUD | `Code/UI` | Same compile, then looked at in the play test |
-| A whole game on top | a game project | `tools/playtest.ps1` plays it in the real editor |
+| A whole game on top | a game project | `tools/playtest.ps1` plays it in the real editor; `tools/playtest-server.ps1` plays it as two clients on a dedicated server |
 
 What an onlooker could see is `[Sync( SyncFlags.FromHost )]` on components. Everything else goes
 to its owner by `[Rpc.Owner]`. A client changes nothing directly: it calls a `[Rpc.Host]` request, and the host
@@ -74,6 +74,15 @@ pwsh tools/playtest.ps1
 
 Boots the editor, enters play mode, and plays a full scenario through the real RPC path,
 including a restart, in a throwaway data folder.
+
+```bash
+pwsh tools/playtest-server.ps1
+```
+
+Starts a real dedicated server and joins two real game clients to it, then asks each client what
+it was actually told: that the other player's name never arrived, that a whisper stopped at its
+range, that a door one opened is open for the other. Needs Steam running and takes several
+minutes, most of it the clients starting.
 
 ## Operator commands
 

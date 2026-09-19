@@ -28,6 +28,11 @@ public sealed class GameManager : Component, Component.INetworkListener
 
 	[Property] public float AutosaveSeconds { get; set; } = 60f;
 
+	/// <summary>Host: every connection that is not the host itself, in the order they joined.</summary>
+	public IReadOnlyList<Connection> Clients =>
+		_clients.Select( id => Connection.All.FirstOrDefault( value => value.Id == id ) ).Where( value => value is not null ).ToArray()!;
+
+	private readonly List<Guid> _clients = new();
 	private readonly Dictionary<long, AccountData> _accounts = new();
 	private RealTimeSince _sinceAutosave;
 
@@ -60,6 +65,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 
 	protected override void OnFixedUpdate()
 	{
+		Dev.DevCommands.PollInbox();
 		if ( !Networking.IsHost || Roster is null || _sinceAutosave < AutosaveSeconds ) return;
 		_sinceAutosave = 0;
 		foreach ( var player in Scene.GetAllComponents<Player>() ) player.HostSave();
@@ -73,6 +79,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 			connection.CanSpawnObjects = false;
 			connection.CanRefreshObjects = false;
 			connection.CanDestroyObjects = false;
+			_clients.Add( connection.Id );
 		}
 
 		Journal?.Record( "connection.join", new Actor( (long)connection.SteamId.ValueUnsigned, Name: connection.DisplayName ) );
@@ -89,6 +96,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 
 	void INetworkListener.OnDisconnected( Connection connection )
 	{
+		_clients.Remove( connection.Id );
 		Journal?.Record( "connection.leave", new Actor( (long)connection.SteamId.ValueUnsigned, Name: connection.DisplayName ) );
 		foreach ( var player in Scene.GetAllComponents<Player>().Where( value => value.Network.Owner == connection ) )
 		{

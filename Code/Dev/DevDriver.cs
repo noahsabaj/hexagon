@@ -30,19 +30,123 @@ public sealed class DevDriver : Component
 		{
 			_command = value ?? string.Empty;
 			if ( _command.Length == 0 ) return;
-			LastResult = Run( _command.Split( '|' ) );
+			LastResult = DevCommands.Run( _command.Split( '|' ) );
 			// The automation reads results back from the console.
 			Log.Info( $"[dev] {_command} => {LastResult}" );
 		}
 	}
+}
 
-	private string Run( string[] args )
+/// <summary>
+/// The commands a test plays the game with. In the editor they arrive through <see cref="DevDriver"/>.
+/// Against a dedicated server they arrive through the server: <see cref="PollInbox"/> or
+/// <c>hexagon_dev_send</c> relays one to a client, which runs it as its own player and reports back. Both ends must have been
+/// started with <c>+hexagon_dev 1</c>, so a normal server cannot drive a client and a normal client
+/// cannot be driven.
+/// </summary>
+public static class DevCommands
+{
+	[ConVar( "hexagon_dev" )]
+	public static bool Enabled { get; set; }
+
+	/// <summary>Server console: <c>hexagon_dev_send 1 "say|Hello"</c>. Client 0 is the server itself; clients count from 1 in join order.</summary>
+	[ConCmd( "hexagon_dev_send" )]
+	public static void Send( int client, string command )
 	{
-		if ( !Game.IsEditor ) return "refused: editor only";
+		if ( !Networking.IsHost || !Enabled )
+		{
+			Log.Warning( "hexagon_dev_send needs a host started with +hexagon_dev 1." );
+			return;
+		}
+		if ( client == 0 )
+		{
+			Log.Info( $"[dev] 0 {command} => {Run( command.Split( '|' ) )}" );
+			return;
+		}
+		var target = GameManager.Instance?.Clients.ElementAtOrDefault( client - 1 );
+		if ( target is null )
+		{
+			Log.Info( $"[dev] {client} {command} => no such client ({GameManager.Instance?.Clients.Count} connected)" );
+			return;
+		}
+		using ( Rpc.FilterInclude( target ) ) Relay( client, command );
+	}
+
+	private static RealTimeSince _sincePoll;
+	private static bool _announced;
+
+	/// <summary>
+	/// Host: a dedicated server does not read a redirected console, so a test leaves commands as files
+	/// in the data folder's <c>dev-inbox</c>, one <c>client|command</c> per line, and reads the
+	/// replies from the server's output.
+	/// </summary>
+	public static void PollInbox()
+	{
+		if ( !Enabled || !Networking.IsHost || _sincePoll < 0.25f ) return;
+		_sincePoll = 0;
+		var folder = $"{SandboxFileStore.Root}/dev-inbox";
+		if ( !_announced )
+		{
+			// Created up front and announced, so the test can find where this server keeps its data.
+			_announced = true;
+			FileSystem.Data.CreateDirectory( folder );
+			Log.Info( $"[dev] inbox at {FileSystem.Data.GetFullPath( folder )}" );
+		}
+		foreach ( var file in FileSystem.Data.FindFile( folder, "*.txt" ).OrderBy( value => value ) )
+		{
+			var path = $"{folder}/{file}";
+			var lines = FileSystem.Data.ReadAllText( path ).Split( (char)10, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries );
+			FileSystem.Data.DeleteFile( path );
+			foreach ( var line in lines )
+			{
+				var bar = line.IndexOf( '|' );
+				if ( bar > 0 && int.TryParse( line[..bar], out var client ) ) Send( client, line[(bar + 1)..] );
+			}
+		}
+	}
+
+	[Rpc.Broadcast( NetFlags.HostOnly | NetFlags.Reliable )]
+	private static void Relay( int client, string command )
+	{
+		if ( Networking.IsHost ) return;
+		Report( client, command, Run( command.Split( '|' ) ) );
+	}
+
+	[Rpc.Host( NetFlags.Reliable )]
+	private static void Report( int client, string command, string result )
+	{
+		if ( Enabled ) Log.Info( $"[dev] {client} {command} => {result}" );
+	}
+
+	public static string Run( string[] args )
+	{
+		if ( !Game.IsEditor && !Enabled ) return "refused: not a dev session";
 		if ( args[0] == "who" )
 			return $"local={Player.Local is not null} connection={Connection.Local?.DisplayName} host={Networking.IsHost} active={Networking.IsActive} scene={Game.ActiveScene?.Name} pawns=[" +
 				string.Join( ", ", Game.ActiveScene?.GetAllComponents<Player>().Select( value =>
 					$"{value.GameObject.Name}: proxy={value.IsProxy} owner={value.Network.Owner?.DisplayName} netactive={value.Network.Active}" ) ?? Array.Empty<string>() ) + "]";
+		if ( args[0] == "journal" )
+		{
+			// Today's journal as kind=count, refusals marked, so a test can assert what was remembered.
+			var entries = GameManager.Instance?.Journal?.Read( DateTimeOffset.UtcNow );
+			if ( entries is null ) return "no journal";
+			// journal|<kind> describes the latest entry of that kind instead.
+			if ( args.Length > 1 && !args[1].StartsWith( '#' ) )
+				return entries.LastOrDefault( value => value.Kind == args[1] ) is { } last
+					? $"ok={last.Ok} actor='{last.ActorName}' witnesses={last.Witnesses.Count} subject='{last.Subject}'"
+					: "no such entry";
+			return string.Join( " ", entries.GroupBy( value => value.Kind + (value.Ok ? "" : "!") ).Select( group => $"{group.Key}={group.Count()}" ) );
+		}
+		if ( args[0] == "console" )
+		{
+			// Runs a real console command, so operator commands are tested as an operator types them.
+			// Never for a remote host: that would hand a server this machine's console.
+			if ( !Game.IsEditor && !Networking.IsHost ) return "refused: not on a remote client";
+			ConsoleSystem.Run( args[1] );
+			return "ran";
+		}
+		if ( args[0] == "hostid" ) return $"local={Connection.Local?.SteamId.ValueUnsigned} host={Connection.Host?.SteamId.ValueUnsigned} address={Connection.Local?.Address} name={Connection.Local?.DisplayName}";
+		if ( args[0] == "convar" ) return ConsoleSystem.GetValue( args[1] ) ?? "unset";
 		if ( Player.Local is not { } player ) return "no local player";
 		try
 		{
@@ -83,19 +187,10 @@ public sealed class DevDriver : Component
 					if ( unwanted is null ) return "no such item";
 					player.RequestDiscardItem( unwanted.Id );
 					return "sent discard";
-				case "journal":
-					// Today's journal as kind=count, refusals marked, so a test can assert what was remembered.
-					var entries = GameManager.Instance?.Journal?.Read( DateTimeOffset.UtcNow );
-					if ( entries is null ) return "no journal";
-					return string.Join( " ", entries.GroupBy( value => value.Kind + (value.Ok ? "" : "!") ).Select( group => $"{group.Key}={group.Count()}" ) );
 				case "proxies":
 					// What this client was told about everyone else. Names and factions must be empty.
 					return string.Join( " ; ", Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy )
-						.Select( value => $"has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}'" ) );
-				case "console":
-					// Runs a real console command, so operator commands are tested as an operator types them.
-					ConsoleSystem.Run( args[1] );
-					return "ran";
+						.Select( value => $"has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}' seen='{value.CharacterDescription}'" ) );
 				case "steamid":
 					return Connection.Local.SteamId.ValueUnsigned.ToString();
 				case "net":

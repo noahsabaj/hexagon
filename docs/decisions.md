@@ -141,10 +141,21 @@ Trades between two characters will touch two documents. `Transfers` changes memo
 saves the giver first, so a crash between the saves loses a thing the journal can restore and
 never duplicates one. This replaces the earlier note about putting both sides in one document.
 
+## 2026-09-19: What one player learns about another is tested with two real clients
+
+The editor play test has one client that is also the host, so it cannot see a leak. The second
+play test starts `sbox-server.exe` on the local project with `+net_allow_local 1` and joins two
+`sbox.exe` clients with `+connect local`. A dedicated server ignores a redirected console, so the
+test leaves commands as files in the server's data folder; the server relays each to a client by
+RPC, the client runs it as its own player and reports back, and the reply is read from the
+server's output. The channel exists only when both ends were started with `+hexagon_dev 1`, and a
+client never runs console commands for a server. Both clients are one Steam account, which the
+engine allows, so they share a character list; that also tests entering a character twice.
+
 ## Order of work
 
 1. Done: journal, transfers, capabilities, the verb checkpoint, owner-only names.
-2. Two-client play test, against a dedicated server. The perception law cannot be checked with one client.
+2. Done: two-client play test against a dedicated server.
 3. Movement plausibility, with violations journaled. Every reach and range rule rests on it.
 4. World items, item verbs and storage, all as holders.
 5. Recognition, which also closes the spoken-name leak.
