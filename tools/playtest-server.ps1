@@ -157,6 +157,10 @@ try {
     [void](Send 0 'console|hexagon_teleport "Jane Roe" 300 -150 60')
     foreach ($gift in 'pistol', 'pistol_round', 'pistol_round', 'pistol_round', 'pistol_round', 'zip_tie') { [void](Send 0 "console|hexagon_give `"John Doe`" $gift") }
     Start-Sleep -Seconds 2
+    [void](Send 1 'pay|30')
+    Expect 'tokens pass hand to hand, and she knows whose hand' (Send 2 'state') 'tokens=130 .*John Doe hands you 30 tokens'
+    [void](Send 1 'pay|5000')
+    Expect 'nobody can pay what they do not have' (Send 1 'state') 'tokens=70 .*There are not enough tokens'
     [void](Send 1 'equip|2')
     Expect 'a drawn pistol is something anyone can see' (Send 2 'proxies') "held='Pistol'"
     foreach ($shot in 1..3) { [void](Send 1 'attack'); Start-Sleep -Milliseconds 300 }
@@ -198,7 +202,7 @@ try {
     Expect 'she woke elsewhere, whole, with nothing' (Send 2 'state') 'tokens=0 .*items=\[\] .*health=100 down=False'
     Expect 'the death is on record' (Send 0 'journal') 'character\.death=1'
     [void](Send 1 'act|corpse.search')
-    Expect 'what she carried is on the body' (Send 1 'state') 'bodies=1 opentokens=100 .*open=\[Body: Water\]'
+    Expect 'what she carried is on the body' (Send 1 'state') 'bodies=1 opentokens=130 .*open=\[Body: Water\]'
     [void](Send 1 'taketokens')
     [void](Send 1 'take|0')
     Expect 'emptied, the body is gone, and nothing was created or lost' (Send 1 'state') 'tokens=200 .*bodies=0'

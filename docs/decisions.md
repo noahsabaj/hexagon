@@ -90,9 +90,8 @@ every feature is judged against three laws.
 **Perception.** A client receives only what its character could perceive. Chat already reached
 only the connections in range. A character's name and faction were `[Sync]`, so every client held
 every name; they now go to the owner alone, and what replicates to everyone is presence and
-description, which is what an onlooker would see. One leak remains and is known: a spoken line
-still carries the speaker's name to those in earshot. Recognition closes it by formatting each line
-for its listener.
+description, which is what an onlooker would see. A spoken line at first still carried the speaker's
+name to those in earshot; recognition, below, closed that.
 
 **Conservation.** Items and tokens only move. `Transfers` is the single way either changes hands:
 between holders, in from a named source, out through a named sink. `InventoryGrid` no longer has
@@ -158,17 +157,77 @@ server's output. The channel exists only when both ends were started with `+hexa
 client never runs console commands for a server. Both clients are one Steam account, which the
 engine allows, so they share a character list; that also tests entering a character twice.
 
-## Order of work
+## 2026-09-19: Everything that holds things is one kind of thing
 
-1. Done: journal, transfers, capabilities, the verb checkpoint, owner-only names.
-2. Done: two-client play test against a dedicated server.
-3. Done: movement plausibility. Host rules read the believed position; implausible claims are journaled and corrected.
-4. World items, item verbs and storage, all as holders.
-5. Recognition, which also closes the spoken-name leak.
-6. Downed state and combat.
-7. Restraints and search: a denial, and opening someone else's holder with a capability.
-8. Commerce, with declared sources and sinks.
-9. A staff console over the journal.
+A crate in the scene, an item on the ground, a body and a vendor are all `HolderData`: an
+inventory, a token balance, a kind. Dropping, picking up, storing, looting, searching a person,
+buying and selling are therefore all `Transfers.Move` or `Trade.Sell`, and an item keeps its id
+through every one of them. A character looks into at most one other holder at a time, "the open
+holder", and only that character is told what is in it. It closes when the character walks away or
+when the reason it was open ends, such as a searched person being helped up. Discarding was removed:
+things are dropped, used up, or kept. A holder cannot be deleted while anything is in it.
+
+## 2026-09-19: A name is knowledge
+
+Every pawn replicates a face, `CharacterId`, which is the same tomorrow and says nothing about
+who it is. Names are in each character's own document, under the faces that have introduced
+themselves, and reach only that character's owner. Chat is formatted per listener: the name if
+they know it, otherwise the speaker's description in brackets. Out-of-character chat carries the
+player's name, not the character's. This closes the spoken-name leak recorded earlier. The one
+exception is the staff `who` command, which is journaled.
+
+## 2026-09-19: Harm puts a character down; death is a separate, deliberate act
+
+`Vitals.Damage` never kills. At no health a character is down: visible to all, unable to act or to
+leave the city, and part of the scene. Anyone can help them up or search them; finishing them is
+its own verb, journaled with its witnesses, and a game can require a capability for it. After
+`DownedSeconds` a downed character gets back up, or dies if the game sets `BleedOutKills`. What
+death means is `GameManager.Death`: respawn elsewhere without belongings, or permanent. Either way
+a body is left holding what was carried, and it is a holder like any other. Health, being down and
+being restrained are in the character's document, so disconnecting escapes nothing. How hurt
+someone else is cannot be read off them; that they are down, bound or armed can.
+
+Restraints are thin on purpose: a zip tie grants `person.restrain`, is used up by it, and the bound
+character is denied every act until released. There is no struggle or timer yet.
+
+## 2026-09-19: Money has declared faucets and sinks, and nothing else
+
+Tokens enter from `character.start`, `wage`, `vendor.float` and `operator`; goods from
+`character.start`, `vendor.restock` and `operator`. They leave through `consumed`, `property` and
+`character.deleted`. A vendor's stock and till are finite: it restocks from its source up to a
+limit, and can only pay for goods with tokens it holds. Wages go only to characters who are in the
+city and able to act. A sale moves the item first, because that half can still fail for want of
+room, and the price is always the vendor's. The journal is enough to compute the money supply and
+every faucet's rate, which is what an operator needs to keep tokens worth something.
+
+## 2026-09-19: Staff use the console's commands, as themselves
+
+`Operators.Execute` is the one implementation behind both the server console and the in-game
+staff panel. Staff status is set only from the console, so it cannot be granted or taken from
+inside the game. Every line staff type is journaled before it runs, refusals included, and reading
+the journal is itself an entry. There is no separate admin mod to trust.
+
+## What is thin, and known
+
+- Weapons hit by a host ray along the attacker's claimed aim. There is no recoil, spread or cover.
+- One round is one inventory item. Stacks would make ammunition and tokens-as-items practical.
+- Bodies, dropped items, crates and vendors are boxes. Models and clothing are not done.
+- There is no verb menu beyond keys: Use, Reload, and number keys for the rest.
+- Radio channels, and an in-game whitelist application flow, are not built.
+- Continuous integration is still missing: unit tests could run hosted; both play tests need s&box.
+- The play tests run both clients as one Steam account, so account-level rules are tested by one account.
 
 HL2RP keeps what is about its setting: the scanner, civic records as a view of the journal,
-forcefields and ration dispensers. Continuous integration is still missing.
+forcefields and ration dispensers.
+
+## Order of work, completed 2026-09-19
+
+1. Journal, transfers, capabilities, the verb checkpoint, owner-only names.
+2. Two-client play test against a dedicated server.
+3. Movement plausibility: host rules read the believed position.
+4. World items, item verbs and storage, all as holders.
+5. Recognition.
+6. The downed state, combat and the death pipeline.
+7. Restraints and search.
+8. Commerce: vendors, wages, paying people, buying doors.
+9. The staff console over the journal.

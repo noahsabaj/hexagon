@@ -21,19 +21,29 @@ itself to.
 ## What a game gets
 
 - **Players.** The host gives each connection a pawn driven by the engine's `PlayerController`.
+  Where a client says it is counts as a claim; host rules read where the host believes it is.
 - **Characters.** Several per account. Names are checked for look-alikes, mixed scripts and
   invisible characters, so one player cannot pass for another.
-- **Factions**, as `.faction` assets: starting items and tokens, an optional operator whitelist,
+- **Recognition.** Strangers are what they look like until they introduce themselves. What each
+  character knows is its own and is never sent to anyone else.
+- **Factions**, as `.faction` assets: starting items and tokens, a wage, an optional whitelist,
   and the capabilities members have, such as `door.lock`.
-- **Items**, as `.item` assets, held in a grid inventory. An item can grant capabilities, so a
-  key is an item and can be stolen.
-- **Verbs.** A world object lists what can be done to it. One host checkpoint decides who may:
-  identity, rate limit, reach, capability, journal.
-- **Chat**: say, `/w` whisper, `/y` yell, `/me`, and `//` out-of-character. In-character speech
-  reaches only players in range, and nobody out of range learns a message existed.
-- **Doors** that anyone in reach can open and only a character with `door.lock` can lock.
-- **Persistence.** Characters, inventories, positions, whitelists and doors survive a restart.
-- **A default HUD**: character menu, chat and inventory. A game can place its own instead.
+- **Items**, as `.item` assets in a grid inventory. An item can grant capabilities (a key), be
+  used up (food, a bandage), be held in view of everyone, or be a weapon that uses ammunition.
+- **Holders.** A crate, a dropped item, a body and a vendor are one kind of thing, so dropping,
+  storing, looting, searching and trading are the same transfer.
+- **Verbs.** A world object or a person lists what can be done to it. One host checkpoint decides
+  who may: identity, rate limit, reach, capability, journal.
+- **Chat**: say, `/w` whisper, `/y` yell, `/me`, `//` out-of-character, and `/pay`. Speech reaches
+  only players in range, each in their own words for the speaker.
+- **Doors** that anyone in reach can open, that a capability or ownership can lock, and that can be bought.
+- **Violence with consequences.** Harm puts a character down, never out. Helping up, searching and
+  finishing are deliberate, witnessed acts. The game chooses what death means.
+- **Restraints and search**, **vendors, wages and payments**, all conserving items and tokens.
+- **Staff tools** in game: the console's own commands, journaled under the staff member's name.
+- **Persistence.** Characters, what they know, their health and state, holders, doors and
+  whitelists survive a restart. So does the journal.
+- **A default HUD**: character menu, chat, inventory, the open holder, verbs, staff panel.
 
 ## Using it in a game
 
@@ -86,14 +96,18 @@ minutes, most of it the clients starting.
 
 ## Operator commands
 
-Typed in the host's console.
+Typed in the host's console as `hexagon_<command>`, or by staff in game (Tab) without the prefix.
 
 | Command | Effect |
 | --- | --- |
-| `hexagon_whitelist <steamid64> <faction>` | Allow an account to create characters in a whitelisted faction |
-| `hexagon_unwhitelist <steamid64> <faction>` | Remove that permission |
-| `hexagon_teleport "<character name>" <x> <y> <z>` | Move a character who is in the city |
-| `hexagon_give "<character name>" <item>` | Issue an item, from the `operator` source, to a character who is in the city |
+| `staff <steamid64> <0|1>` | Console only. Let an account use these commands in game |
+| `whitelist <steamid64> <faction>` / `unwhitelist` | Allow or stop an account creating characters in a whitelisted faction |
+| `give "<character name>" <item>` | Issue an item, from the `operator` source |
+| `teleport "<character name>" <x> <y> <z>`, and in game `bring` / `goto "<character name>"` | Move a character |
+| `hurt "<character name>" <amount>` / `revive "<character name>"` | Harm a character, or help one up |
+| `payday` | Pay every faction's wage now |
+| `who` | Who is playing whom, and where. The one place a name is shown to someone never told it |
+| `journal [text] [count]` | The latest of today's journal entries containing the text |
 
 The journal is `journal/<date>.jsonl` under the data folder, one JSON object per line.
 
