@@ -136,8 +136,10 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 	/// <summary>Host: puts the character somewhere. The owner simulates movement, so it is told to move itself.</summary>
 	public void HostTeleport( Vector3 position )
 	{
-		if ( !Networking.IsHost || Network.Owner is not { } owner ) return;
+		if ( !Networking.IsHost ) return;
+		// The host's belief moves whether or not there is anyone to tell.
 		_movement.Reset( position, Time.Now );
+		if ( Network.Owner is not { } owner ) return;
 		using ( Rpc.FilterInclude( owner ) ) ReceiveTeleport( position );
 	}
 
@@ -188,11 +190,11 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 	public CharacterData? HostCharacter => Networking.IsHost ? _character : null;
 
 	/// <summary>Host: issues an item to the loaded character from a named source and tells the owner.</summary>
-	public Result HostIssue( string source, ItemDefinition definition, Actor by )
+	public Result HostIssue( string source, ItemDefinition definition, Actor by, int count = 1 )
 	{
 		if ( _character is null || GameManager.Instance is not { Transfers: { } transfers, Roster: { } roster } )
 			return Result.Fail( ErrorCode.NotFound, "That player has no character loaded." );
-		var issued = transfers.Issue( source, _character, definition.ResourcePath, definition.Width, definition.Height, by );
+		var issued = definition.IssueTo( transfers, source, _character, by, count );
 		if ( !issued.Ok ) return issued.ToResult();
 		roster.Save( _character );
 		SendPrivateState();

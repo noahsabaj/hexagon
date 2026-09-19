@@ -12,7 +12,8 @@ public enum ChatChannel
 	Whisper,
 	Yell,
 	Me,
-	Ooc
+	Ooc,
+	Radio
 }
 
 public readonly record struct ChatMessage( ChatChannel Channel, string Text );
@@ -26,10 +27,23 @@ public static class ChatRules
 	public static float? Range( ChatChannel channel ) => channel switch
 	{
 		ChatChannel.Whisper => 90f,
-		ChatChannel.Say or ChatChannel.Me => 300f,
+		// Speaking into a radio is still speaking: that is how far it carries through the air.
+		ChatChannel.Say or ChatChannel.Me or ChatChannel.Radio => 300f,
 		ChatChannel.Yell => 900f,
 		_ => null
 	};
+
+	/// <summary>A frequency is 100.0 to 199.9, written one way so that two radios either match or do not.</summary>
+	public static Result<string> Frequency( string? raw )
+	{
+		var text = (raw ?? string.Empty).Trim();
+		if ( !decimal.TryParse( text, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var value ) || value < 100m || value >= 200m || decimal.Round( value, 1 ) != value )
+			return Result<string>.Fail( ErrorCode.Invalid, "A frequency is between 100.0 and 199.9." );
+		return Result<string>.Success( value.ToString( "0.0", CultureInfo.InvariantCulture ) );
+	}
+
+	/// <summary>What comes out of a radio: a voice and a frequency, never a face.</summary>
+	public static string FormatRadio( string frequency, string voice, string text ) => $"[{frequency}] {voice}: \"{text}\"";
 
 	public static Result<ChatMessage> Parse( string? raw )
 	{
@@ -86,12 +100,13 @@ public static class ChatRules
 		ChatChannel.Yell => $"{speaker} yells \"{text}\"",
 		ChatChannel.Me => $"** {speaker} {text}",
 		ChatChannel.Ooc => $"[OOC] {speaker}: {text}",
+		ChatChannel.Radio => $"{speaker} radios \"{text}\"",
 		_ => $"{speaker} says \"{text}\""
 	};
 
 	private static readonly (string Prefix, ChatChannel Channel)[] Prefixes =
 	{
 		("//", ChatChannel.Ooc), ("/ooc", ChatChannel.Ooc), ("/me", ChatChannel.Me),
-		("/w", ChatChannel.Whisper), ("/y", ChatChannel.Yell)
+		("/w", ChatChannel.Whisper), ("/y", ChatChannel.Yell), ("/r", ChatChannel.Radio)
 	};
 }

@@ -48,6 +48,11 @@ public sealed class ItemStack
 	public int Y { get; set; }
 	public int Width { get; set; } = 1;
 	public int Height { get; set; } = 1;
+	/// <summary>How many identical things are in this slot, and how many it can take.</summary>
+	public int Count { get; set; } = 1;
+	public int Max { get; set; } = 1;
+	/// <summary>What a radio is tuned to. It belongs to the radio, so it goes wherever the radio goes.</summary>
+	public string? Frequency { get; set; }
 }
 
 public sealed class AccountData

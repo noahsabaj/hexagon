@@ -42,6 +42,49 @@ public sealed class LawTests
 	}
 
 	[TestMethod]
+	public void IdenticalThingsPileUpAndEveryOneOfThemIsAccountedFor()
+	{
+		var journal = new Journal( new MemoryFiles(), () => Now );
+		var transfers = new Transfers( journal );
+		var alice = Holder( 2, 1 );
+		var bob = Holder( 1, 1 );
+		const string Round = "items/pistol_round.item";
+		int Held( IHolder holder ) => holder.Inventory.Items.Where( item => item.Definition == Round ).Sum( item => item.Count );
+
+		Assert.IsTrue( transfers.Issue( Sources.CharacterStart, alice, Round, 1, 1, Actor.Console, count: 30, max: 30 ).Ok );
+		Assert.HasCount( 1, alice.Inventory.Items, "thirty rounds are one slot" );
+		Assert.AreEqual( ErrorCode.Conflict, transfers.Issue( Sources.Operator, alice, Round, 1, 1, Actor.Console, count: 31, max: 30 ).Code, "two more slots are not there" );
+		Assert.AreEqual( 30, Held( alice ), "a refused issue leaves nothing behind" );
+
+		var pile = alice.Inventory.Items.Single();
+		Assert.AreEqual( ErrorCode.Invalid, transfers.Move( alice, bob, pile.Id, Actor.Of( alice ), count: 31 ).Code, "no more than there are" );
+		Assert.AreEqual( ErrorCode.Invalid, transfers.Move( alice, bob, pile.Id, Actor.Of( alice ), count: -5 ).Code, "a negative gift is a theft" );
+		Assert.IsTrue( transfers.Move( alice, bob, pile.Id, Actor.Of( alice ), count: 10 ).Ok );
+		Assert.AreNotEqual( pile.Id, bob.Inventory.Items.Single().Id, "part of a pile is a new pile" );
+		Assert.IsTrue( transfers.Move( alice, bob, pile.Id, Actor.Of( alice ) ).Ok, "the rest joins it" );
+		Assert.IsEmpty( alice.Inventory.Items );
+		Assert.AreEqual( 30, bob.Inventory.Items.Single().Count );
+
+		Assert.IsTrue( transfers.Issue( Sources.Operator, alice, Round, 1, 1, Actor.Console, count: 5, max: 30 ).Ok );
+		Assert.AreEqual( ErrorCode.Conflict, transfers.Move( alice, bob, alice.Inventory.Items.Single().Id, Actor.Of( alice ) ).Code, "Bob's one slot is full" );
+		Assert.AreEqual( 30, Held( bob ), "and a refused move tops nothing up" );
+
+		var part = transfers.Split( alice, alice.Inventory.Items.Single().Id, 2, Actor.Of( alice ) );
+		Assert.IsTrue( part.Ok );
+		Assert.HasCount( 2, alice.Inventory.Items );
+		Assert.AreEqual( ErrorCode.Invalid, transfers.Split( alice, part.Value.Id, 2, Actor.Of( alice ) ).Code, "all of it is not part of it" );
+		Assert.IsTrue( transfers.Merge( alice, part.Value.Id, alice.Inventory.Items.First( item => item.Id != part.Value.Id ).Id, Actor.Of( alice ) ).Ok );
+		Assert.AreEqual( 5, alice.Inventory.Items.Single().Count );
+		Assert.IsTrue( transfers.Destroy( Sinks.Consumed, bob, bob.Inventory.Items.Single().Id, Actor.Of( bob ), count: 1 ).Ok, "one shot" );
+
+		int Sum( string kind ) => journal.Read( Now ).Where( entry => entry.Kind == kind && entry.Ok ).Sum( entry => int.Parse( entry.Data["count"] ) );
+		Assert.AreEqual( 34, Held( alice ) + Held( bob ) );
+		Assert.AreEqual( Held( alice ) + Held( bob ), Sum( "item.issue" ) - Sum( "item.destroy" ), "the supply of a thing is the journal's issues minus its destroys" );
+		Assert.AreEqual( 1, journal.Read( Now ).Count( entry => entry.Kind == "item.split" && entry.Ok ) );
+		Assert.AreEqual( 1, journal.Read( Now ).Count( entry => entry.Kind == "item.merge" ) );
+	}
+
+	[TestMethod]
 	public void TheTokenSupplyIsTheJournalsIssuesMinusItsDestroys()
 	{
 		var journal = new Journal( new MemoryFiles(), () => Now );

@@ -129,9 +129,13 @@
 									style="left: @(item.X * 68)px; top: @(item.Y * 68)px; width: @(item.Width * 68 - 4)px; height: @(item.Height * 68 - 4)px;"
 									onclick=@(() => player.RequestTake( item.Id ))>
 									@(ItemDefinition.Find( item.Definition )?.Title ?? "Unknown item")
+									@if ( item.Count > 1 )
+									{
+										<div class="count">@item.Count</div>
+									}
 									@if ( player.OpenTarget is Vendor shop )
 									{
-										<div class="muted">@shop.SellPrice( ItemDefinition.Find( item.Definition ) ) tokens</div>
+										<div class="muted">@shop.SellPrice( ItemDefinition.Find( item.Definition ) ) tokens each</div>
 									}
 								</div>
 							}
@@ -143,7 +147,7 @@
 							}
 							<button onclick=@(() => player.RequestCloseHolder())>Close</button>
 						</div>
-						<div class="muted">@(player.OpenTarget is Vendor ? "Click an item to buy it." : "Click an item to take it.")</div>
+						<div class="muted">@(player.OpenTarget is Vendor ? "Click an item to buy one." : "Click an item to take it.")</div>
 					</div>
 				}
 				<div class="card">
@@ -164,11 +168,27 @@
 							var definition = ItemDefinition.Find( item.Definition );
 							<div class="item @(item.Id == Selected ? "selected" : "")"
 								style="left: @(item.X * 68)px; top: @(item.Y * 68)px; width: @(item.Width * 68 - 4)px; height: @(item.Height * 68 - 4)px;"
-								onclick=@(() => Selected = Selected == item.Id ? null : item.Id)>
+								onclick=@(() => ClickItem( item ))>
 								@(definition?.Title ?? "Unknown item")
+								@if ( item.Count > 1 )
+								{
+									<div class="count">@item.Count</div>
+								}
+								@if ( definition is { IsRadio: true } )
+								{
+									<div class="muted">@(item.Frequency ?? "untuned")</div>
+								}
 							</div>
 						}
 					</div>
+					@if ( SelectedDefinition is { IsRadio: true } )
+					{
+						<div class="row">
+							<TextEntry class="grow" Value:bind="@FrequencyDraft" MaxLength="@(5)" Placeholder="100.0 to 199.9" onsubmit=@TuneSelected />
+							<button onclick=@TuneSelected>Tune</button>
+						</div>
+						<div class="muted">Speak into it with /r. Anyone tuned the same hears you; so does anyone beside you.</div>
+					}
 					<div class="actions">
 						@if ( player.OpenInventory is not null )
 						{
@@ -180,11 +200,15 @@
 						{
 							<button class="primary" onclick=@(() => ActOnSelected( "item.use" ))>@usable.UseTitle</button>
 						}
+						@if ( SelectedStack is { Count: > 1 } pile )
+						{
+							<button onclick=@(() => SplitSelected( pile ))>Split off @(pile.Count / 2)</button>
+						}
 						<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "item.equip" ))>Hold</button>
 						<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "item.drop" ))>Drop</button>
 						<button onclick=@(() => player.RequestLeaveCity())>Leave the city</button>
 					</div>
-					<div class="muted">Select an item, then click an empty cell to move it.</div>
+					<div class="muted">Select an item, then click an empty cell to move it, or a pile of the same thing to add to it.</div>
 				</div>
 			</div>
 		}
@@ -284,8 +308,34 @@
 		Selected = null;
 	}
 
-	private ItemDefinition? SelectedDefinition =>
-		Player.Local?.Inventory?.Items.FirstOrDefault( value => value.Id == Selected ) is { } stack ? ItemDefinition.Find( stack.Definition ) : null;
+	private ItemStack? SelectedStack => Player.Local?.Inventory?.Items.FirstOrDefault( value => value.Id == Selected );
+	private ItemDefinition? SelectedDefinition => SelectedStack is { } stack ? ItemDefinition.Find( stack.Definition ) : null;
+
+	private void ClickItem( ItemStack item )
+	{
+		// With one pile selected, clicking another of the same thing puts the first on it.
+		if ( SelectedStack is { } held && held.Id != item.Id && held.Definition == item.Definition && item.Max > 1 )
+		{
+			Player.Local?.RequestMoveItem( held.Id, item.X, item.Y );
+			Selected = null;
+			return;
+		}
+		Selected = Selected == item.Id ? null : item.Id;
+	}
+
+	private string FrequencyDraft { get; set; } = string.Empty;
+
+	private void TuneSelected()
+	{
+		if ( Selected is { } radio ) Player.Local?.RequestTune( radio, FrequencyDraft );
+		FrequencyDraft = string.Empty;
+	}
+
+	private void SplitSelected( ItemStack pile )
+	{
+		Player.Local?.RequestSplitItem( pile.Id, pile.Count / 2 );
+		Selected = null;
+	}
 
 	private void ActOnSelected( string verb )
 	{

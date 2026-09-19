@@ -47,11 +47,9 @@ public sealed class MovementAudit
 	/// <summary>False when the claim is not believable. The believed position is then unchanged.</summary>
 	public bool Observe( Vec3 claimed, double now, float maximumSpeed )
 	{
-		if ( !_started )
-		{
-			Reset( claimed, now, 0 );
-			return true;
-		}
+		// Only the host says where a character starts. Until it has, a claim is neither believed nor
+		// punished: adopting the first one would let a client choose where the host thinks it is.
+		if ( !_started ) return true;
 		var elapsed = now - _at;
 		if ( elapsed < Window ) return true;
 

@@ -74,4 +74,20 @@ public sealed class RulesTests
 		Assert.IsTrue( limiter.TryTake( 1000 ) && limiter.TryTake( 1000 ) && limiter.TryTake( 1000 ) );
 		Assert.IsFalse( limiter.TryTake( 1000 ), "a long idle never banks more than the burst" );
 	}
+	[TestMethod]
+	public void TwoRadiosEitherMatchOrDoNotAndAVoiceHasNoFace()
+	{
+		Assert.AreEqual( "101.5", ChatRules.Frequency( " 101.50 " ).Value );
+		Assert.AreEqual( "100.0", ChatRules.Frequency( "100" ).Value, "one spelling per frequency" );
+		foreach ( var bad in new[] { "99.9", "200", "101.55", "1e2", "-101", "abc", "", null } )
+			Assert.AreEqual( ErrorCode.Invalid, ChatRules.Frequency( bad ).Code, bad );
+		Assert.AreEqual( ChatChannel.Radio, ChatRules.Parse( "/r unit four responding" ).Value.Channel );
+		Assert.AreEqual( ChatChannel.Say, ChatRules.Parse( "/run" ).Value.Channel, "/r must not swallow /run" );
+
+		var john = new CharacterData { Id = System.Guid.NewGuid(), Name = "John Doe", Description = "A tired resident of the city." };
+		var jane = new CharacterData { Id = System.Guid.NewGuid(), Name = "Jane Roe", Description = "A woman in a grey coat." };
+		Assert.AreEqual( "A voice", Recognition.Voice( jane, john ), "a description is what is seen, and nothing is seen" );
+		Recognition.Introduce( john, jane );
+		Assert.AreEqual( "John Doe", Recognition.Voice( jane, john ) );
+	}
 }

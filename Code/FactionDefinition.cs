@@ -25,7 +25,14 @@ public sealed class FactionDefinition : GameResource
 	/// <summary>Tokens paid to each member in the city every wage period, from the wage source.</summary>
 	[Property] public long Wage { get; set; }
 
-	[Property] public List<ItemDefinition> StartingItems { get; set; } = new();
+	[Property] public List<StartingItem> StartingItems { get; set; } = new();
+
+	/// <summary>What a new member is issued, and how many.</summary>
+	public sealed class StartingItem
+	{
+		[Property] public ItemDefinition? Item { get; set; }
+		[Property, Range( 1, 100 )] public int Count { get; set; } = 1;
+	}
 
 	public static FactionDefinition? Find( string path ) =>
 		ResourceLibrary.TryGet<FactionDefinition>( path, out var definition ) ? definition : null;

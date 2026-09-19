@@ -91,7 +91,7 @@ public sealed partial class Player
 		var tie = other.Inventory.Items.FirstOrDefault( item => ItemDefinition.Find( item.Definition )?.Grants.Contains( Capability.Restrain ) == true );
 		if ( tie is null ) return Result.Fail( ErrorCode.Denied, "You have nothing to bind them with." );
 		var game = GameManager.Instance!;
-		game.Transfers!.Destroy( Sinks.Consumed, other, tie.Id, Actor.Of( other ) );
+		game.Transfers!.Destroy( Sinks.Consumed, other, tie.Id, Actor.Of( other ), count: 1 );
 		game.Roster!.Save( other );
 		actor.SendPrivateState();
 		return HostSetRestrained( true, "Your hands are bound." );

@@ -21,6 +21,10 @@ public static class Recognition
 	}
 
 	/// <summary>A stranger is described, in brackets so nobody mistakes it for a name.</summary>
+	/// <summary>A voice on the radio has no face: a name if it has been given, and otherwise nothing.</summary>
+	public static string Voice( CharacterData listener, CharacterData speaker ) =>
+		listener.Id == speaker.Id ? speaker.Name : listener.Known.TryGetValue( speaker.Id, out var name ) ? name : "A voice";
+
 	public static string Stranger( string description )
 	{
 		var text = description.Trim();

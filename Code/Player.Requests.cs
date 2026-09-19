@@ -43,8 +43,8 @@ public sealed partial class Player
 		}
 		var by = Actor.Of( created.Value );
 		game.Journal!.Record( "character.create", by, created.Value.HolderLabel, data: ("faction", faction.ResourceName) );
-		foreach ( var item in faction.StartingItems.Where( value => value.IsValid() ) )
-			game.Transfers!.Issue( Sources.CharacterStart, created.Value, item.ResourcePath, item.Width, item.Height, by );
+		foreach ( var start in faction.StartingItems.Where( value => value.Item.IsValid() ) )
+			start.Item!.IssueTo( game.Transfers!, Sources.CharacterStart, created.Value, by, start.Count );
 		if ( faction.StartingTokens > 0 ) game.Transfers!.IssueTokens( Sources.CharacterStart, created.Value, faction.StartingTokens, by );
 		game.Roster.Save( created.Value );
 		SendCharacterList( caller, game );
@@ -146,9 +146,25 @@ public sealed partial class Player
 	public void RequestMoveItem( Guid itemId, int x, int y )
 	{
 		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
-		var moved = InventoryGrid.Move( _character.Inventory, itemId, x, y );
+		// Put down on a pile of the same thing, it joins it. Otherwise it is only rearranged.
+		var under = _character.Inventory.Items.FirstOrDefault( value => value.Id != itemId && value.Max > 1 &&
+			x >= value.X && x < value.X + value.Width && y >= value.Y && y < value.Y + value.Height );
+		var moved = under is not null && game.Transfers!.Merge( _character, itemId, under.Id, Actor.Of( _character ) ) is { Ok: true } merged
+			? merged
+			: InventoryGrid.Move( _character.Inventory, itemId, x, y );
 		if ( moved.Ok ) game.Roster!.Save( _character );
 		else Chat.Tell( caller, moved.Message );
+		SendPrivateState();
+	}
+
+	/// <summary>Sets part of a pile aside as a pile of its own, to hand over or drop.</summary>
+	[Rpc.Host]
+	public void RequestSplitItem( Guid itemId, int count )
+	{
+		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
+		var split = game.Transfers!.Split( _character, itemId, count, Actor.Of( _character ) );
+		if ( split.Ok ) game.Roster!.Save( _character );
+		else Chat.Tell( caller, split.Message );
 		SendPrivateState();
 	}
 

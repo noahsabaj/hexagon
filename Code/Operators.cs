@@ -17,13 +17,13 @@ namespace Hexagon;
 /// </summary>
 public static class Operators
 {
-	public const string Help = "whitelist <steamid> <faction> | unwhitelist <steamid> <faction> | give \"<name>\" <item> | " +
+	public const string Help = "whitelist <steamid> <faction> | unwhitelist <steamid> <faction> | give \"<name>\" <item> [count] | " +
 		"teleport \"<name>\" <x> <y> <z> | bring \"<name>\" | goto \"<name>\" | hurt \"<name>\" <amount> | revive \"<name>\" | " +
 		"payday | who | journal [text] [count]";
 
 	[ConCmd( "hexagon_whitelist" )] public static void Whitelist( string steamId, string faction ) => FromConsole( "whitelist", steamId, faction );
 	[ConCmd( "hexagon_unwhitelist" )] public static void Unwhitelist( string steamId, string faction ) => FromConsole( "unwhitelist", steamId, faction );
-	[ConCmd( "hexagon_give" )] public static void Give( string characterName, string item ) => FromConsole( "give", characterName, item );
+	[ConCmd( "hexagon_give" )] public static void Give( string characterName, string item, int count = 1 ) => FromConsole( "give", characterName, item, count.ToString() );
 	[ConCmd( "hexagon_teleport" )] public static void Teleport( string characterName, float x, float y, float z ) => FromConsole( "teleport", characterName, x.ToString(), y.ToString(), z.ToString() );
 	[ConCmd( "hexagon_hurt" )] public static void Hurt( string characterName, int amount ) => FromConsole( "hurt", characterName, amount.ToString() );
 	[ConCmd( "hexagon_revive" )] public static void Revive( string characterName ) => FromConsole( "revive", characterName );
@@ -103,10 +103,11 @@ public static class Operators
 			case "give":
 			{
 				var definition = ResourceLibrary.GetAll<ItemDefinition>().FirstOrDefault( value => value.ResourceName.Equals( Word( 2 ), StringComparison.OrdinalIgnoreCase ) );
-				if ( Find( Word( 1 ) ) is not { } target || definition is null ) return new[] { "Usage: give \"<character name>\" <item>. The character must be in the city." };
+				if ( Find( Word( 1 ) ) is not { } target || definition is null ) return new[] { "Usage: give \"<character name>\" <item> [count]. The character must be in the city." };
+				var count = int.TryParse( Word( 3 ), out var asked ) ? Math.Clamp( asked, 1, 100 ) : 1;
 				// An operator's gift is new matter entering the world, so it comes from a named source.
-				var given = target.HostIssue( Sources.Operator, definition, by );
-				return new[] { given.Ok ? $"Gave {definition.Title} to {target.HostCharacter!.Name}." : given.Message };
+				var given = target.HostIssue( Sources.Operator, definition, by, count );
+				return new[] { given.Ok ? $"Gave {(count > 1 ? $"{count} " : string.Empty)}{definition.Title} to {target.HostCharacter!.Name}." : given.Message };
 			}
 			case "teleport":
 			{

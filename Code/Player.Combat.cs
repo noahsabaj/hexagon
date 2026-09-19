@@ -67,7 +67,7 @@ public sealed partial class Player
 				Chat.Tell( caller, "Click. It is empty." );
 				return;
 			}
-			game.Transfers!.Destroy( Sinks.Consumed, _character, round.Id, Actor.Of( _character ) );
+			game.Transfers!.Destroy( Sinks.Consumed, _character, round.Id, Actor.Of( _character ), count: 1 );
 			game.Roster!.Save( _character );
 			SendPrivateState();
 		}

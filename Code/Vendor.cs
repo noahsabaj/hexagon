@@ -23,7 +23,7 @@ public sealed class Vendor : Component, Component.IPressable, IVerbTarget
 	[Property] public string Title { get; set; } = "Vendor";
 	[Property] public List<ItemDefinition> Stock { get; set; } = new();
 	/// <summary>How many of each item it keeps on the shelf.</summary>
-	[Property, Range( 1, 10 )] public int StockLimit { get; set; } = 3;
+	[Property, Range( 1, 100 )] public int StockLimit { get; set; } = 3;
 	[Property] public float RestockSeconds { get; set; } = 600f;
 	/// <summary>Tokens in the till the first time the vendor opens, from the float source.</summary>
 	[Property] public long Float { get; set; } = 200;
@@ -71,9 +71,8 @@ public sealed class Vendor : Component, Component.IPressable, IVerbTarget
 		var changed = false;
 		foreach ( var definition in Stock.Where( value => value.IsValid() ) )
 		{
-			var missing = StockLimit - holder.Inventory.Items.Count( item => item.Definition == definition.ResourcePath );
-			for ( var index = 0; index < missing; index++ )
-				changed |= transfers.Issue( RestockSource, holder, definition.ResourcePath, definition.Width, definition.Height, Actor.Console ).Ok;
+			var missing = StockLimit - holder.Inventory.Items.Where( item => item.Definition == definition.ResourcePath ).Sum( item => item.Count );
+			if ( missing > 0 ) changed |= definition.IssueTo( transfers, RestockSource, holder, Actor.Console, missing ).Ok;
 		}
 		if ( !changed ) return;
 		holders.Save( holder );

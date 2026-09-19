@@ -177,6 +177,22 @@ public static class DevCommands
 					if ( item is null ) return "no such item";
 					player.RequestMoveItem( item.Id, int.Parse( args[2] ), int.Parse( args[3] ) );
 					return "sent move";
+				case "tune":
+					var radio = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					if ( radio is null ) return "no such item";
+					player.RequestTune( radio.Id, args[2] );
+					return "sent tune";
+				case "split":
+					var whole = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					if ( whole is null ) return "no such item";
+					player.RequestSplitItem( whole.Id, int.Parse( args[2] ) );
+					return "sent split";
+				case "merge":
+					var part = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					var onto = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[2] ) );
+					if ( part is null || onto is null ) return "no such item";
+					player.RequestMoveItem( part.Id, onto.X, onto.Y );
+					return "sent merge";
 				case "door":
 					var door = Game.ActiveScene.GetAllComponents<Door>().FirstOrDefault( value => value.GameObject.Name == args[1] );
 					if ( door is null ) return "no such door";
@@ -264,12 +280,12 @@ public static class DevCommands
 				case "state":
 					return $"has={player.HasCharacter} name='{player.CharacterName}' faction='{player.Faction?.Title}' tokens={player.Tokens} " +
 						$"characters=[{string.Join( ", ", player.Characters.Select( value => value.Name ) )}] " +
-						$"items=[{string.Join( ", ", player.Inventory?.Items.Select( value => $"{ItemDefinition.Find( value.Definition )?.Title}@{value.X},{value.Y}" ) ?? Array.Empty<string>() )}] " +
+						$"items=[{string.Join( ", ", player.Inventory?.Items.Select( value => $"{Pile( value )}@{value.X},{value.Y}" ) ?? Array.Empty<string>() )}] " +
 						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked}{(value.IsOwned ? ",owned" : "")}" ) )}] " +
 						$"health={player.Health} down={player.IsDown} restrained={player.IsRestrained} held='{ItemDefinition.Find( player.HeldItemPath )?.Title}' bodies={Game.ActiveScene.GetAllComponents<Corpse>().Count()} opentokens={player.OpenTokens} " +
 						$"staff={player.IsStaff} said=[{string.Join( " / ", player.StaffLines.TakeLast( 4 ) )}] " +
 						$"known=[{string.Join( ", ", player.Known.Values.OrderBy( value => value ) )}] " +
-						$"open=[{player.OpenTitle}: {string.Join( ", ", player.OpenInventory?.Items.Select( value => ItemDefinition.Find( value.Definition )?.Title ) ?? Array.Empty<string?>() )}] " +
+						$"open=[{player.OpenTitle}: {string.Join( ", ", player.OpenInventory?.Items.Select( Pile ) ?? Array.Empty<string>() )}] " +
 						$"ground=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<WorldItem>().Select( value => value.Definition?.Title ).OrderBy( value => value ) )}] " +
 						$"pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";
 				default:
@@ -281,4 +297,7 @@ public static class DevCommands
 			return $"threw: {exception.Message}";
 		}
 	}
+
+	private static string Pile( Hexagon.Logic.ItemStack value ) =>
+		$"{ItemDefinition.Find( value.Definition )?.Title}{(value.Count > 1 ? $"x{value.Count}" : string.Empty)}{(value.Frequency is { } frequency ? $"~{frequency}" : string.Empty)}";
 }

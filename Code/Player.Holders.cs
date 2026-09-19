@@ -116,7 +116,7 @@ public sealed partial class Player
 		}
 		var open = _open!;
 		var moved = _openTarget is Vendor vendor
-			? HostTrade( vendor, open, itemId, buying: taking )
+			? HostTrade( vendor, open, itemId, buying: taking ) // one at a time: a pile is not a price
 			: taking ? HostMove( open, _character, itemId ) : HostMove( _character, open, itemId );
 		if ( !moved.Ok ) Chat.Tell( caller, moved.Message );
 		Corpse.RemoveIfEmpty( open );
@@ -217,6 +217,25 @@ public sealed partial class Player
 		if ( !outcome.Ok ) Chat.Tell( caller, outcome.Message );
 	}
 
+	/// <summary>Turns a radio's dial. The setting is the radio's, so whoever takes the radio takes it too.</summary>
+	[Rpc.Host]
+	public void RequestTune( Guid itemId, string frequency )
+	{
+		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
+		if ( _character.Inventory.Items.FirstOrDefault( value => value.Id == itemId ) is not { } stack ) return;
+		var tuned = IsIncapable ? Result<string>.Fail( ErrorCode.Denied, "You cannot do that now." )
+			: ItemDefinition.Find( stack.Definition ) is not { IsRadio: true } ? Result<string>.Fail( ErrorCode.Invalid, "That is not a radio." )
+			: ChatRules.Frequency( frequency );
+		if ( tuned.Ok )
+		{
+			stack.Frequency = tuned.Value;
+			game.Roster!.Save( _character );
+			SendPrivateState();
+		}
+		HostRecord( "verb.item.tune", $"item:{itemId:N}", tuned.Ok, ("frequency", tuned.Ok ? tuned.Value : frequency), ("reason", tuned.Code.ToString()) );
+		if ( !tuned.Ok ) Chat.Tell( caller, tuned.Message );
+	}
+
 	private Result Drop( GameManager game, ItemStack stack )
 	{
 		var at = HostPosition + Vector3.Up * 8f + Vector3.Random.WithZ( 0 ) * 24f;
@@ -244,7 +263,7 @@ public sealed partial class Player
 			var healed = Vitals.Heal( _character!, definition.Heals );
 			if ( !healed.Ok ) return healed;
 		}
-		var used = game.Transfers!.Destroy( Sinks.Consumed, _character!, stack.Id, Actor.Of( _character! ) );
+		var used = game.Transfers!.Destroy( Sinks.Consumed, _character!, stack.Id, Actor.Of( _character! ), count: 1 );
 		if ( !used.Ok ) return used;
 		game.Roster!.Save( _character! );
 		SendPrivateState();

@@ -164,6 +164,15 @@ Hud {
 			background-color: rgba( 231, 201, 138, 0.6 );
 			border-color: #e7c98a;
 		}
+
+		.count {
+			position: absolute;
+			right: 4px;
+			bottom: 2px;
+			font-size: 14px;
+			font-weight: 700;
+			color: #ffffff;
+		}
 	}
 }
 

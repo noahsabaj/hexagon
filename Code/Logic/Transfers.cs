@@ -48,35 +48,76 @@ public sealed class Transfers
 
 	public Transfers( Journal journal ) => _journal = journal ?? throw new ArgumentNullException( nameof(journal) );
 
-	public Result<ItemStack> Issue( string source, IHolder to, string definition, int width, int height, Actor by )
+	/// <summary>Identical things pile up: <paramref name="max"/> to a slot, as the item's asset says. All of them arrive or none do.</summary>
+	public Result<ItemStack> Issue( string source, IHolder to, string definition, int width, int height, Actor by, int count = 1, int max = 1 )
 	{
-		var placed = Place( to.Inventory, new ItemStack { Id = Guid.NewGuid(), Definition = definition, Width = width, Height = height } );
+		var placed = count < 1
+			? Result<ItemStack>.Fail( ErrorCode.Invalid, "The count must be positive." )
+			: Add( to.Inventory, new ItemStack { Id = Guid.NewGuid(), Definition = definition, Width = width, Height = height, Max = Math.Max( 1, max ) }, count );
 		_journal.Record( "item.issue", by, to.HolderLabel, placed.Ok,
-			data: new[] { ("source", source), ("item", placed.Ok ? placed.Value.Id.ToString( "N" ) : string.Empty), ("definition", definition) } );
+			data: new[] { ("source", source), ("item", placed.Ok ? placed.Value.Id.ToString( "N" ) : string.Empty), ("definition", definition), ("count", count.ToString()) } );
 		return placed;
 	}
 
-	/// <summary>The item keeps its id, so the journal can follow one object through every hand.</summary>
-	public Result Move( IHolder from, IHolder to, Guid itemId, Actor by )
+	/// <summary>
+	/// A whole pile that lands in a slot of its own keeps its id, so the journal can follow one
+	/// object through every hand. Part of a pile, or one that joins another, is followed by count.
+	/// </summary>
+	public Result Move( IHolder from, IHolder to, Guid itemId, Actor by, int count = 0 )
 	{
 		if ( ReferenceEquals( from, to ) ) return Result.Fail( ErrorCode.Invalid, "That is already there." );
 		var item = from.Inventory.Items.FirstOrDefault( value => value.Id == itemId );
 		if ( item is null ) return Result.Fail( ErrorCode.NotFound, "That item is not there." );
-		// Place a copy first: if it does not fit, nothing has changed.
-		var placed = Place( to.Inventory, new ItemStack { Id = item.Id, Definition = item.Definition, Width = item.Width, Height = item.Height } );
-		if ( placed.Ok ) from.Inventory.Items.Remove( item );
+		if ( count == 0 ) count = item.Count;
+		if ( count < 1 || count > item.Count ) return Result.Fail( ErrorCode.Invalid, "There are not that many." );
+		// Place first: if it does not all fit, nothing has changed.
+		var placed = Add( to.Inventory, Like( item, count == item.Count ? item.Id : Guid.NewGuid() ), count );
+		if ( placed.Ok ) Take( from.Inventory, item, count );
 		_journal.Record( "item.move", by, to.HolderLabel, placed.Ok,
-			data: new[] { ("from", from.HolderLabel), ("item", itemId.ToString( "N" )), ("definition", item.Definition) } );
+			data: new[] { ("from", from.HolderLabel), ("item", itemId.ToString( "N" )), ("definition", item.Definition), ("count", count.ToString()),
+				("into", placed.Ok ? placed.Value.Id.ToString( "N" ) : string.Empty) } );
 		return placed.ToResult();
 	}
 
-	public Result Destroy( string sink, IHolder from, Guid itemId, Actor by )
+	public Result Destroy( string sink, IHolder from, Guid itemId, Actor by, int count = 0 )
 	{
 		var item = from.Inventory.Items.FirstOrDefault( value => value.Id == itemId );
 		if ( item is null ) return Result.Fail( ErrorCode.NotFound, "That item is not there." );
-		from.Inventory.Items.Remove( item );
+		if ( count == 0 ) count = item.Count;
+		if ( count < 1 || count > item.Count ) return Result.Fail( ErrorCode.Invalid, "There are not that many." );
+		Take( from.Inventory, item, count );
 		_journal.Record( "item.destroy", by, from.HolderLabel,
-			data: new[] { ("sink", sink), ("item", itemId.ToString( "N" )), ("definition", item.Definition) } );
+			data: new[] { ("sink", sink), ("item", itemId.ToString( "N" )), ("definition", item.Definition), ("count", count.ToString()) } );
+		return Result.Success();
+	}
+
+	/// <summary>Part of a pile becomes a pile of its own, in the same hands. Nothing enters or leaves, but it is on record.</summary>
+	public Result<ItemStack> Split( IHolder holder, Guid itemId, int count, Actor by )
+	{
+		var item = holder.Inventory.Items.FirstOrDefault( value => value.Id == itemId );
+		if ( item is null ) return Result<ItemStack>.Fail( ErrorCode.NotFound, "That item is not there." );
+		if ( count < 1 || count >= item.Count ) return Result<ItemStack>.Fail( ErrorCode.Invalid, "That is not part of it." );
+		var part = Like( item, Guid.NewGuid() );
+		part.Count = count;
+		var placed = Place( holder.Inventory, part );
+		if ( placed.Ok ) item.Count -= count;
+		_journal.Record( "item.split", by, holder.HolderLabel, placed.Ok,
+			data: new[] { ("item", itemId.ToString( "N" )), ("definition", item.Definition), ("count", count.ToString()), ("into", part.Id.ToString( "N" )) } );
+		return placed;
+	}
+
+	/// <summary>One pile is put on another of the same thing, as far as it will go.</summary>
+	public Result Merge( IHolder holder, Guid itemId, Guid intoId, Actor by )
+	{
+		var item = holder.Inventory.Items.FirstOrDefault( value => value.Id == itemId );
+		var into = holder.Inventory.Items.FirstOrDefault( value => value.Id == intoId );
+		if ( item is null || into is null || item == into ) return Result.Fail( ErrorCode.NotFound, "That item is not there." );
+		var count = item.Definition == into.Definition ? Math.Min( item.Count, into.Max - into.Count ) : 0;
+		if ( count < 1 ) return Result.Fail( ErrorCode.Conflict, "Those do not go together." );
+		into.Count += count;
+		Take( holder.Inventory, item, count );
+		_journal.Record( "item.merge", by, holder.HolderLabel,
+			data: new[] { ("item", itemId.ToString( "N" )), ("definition", item.Definition), ("count", count.ToString()), ("into", intoId.ToString( "N" )) } );
 		return Result.Success();
 	}
 
@@ -112,6 +153,50 @@ public sealed class Transfers
 	{
 		foreach ( var item in from.Inventory.Items.ToArray() ) Destroy( sink, from, item.Id, by );
 		if ( from.Tokens > 0 ) DestroyTokens( sink, from, from.Tokens, by );
+	}
+
+	private static ItemStack Like( ItemStack item, Guid id ) =>
+		new() { Id = id, Definition = item.Definition, Width = item.Width, Height = item.Height, Max = item.Max, Frequency = item.Frequency };
+
+	private static void Take( InventoryData inventory, ItemStack item, int count )
+	{
+		item.Count -= count;
+		if ( item.Count <= 0 ) inventory.Items.Remove( item );
+	}
+
+	/// <summary>
+	/// Tops up piles of the same thing, then starts new ones, the first of which takes the
+	/// template's id. Returns the last pile that received any. If it does not all fit, nothing changes.
+	/// </summary>
+	private static Result<ItemStack> Add( InventoryData inventory, ItemStack template, int count )
+	{
+		var topped = new System.Collections.Generic.List<(ItemStack Pile, int Was)>();
+		var started = new System.Collections.Generic.List<ItemStack>();
+		ItemStack? last = null;
+		foreach ( var pile in inventory.Items.Where( value => value.Definition == template.Definition && value.Count < value.Max ) )
+		{
+			if ( count == 0 ) break;
+			var room = Math.Min( count, pile.Max - pile.Count );
+			topped.Add( (pile, pile.Count) );
+			pile.Count += room;
+			count -= room;
+			last = pile;
+		}
+		while ( count > 0 )
+		{
+			var pile = Like( template, started.Count == 0 ? template.Id : Guid.NewGuid() );
+			pile.Count = Math.Min( count, pile.Max );
+			if ( !Place( inventory, pile ).Ok )
+			{
+				foreach ( var (was, amount) in topped ) was.Count = amount;
+				foreach ( var added in started ) inventory.Items.Remove( added );
+				return Result<ItemStack>.Fail( ErrorCode.Conflict, "There is no room for that." );
+			}
+			started.Add( pile );
+			count -= pile.Count;
+			last = pile;
+		}
+		return Result<ItemStack>.Success( last! );
 	}
 
 	/// <summary>Puts the item in the first free cell, scanning rows then columns.</summary>

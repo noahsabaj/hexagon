@@ -208,11 +208,11 @@ try {
     $state = Send 'state'
     Expect 'buying a door paid its price into a sink' $state 'tokens=50 .*Door 2:open=False,locked=False,owned'
     [void](Send 'open|Ration Vendor')
-    Expect 'the vendor stocked its shelves from its declared source, and has a float' (Send 'state') 'opentokens=200 .*open=\[Ration Vendor: Ration, Ration, Ration, Water, Water, Water, Bandage, Bandage, Bandage\]'
+    Expect 'the vendor stocked its shelves from its declared source, and has a float' (Send 'state') 'opentokens=200 .*open=\[Ration Vendor: Rationx3, Waterx3, Bandagex3\]'
     [void](Send 'take|0')
-    Expect 'taking from a vendor is buying' (Send 'state') 'tokens=40 .*Ration@.*Ration@.*opentokens=210'
-    [void](Send 'put|1')
-    Expect 'putting is selling, at the vendor''s price' (Send 'state') 'tokens=45 .*opentokens=205'
+    Expect 'taking from a vendor is buying one, which joins the pile' (Send 'state') 'tokens=40 .*Rationx2@4,3.*opentokens=210 .*open=\[Ration Vendor: Rationx2,'
+    [void](Send 'put|0')
+    Expect 'putting is selling one, at the vendor''s price' (Send 'state') 'tokens=45 .*Ration@4,3.*opentokens=205'
     [void](Send 'taketokens')
     Expect 'the till is not a body to be looted' (Send 'state') 'tokens=45 .*The till is not yours'
     [void](Send 'close')
@@ -234,6 +234,15 @@ try {
     [void](Send 'staff|who')
     Expect 'and it can be taken away' (Send 'state') 'staff=False said=\[You are not staff\.\]'
 
+    Write-Host '==> Radio' -ForegroundColor Cyan
+    [void](Send 'say|/r hello')
+    Expect 'an untuned radio carries nothing' (Send 'state') 'no radio tuned to anything'
+    [void](Send 'tune|1|55')
+    Expect 'a frequency outside the band is refused' (Send 'state') 'A frequency is between'
+    [void](Send 'tune|1|101.50')
+    [void](Send 'say|/r testing')
+    Expect 'the dial belongs to the radio, and the speaker hears themselves on it' (Send 'state') 'Radio~101\.5@.*\[101\.5\] John Doe: "testing"'
+
     Write-Host '==> Faction gate' -ForegroundColor Cyan
     $steamId = Send 'steamid'
     [void](Send 'leave')
@@ -248,6 +257,11 @@ try {
     Expect 'a wage is a declared faucet, paid to those at work' (Send 'state') 'tokens=120 .*You are paid 20 tokens'
     Expect 'the console whitelist unlocked the faction' $state "name='Officer Kane' faction='Civil Protection'"
     Expect 'Civil Protection locked the door, which also shut it' $state 'Door 1:open=False,locked=True'
+    Expect 'a pistol and thirty rounds fit in a starting inventory' $state 'Pistol@.*Pistol roundx30@.*Zip tiex2@'
+    [void](Send 'split|3|10')
+    Expect 'part of a pile can be set aside' (Send 'state') 'Pistol roundx20@.*Pistol roundx10@'
+    [void](Send 'merge|5|3')
+    Expect 'and put back' "$((Send 'state') -notmatch 'roundx10') $(Send 'state')" '^True .*Pistol roundx30@'
 
     Write-Host '==> Restart' -ForegroundColor Cyan
     [void](Send 'leave')
@@ -269,14 +283,14 @@ try {
     Write-Host '==> The journal' -ForegroundColor Cyan
     $journal = Send 'journal'
     Expect 'tokens entered the world four times: two characters, a float, a wage' $journal 'tokens\.issue=4(\s|$)'
-    Expect 'every item came from a named source' $journal 'item\.issue=16(\s|$)'
+    Expect 'every item came from a named source' $journal 'item\.issue=13(\s|$)'
     Expect 'the drink went through a sink' $journal 'item\.destroy=2(\s|$)'
     Expect 'refused locks are on record' $journal 'verb\.door\.lock!=3(\s|$)'
     Expect 'refused uses are on record' $journal 'verb\.door\.use!=4(\s|$)'
     Expect 'allowed acts are on record' $journal 'verb\.door\.lock=4(\s|$)'
     Expect 'the money supply is what the journal says it is' $journal 'tokens\.destroy=1(\s|$)'
     Expect 'the operator is on record too' $journal 'operator\.whitelist=1(\s|$)'
-    Expect 'speech is on record' $journal 'chat\.say=1 .*chat\.me=3 .*chat\.ooc=1.*item\.move=5'
+    Expect 'speech is on record' $journal 'chat\.say=1 .*chat\.me=3 .*chat\.ooc=1.*item\.move=5 .*item\.split=1 .*item\.merge=1'
     Expect 'this client was told no other name' (Send 'proxies') '^[^A-Za-z]*$'
 
     # The editor sometimes looks the driver's type up while the assembly is still loading. That is
@@ -289,8 +303,10 @@ try {
 finally {
     if (-not $editor.HasExited) { Stop-Process -Id $editor.Id -Force }
     $http.Dispose()
-    Get-ChildItem -LiteralPath (Join-Path $SboxRoot 'data') -Recurse -Directory -Filter $dataRoot -ErrorAction SilentlyContinue |
-        Remove-Item -Recurse -Force
+    # A failed run keeps its data, journal included: that is the evidence of what the host decided.
+    $kept = Get-ChildItem -LiteralPath (Join-Path $SboxRoot 'data') -Recurse -Directory -Filter $dataRoot -ErrorAction SilentlyContinue
+    if ($script:failures -gt 0) { $kept | ForEach-Object { Write-Host "Data kept at $($_.FullName)" -ForegroundColor DarkGray } }
+    else { $kept | Remove-Item -Recurse -Force }
 }
 
 if ($script:failures -gt 0) { throw "$($script:failures) play-test expectation(s) failed." }

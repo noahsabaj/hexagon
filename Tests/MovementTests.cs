@@ -15,7 +15,9 @@ public sealed class MovementTests
 		var audit = new MovementAudit();
 		var now = 0.0;
 		var position = new Vector3( 0, 0, 0 );
-		Assert.IsTrue( audit.Observe( position, now, Speed ) );
+		Assert.IsTrue( audit.Observe( new Vector3( 9000, 0, 0 ), now, Speed ), "before the host has placed it, a claim is not punished" );
+		Assert.AreEqual( default, audit.Position, "and is not believed either" );
+		audit.Reset( position, now, 0 );
 
 		for ( var step = 0; step < 40; step++ )
 		{
@@ -34,7 +36,7 @@ public sealed class MovementTests
 	public void FallingIsFreeAndRisingIsNot()
 	{
 		var audit = new MovementAudit();
-		audit.Observe( new Vector3( 0, 0, 1000 ), 0, Speed );
+		audit.Reset( new Vector3( 0, 0, 1000 ), 0, 0 );
 
 		Assert.IsTrue( audit.Observe( new Vector3( 0, 0, 0 ), MovementAudit.Window, Speed ), "gravity is not the player's doing" );
 		Assert.IsFalse( audit.Observe( new Vector3( 0, 0, 1000 ), MovementAudit.Window * 2, Speed ), "flight is" );
@@ -44,7 +46,7 @@ public sealed class MovementTests
 	public void AHostTeleportIsNotAFreeOneForTheClient()
 	{
 		var audit = new MovementAudit();
-		audit.Observe( new Vector3( 0, 0, 0 ), 0, Speed );
+		audit.Reset( new Vector3( 0, 0, 0 ), 0, 0 );
 		audit.Reset( new Vector3( 5000, 0, 0 ), 1.0 );
 
 		Assert.IsTrue( audit.Observe( new Vector3( 10, 0, 0 ), 1.5, Speed ), "a claim from the old place, before the owner applied it, is ignored" );

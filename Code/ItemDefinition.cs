@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using Hexagon.Logic;
 using Sandbox;
 namespace Hexagon;
 
@@ -14,6 +15,8 @@ public sealed class ItemDefinition : GameResource
 	[Property, Range( 1, 4 )] public int Width { get; set; } = 1;
 	[Property, Range( 1, 4 )] public int Height { get; set; } = 1;
 	[Property] public Color Tint { get; set; } = Color.White;
+	/// <summary>How many share one inventory slot. One means each is its own object, followed by id.</summary>
+	[Property, Range( 1, 100 )] public int MaxStack { get; set; } = 1;
 
 	/// <summary>What it is worth in tokens. Vendors price from this.</summary>
 	[Property] public long Value { get; set; }
@@ -36,8 +39,15 @@ public sealed class ItemDefinition : GameResource
 	/// <summary>The item each attack uses up, or none for a weapon that needs no ammunition.</summary>
 	[Property] public ItemDefinition? Ammo { get; set; }
 
+	/// <summary>It carries speech to every other radio tuned the same. See <see cref="Chat"/>.</summary>
+	[Property] public bool IsRadio { get; set; }
+
 	/// <summary>What holding this lets a character do. A key is an item that grants <c>door.lock</c>.</summary>
 	[Property] public List<string> Grants { get; set; } = new();
+
+	/// <summary>Host: new ones enter the world from a named source. All of them arrive or none do.</summary>
+	public Result<ItemStack> IssueTo( Transfers transfers, string source, IHolder to, Actor by, int count = 1 ) =>
+		transfers.Issue( source, to, ResourcePath, Width, Height, by, count, MaxStack );
 
 	public static ItemDefinition? Find( string path ) =>
 		ResourceLibrary.TryGet<ItemDefinition>( path, out var definition ) ? definition : null;

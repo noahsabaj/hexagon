@@ -153,15 +153,38 @@ try {
     [void](Send 2 'door|Door 1|use')
     Expect 'and out of reach for a player far away' (Send 2 'state') 'Door 1:open=True.*too far away'
 
+    Write-Host '==> Radio reaches those tuned in, and nobody else' -ForegroundColor Cyan
+    foreach ($name in 'John Doe', 'Jane Roe') { [void](Send 0 "console|hexagon_give `"$name`" radio") }
+    Start-Sleep -Seconds 1
+    [void](Send 1 'tune|2|101.5')
+    [void](Send 2 'tune|2|101.5')
+    [void](Send 1 'say|/r unit one to control')
+    Expect 'a radio carries 1260 units to one tuned the same, by a name she was given' (Send 2 'state') '\[101\.5\] John Doe: "unit one to control"'
+    [void](Send 2 'say|/r control here')
+    $heard = Send 1 'state'
+    Expect 'he was never given her name, and a radio shows no face' $heard '\[101\.5\] A voice: "control here"'
+    Expect 'so nothing of what she looks like came with it' $heard 'grey coat' -Not
+    Expect 'the journal names who was listening' (Send 0 'journal|chat.radio') "actor='Jane Roe' witnesses=1"
+    [void](Send 2 'tune|2|102.0')
+    [void](Send 1 'say|/r is this thing on')
+    Expect 'retuned, she hears nothing' (Send 2 'state') 'is this thing on' -Not
+    Expect 'and the journal agrees' (Send 0 'journal|chat.radio') "actor='John Doe' witnesses=0"
+    [void](Send 0 'console|hexagon_teleport "Jane Roe" 300 -150 60')
+    Start-Sleep -Seconds 2
+    [void](Send 1 'say|/r standing right here')
+    Expect 'beside him she hears a man talking into a radio, whatever hers is tuned to' (Send 2 'state') 'John Doe radios "standing right here"'
+    [void](Send 2 'drop|2')
+
     Write-Host '==> Violence is slow, visible and on the record' -ForegroundColor Cyan
     [void](Send 0 'console|hexagon_teleport "Jane Roe" 300 -150 60')
-    foreach ($gift in 'pistol', 'pistol_round', 'pistol_round', 'pistol_round', 'pistol_round', 'zip_tie') { [void](Send 0 "console|hexagon_give `"John Doe`" $gift") }
+    foreach ($gift in 'pistol', 'pistol_round 4', 'zip_tie') { [void](Send 0 "console|hexagon_give `"John Doe`" $gift") }
     Start-Sleep -Seconds 2
     [void](Send 1 'pay|30')
     Expect 'tokens pass hand to hand, and she knows whose hand' (Send 2 'state') 'tokens=130 .*John Doe hands you 30 tokens'
     [void](Send 1 'pay|5000')
     Expect 'nobody can pay what they do not have' (Send 1 'state') 'tokens=70 .*There are not enough tokens'
-    [void](Send 1 'equip|2')
+    Expect 'four rounds are one pile' (Send 1 'state') 'Pistol roundx4@'
+    [void](Send 1 'equip|3')
     Expect 'a drawn pistol is something anyone can see' (Send 2 'proxies') "held='Pistol'"
     foreach ($shot in 1..3) { [void](Send 1 'attack'); Start-Sleep -Milliseconds 300 }
     $state = Send 2 'state'
@@ -169,7 +192,7 @@ try {
     Expect 'he sees her fall but not her health' (Send 1 'proxies') 'down=True .*health=0 has=True'
     $journal = Send 0 'journal'
     Expect 'each shot, and the fall, are on record' $journal 'combat\.attack=3 .*character\.downed=1'
-    Expect 'each shot used up a round' "rounds=$([regex]::Matches((Send 1 'state'), 'Pistol round@').Count)" '^rounds=1$'
+    Expect 'each shot used up a round' (Send 1 'state') 'Pistol round@'
     [void](Send 2 'leave')
     Expect 'she cannot leave the scene' (Send 2 'state') 'has=True .*cannot leave the city like this'
 
@@ -220,8 +243,10 @@ finally {
     foreach ($client in $clients) { if (-not $client.HasExited) { Stop-Process -Id $client.Id -Force } }
     if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force }
     Start-Sleep -Seconds 1
-    Get-ChildItem -LiteralPath (Join-Path $SboxRoot 'data') -Recurse -Directory -Filter $dataRoot -ErrorAction SilentlyContinue |
-        Remove-Item -Recurse -Force
+    # A failed run keeps its data, journal included: that is the evidence of what the host decided.
+    $kept = Get-ChildItem -LiteralPath (Join-Path $SboxRoot 'data') -Recurse -Directory -Filter $dataRoot -ErrorAction SilentlyContinue
+    if ($script:failures -gt 0) { $kept | ForEach-Object { Write-Host "Data kept at $($_.FullName)" -ForegroundColor DarkGray } }
+    else { $kept | Remove-Item -Recurse -Force }
     if ($script:failures -gt 0) { Write-Host "Server log kept at $log" -ForegroundColor DarkGray }
     else { Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue }
 }

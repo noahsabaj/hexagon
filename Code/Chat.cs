@@ -35,6 +35,11 @@ public static class Chat
 	public static void Deliver( Player speaker, ChatMessage message )
 	{
 		if ( !Networking.IsHost || speaker.HostCharacter is not { } character ) return;
+		if ( message.Channel == ChatChannel.Radio )
+		{
+			DeliverRadio( speaker, character, message.Text );
+			return;
+		}
 		var range = ChatRules.Range( message.Channel );
 		var origin = speaker.HostPosition;
 		var listeners = Game.ActiveScene.GetAllComponents<Player>()
@@ -56,6 +61,39 @@ public static class Chat
 				: listener.HostCharacter is { } hearing ? Recognition.Label( hearing, character ) : Recognition.Stranger( character.Description );
 			using ( Rpc.FilterInclude( listener.Network.Owner! ) ) Receive( (int)message.Channel, ChatRules.Format( message.Channel, label, message.Text ) );
 		}
+	}
+
+	/// <summary>Host: the first tuned radio a character carries, or null.</summary>
+	public static string? TunedTo( CharacterData character ) =>
+		character.Inventory.Items.FirstOrDefault( item => item.Frequency is not null && ItemDefinition.Find( item.Definition ) is { IsRadio: true } )?.Frequency;
+
+	/// <summary>
+	/// Host: speech into a radio. Those standing near hear someone speaking, as they would. Everyone
+	/// else carrying a radio tuned the same hears a voice, wherever they are. Nobody else hears anything.
+	/// </summary>
+	private static void DeliverRadio( Player speaker, CharacterData character, string text )
+	{
+		if ( speaker.Network.Owner is not { } owner ) return;
+		if ( speaker.IsIncapable || TunedTo( character ) is not { } frequency )
+		{
+			Tell( owner, speaker.IsIncapable ? "You cannot reach your radio." : "You have no radio tuned to anything." );
+			return;
+		}
+		var origin = speaker.HostPosition;
+		var present = Game.ActiveScene.GetAllComponents<Player>().Where( listener => listener.Network.Owner is not null && listener.HostCharacter is not null ).ToArray();
+		var near = present.Where( listener => listener != speaker && listener.HostPosition.Distance( origin ) <= ChatRules.Range( ChatChannel.Radio )!.Value ).ToArray();
+		var tuned = present.Where( listener => !near.Contains( listener ) && TunedTo( listener.HostCharacter! ) == frequency ).ToArray();
+		GameManager.Instance?.Journal?.Record( "chat.radio", Actor.Of( character ),
+			where: new[] { origin.x, origin.y, origin.z },
+			witnesses: near.Concat( tuned ).Where( listener => listener != speaker ).Select( listener => listener.HostCharacter!.Id ),
+			data: new[] { ("text", text), ("frequency", frequency) } );
+		using ( Rpc.FilterInclude( owner ) ) Receive( (int)ChatChannel.Radio, ChatRules.FormatRadio( frequency, character.Name, text ) );
+		foreach ( var listener in near )
+			using ( Rpc.FilterInclude( listener.Network.Owner! ) )
+				Receive( (int)ChatChannel.Radio, ChatRules.Format( ChatChannel.Radio, Recognition.Label( listener.HostCharacter!, character ), text ) );
+		foreach ( var listener in tuned )
+			using ( Rpc.FilterInclude( listener.Network.Owner! ) )
+				Receive( (int)ChatChannel.Radio, ChatRules.FormatRadio( frequency, Recognition.Voice( listener.HostCharacter!, character ), text ) );
 	}
 
 	/// <summary>Host: a line for one connection only, such as the reason an action was refused.</summary>
