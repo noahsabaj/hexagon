@@ -145,39 +145,95 @@ public sealed class ChatServiceTests
 		Assert.AreEqual( ErrorCode.Conflict, spent.Error!.Code );
 	}
 
+	[TestMethod]
+	public void DeadAuthorIsSilencedOnTheHostExceptWhereTheChannelAllowsIt()
+	{
+		var fixture = new ChatFixture();
+		fixture.Liveness.IsAlive = false;
+
+		var silenced = fixture.Service.Send( fixture.Actor, fixture.Character, "ic", "hello" );
+		var allowed = fixture.Service.Send( fixture.Actor, fixture.Character, "ooc", "hello" );
+
+		Assert.AreEqual( ErrorCode.PolicyDenied, silenced.Error!.Code );
+		Assert.IsTrue( allowed.Succeeded, allowed.Error?.Message );
+		Assert.AreEqual( 1, fixture.Inventory.CaptureCount );
+		Assert.IsFalse( fixture.Recipients.LastContext!.IsAlive );
+	}
+
+	[TestMethod]
+	public void BannedAuthorCannotSpeakUntilTheBanExpires()
+	{
+		var fixture = new ChatFixture();
+		var banned = fixture.Character with { IsBanned = true };
+		var expiring = fixture.Character with
+		{
+			IsBanned = true,
+			BanExpiresAt = fixture.Clock.UtcNow + TimeSpan.FromHours( 1 )
+		};
+
+		var denied = fixture.Service.Send( fixture.Actor, banned, "ooc", "hello" );
+		var stillDenied = fixture.Service.Send( fixture.Actor, expiring, "ooc", "hello" );
+		fixture.Clock.Advance( TimeSpan.FromHours( 2 ) );
+		var released = fixture.Service.Send( fixture.Actor, expiring, "ooc", "hello" );
+
+		Assert.AreEqual( ErrorCode.Unauthorized, denied.Error!.Code );
+		Assert.AreEqual( ErrorCode.Unauthorized, stillDenied.Error!.Code );
+		Assert.IsTrue( released.Succeeded, released.Error?.Message );
+		Assert.AreEqual( 1, fixture.Inventory.CaptureCount );
+	}
+
+	[TestMethod]
+	public void RuleRangeIsTakenFromTheDefinitionAndMayNotDisagreeWithIt()
+	{
+		var fixture = new ChatFixture();
+
+		var sent = fixture.Service.Send( fixture.Actor, fixture.Character, "ic", "hello" );
+
+		Assert.IsTrue( sent.Succeeded, sent.Error?.Message );
+		Assert.AreEqual( 300f, fixture.Recipients.LastRule!.Range );
+
+		Assert.ThrowsExactly<InvalidOperationException>( () => fixture.Build(
+			new ChatChannelRule { Id = "ic", Range = 12f } ) );
+		Assert.ThrowsExactly<InvalidOperationException>( () => fixture.Build(
+			new ChatChannelRule { Id = "ooc", Range = 300f } ) );
+		Assert.ThrowsExactly<ArgumentOutOfRangeException>( () => fixture.Build(
+			new ChatChannelRule { Id = "ic", Range = float.NaN } ) );
+		Assert.ThrowsExactly<ArgumentOutOfRangeException>( () => fixture.Build(
+			new ChatChannelRule { Id = "ic", Range = float.PositiveInfinity } ) );
+	}
+
 	private sealed class ChatFixture
 	{
+		private readonly CompiledSchema _schema;
+		private readonly bool _permissionAllowed;
+
 		public ChatFixture( bool permissionAllowed = true )
 		{
+			_permissionAllowed = permissionAllowed;
 			Actor = ApplicationServiceTestEnvironment.Actor();
 			Character = ApplicationServiceTestEnvironment.Character(
 				Actor.AccountId, 1, Actor.CharacterId );
 			Clock = new MutableClock();
 			Inventory = new RecordingInventoryView();
 			Recipients = new RecordingRecipientResolver();
+			Liveness = new FixedLiveness();
 			var schema = SchemaCompiler.Compile( new DelegateSchema( builder =>
 			{
 				builder.RegisterPermission( new PermissionDefinition( "dispatch" ) );
-				builder.RegisterChatChannel( new ChatChannelDefinition( "ic" ) );
+				builder.RegisterChatChannel( new ChatChannelDefinition( "ic", Range: 300f ) );
+				builder.RegisterChatChannel( new ChatChannelDefinition( "ooc", AllowedWhileDead: true ) );
 				builder.RegisterChatChannel( new ChatChannelDefinition( "dispatch", "dispatch" ) );
 			} ) );
 			if ( schema.Failed ) throw new InvalidOperationException( schema.Error!.Message );
-			Service = new ChatService(
-				schema.Value,
-				new[]
+			_schema = schema.Value;
+			Service = Build(
+				new ChatChannelRule { Id = "ic" },
+				new ChatChannelRule { Id = "ooc" },
+				new ChatChannelRule
 				{
-					new ChatChannelRule { Id = "ic" },
-					new ChatChannelRule
-					{
-						Id = "dispatch",
-						RateLimit = new ChatRateLimit( 1, TimeSpan.FromSeconds( 10 ) )
-					}
-				},
-				new FixedPermissionAuthorizer( permissionAllowed ),
-				Recipients,
-				Inventory,
-				Clock,
-				ApplicationServiceTestEnvironment.AllowPolicy<ChatSendContext>() );
+					Id = "dispatch",
+					RateLimit = new ChatRateLimit( 1, TimeSpan.FromSeconds( 10 ) )
+				} );
 		}
 
 		public InventoryActor Actor { get; }
@@ -185,7 +241,31 @@ public sealed class ChatServiceTests
 		public MutableClock Clock { get; }
 		public RecordingInventoryView Inventory { get; }
 		public RecordingRecipientResolver Recipients { get; }
+		public FixedLiveness Liveness { get; }
 		public ChatService Service { get; }
+
+		public ChatService Build( params ChatChannelRule[] rules )
+		{
+			var byId = rules.ToDictionary( rule => rule.Id, StringComparer.Ordinal );
+			foreach ( var channel in _schema.ChatChannels.All )
+				byId.TryAdd( channel.Id, new ChatChannelRule { Id = channel.Id } );
+			return new ChatService(
+				_schema,
+				byId.Values,
+				new FixedPermissionAuthorizer( _permissionAllowed ),
+				Recipients,
+				Inventory,
+				Clock,
+				ApplicationServiceTestEnvironment.AllowPolicy<ChatSendContext>(),
+				Liveness );
+		}
+	}
+
+	private sealed class FixedLiveness : IChatLivenessSource
+	{
+		public bool IsAlive { get; set; } = true;
+
+		bool IChatLivenessSource.IsAlive( ConnectionId connectionId, CharacterId characterId ) => IsAlive;
 	}
 
 	private sealed class DelegateSchema : IHexSchema
@@ -227,6 +307,8 @@ public sealed class ChatServiceTests
 	{
 		public int ResolveCount { get; private set; }
 		public LiveInventorySnapshot? LastInventory { get; private set; }
+		public ChatSendContext? LastContext { get; private set; }
+		public ChatChannelRule? LastRule { get; private set; }
 
 		public IReadOnlyList<ConnectionId> Resolve(
 			ChatSendContext context,
@@ -235,6 +317,8 @@ public sealed class ChatServiceTests
 		{
 			ResolveCount++;
 			LastInventory = inventory;
+			LastContext = context;
+			LastRule = rule;
 			return new[] { context.Actor.ConnectionId, context.Actor.ConnectionId };
 		}
 	}

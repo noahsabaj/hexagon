@@ -41,8 +41,11 @@ The verification boundary is split deliberately:
 HL2RP stores its exact Hexagon dependency in `hexagon.lock.json`. Its hosted
 `hl2rp / integration` check validates the lowercase 40-character SHA, checks
 out that commit as a sibling, verifies `HEAD`, then runs both locked neutral
-suites. An advisory `hexagon / cross-head-canary` job additionally tests
-hl2rp@main against every candidate hexagon commit so consumer breakage surfaces
+suites. An advisory `hexagon / cross-head-canary` job additionally tests the
+HL2RP consumer branch named by `HL2RP_CONSUMER_REF` in `neutral.yml` (currently
+`agent/v2-audit-remediation`, because `hl2rp@main` is still the pre-v2 gamemode
+and has no `tests/` directory) against every candidate hexagon commit so
+consumer breakage surfaces
 before the next lock bump; it is `continue-on-error` and must never enter
 branch protection, because intentional breaking changes paired with an hl2rp
 update would otherwise deadlock (the release gate already refuses an unmatched
@@ -62,11 +65,11 @@ and exact restart recovery. It is deliberately classified as a manual acceptance
 run: this repository cannot create two distinct authenticated Steam sessions and
 does not pretend that matching text sentinels independently prove gameplay.
 
-The release target is a local standalone project/dedicated host. This is an
-intentional persistence safety boundary: the platform-whitelisted Hexagon library
-defines the v3 protocol but contains no raw OS storage implementation. The HL2RP
-game supplies that implementation and disables the whitelist for its standalone
-build. Manifest, source-boundary, and portable checks fail if either side drifts.
+Both packages are platform-whitelisted (`hl2rp.sbproj` sets `Whitelist: true`
+and `IsStandaloneOnly: false`). The Hexagon library defines the v3 protocol but
+contains no storage implementation; the HL2RP game supplies one whitelist-safe
+`IPersistenceStorage` adapter over the engine filesystem, shared by every host
+shape. Manifest, source-boundary, and portable checks fail if either side drifts.
 
 ## Manual dedicated-server two-client runbook
 
@@ -74,11 +77,11 @@ On a fresh persistence root, bootstrap authorization **before** the timed
 acceptance run. An authenticated account must already be able to use HL2RP's
 Access workspace so the two test accounts can receive the restricted
 entitlements needed for Civil Protection, scanner, restraint/search, and City
-Administration scenarios. For a local fresh-store setup, temporarily enter an
-operator Steam ID64 in the scene's `HL2RP Bootstrap Operators` component, use
-that authenticated editor session to grant the required entitlements, shut down
-cleanly so those grants are durable, then close/reload without saving the
-operator ID into the tracked scene. This is setup, not dedicated-server
+Administration scenarios. For a local fresh-store setup, start the host with the
+server ConVar `hl2rp-operator-accounts` set to the operator's Steam ID64, use
+that authenticated session to grant the required entitlements, then shut down
+cleanly so those grants are durable. Operator identity is never stored in the
+scene. This is setup, not dedicated-server
 acceptance evidence. Confirm both exact source worktrees are clean afterward;
 do not publish a personal account ID or attest an editor-hosted setup run.
 

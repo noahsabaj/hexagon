@@ -17,8 +17,10 @@ using ClientInventorySnapshot = Hexagon.V2.Networking.InventorySnapshot;
 namespace Hexagon.V2.Runtime;
 
 /// <summary>
-/// Single host-owned RPC surface for framework commands. Every entry point
-/// derives its actor through RpcGuard before dispatching client intent.
+/// Single host-owned RPC surface for framework commands. Every command entry point
+/// derives its actor through <c>RuntimeDispatchHost.ResolveActor</c>, which asks
+/// <see cref="HexagonRuntimeSystem.ResolveActor"/> to bind <c>Rpc.Caller</c> to a live
+/// session before any client intent is dispatched.
 /// </summary>
 public sealed class HexHostServicesComponent : Component, IHexHostTransport
 {
@@ -197,13 +199,8 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 	{
 		var runtime = Runtime;
 		if ( runtime is null ) return;
-		ClientStateSnapshot.ValidatePayload(
-			publicSnapshot,
-			privateSnapshot,
-			roster,
-			schemaViews,
-			inventories,
-			activeAction );
+		ArgumentNullException.ThrowIfNull( publicSnapshot );
+		ArgumentNullException.ThrowIfNull( schemaViews );
 		var unknownPanel = schemaViews.FirstOrDefault( view => !runtime.IsRegisteredPanel( view.PanelId ) );
 		if ( unknownPanel is not null )
 		{
@@ -217,6 +214,9 @@ public sealed class HexHostServicesComponent : Component, IHexHostTransport
 			return;
 		}
 
+		// The snapshot constructor is the single place the payload is validated; an inconsistent
+		// payload throws to the calling application here. The epoch already advanced above,
+		// which is harmless: revisions must stay monotonic, not contiguous.
 		var snapshot = new ClientStateSnapshot(
 			epoch.Value,
 			publicSnapshot,

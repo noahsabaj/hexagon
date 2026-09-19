@@ -18,14 +18,19 @@ public sealed record AsyncOperationFailure(
 }
 
 /// <summary>
-/// Immutable terminal result for a one-way operation registry drain.
+/// Immutable terminal result for a one-way operation registry drain. <see cref="Failures"/>
+/// holds at most <see cref="AsyncOperationRegistry.RetainedFailureLimit"/> of the MOST RECENT
+/// faults; <see cref="DroppedFailureCount"/> says how many older ones were let go, so a
+/// long-lived host that faulted thousands of times still reports that it did.
 /// </summary>
 public sealed record AsyncDrainResult(
 	int AcceptedOperationCount,
 	int CompletedOperationCount,
-	IReadOnlyList<AsyncOperationFailure> Failures)
+	IReadOnlyList<AsyncOperationFailure> Failures,
+	int DroppedFailureCount = 0)
 {
-	public bool Succeeded => Failures.Count == 0;
+	public bool Succeeded => Failures.Count == 0 && DroppedFailureCount == 0;
+	public int TotalFailureCount => Failures.Count + DroppedFailureCount;
 }
 
 /// <summary>
@@ -36,13 +41,21 @@ public sealed record AsyncDrainResult(
 /// </summary>
 public sealed class AsyncOperationRegistry
 {
+	/// <summary>
+	/// Failures retained for the drain report. A registry lives as long as the host and every
+	/// failure holds its exception (and so its stack and captured state), so an unbounded list
+	/// would grow with uptime. The oldest are dropped first and counted rather than forgotten.
+	/// </summary>
+	public const int RetainedFailureLimit = 64;
+
 	private readonly object _sync = new();
 	private readonly Dictionary<long, OperationEntry> _active = new();
-	private readonly List<AsyncOperationFailure> _failures = new();
+	private readonly Queue<AsyncOperationFailure> _failures = new();
 	private TaskCompletionSource<AsyncDrainResult>? _drainCompletion;
 	private long _nextOperationId;
 	private int _acceptedOperationCount;
 	private int _completedOperationCount;
+	private int _droppedFailureCount;
 	private bool _accepting = true;
 
 	public bool IsAccepting
@@ -191,7 +204,14 @@ public sealed class AsyncOperationRegistry
 			if ( !_active.Remove( entry.Id ) ) return;
 			_completedOperationCount++;
 			if ( failure is not null )
-				_failures.Add( new AsyncOperationFailure( entry.Id, entry.Name, failure ) );
+			{
+				_failures.Enqueue( new AsyncOperationFailure( entry.Id, entry.Name, failure ) );
+				while ( _failures.Count > RetainedFailureLimit )
+				{
+					_failures.Dequeue();
+					_droppedFailureCount++;
+				}
+			}
 			CompleteDrainIfQuiescedUnsafe();
 		}
 	}
@@ -206,7 +226,8 @@ public sealed class AsyncOperationRegistry
 		_drainCompletion.TrySetResult( new AsyncDrainResult(
 			_acceptedOperationCount,
 			_completedOperationCount,
-			Array.AsReadOnly( _failures.ToArray() ) ) );
+			Array.AsReadOnly( _failures.ToArray() ),
+			_droppedFailureCount ) );
 	}
 
 	private sealed record OperationEntry( long Id, string Name );

@@ -59,9 +59,29 @@ public sealed record ItemDefinition(
 	int Height = 1
 ) : IDefinition
 {
+	// Copied on the way in. The list a game hands over is usually a List<string> it still
+	// holds; without the copy, mutating it after Compile would silently rewrite the registry.
+	private readonly IReadOnlyList<string> _actionIds = DefinitionLists.Freeze(ActionIds)!;
+
+	public IReadOnlyList<string> ActionIds
+	{
+		get => _actionIds;
+		init => _actionIds = DefinitionLists.Freeze(value)!;
+	}
+
 	public static ItemDefinition Create(string id, bool canDrop = false, string? worldModel = null,
 		params string[] actionIds)
-		=> new(id, new ReadOnlyCollection<string>(actionIds ?? Array.Empty<string>()), canDrop, worldModel);
+		=> new(id, actionIds ?? Array.Empty<string>(), canDrop, worldModel);
+}
+
+internal static class DefinitionLists
+{
+	/// <summary>
+	/// An immutable snapshot of <paramref name="values"/>, or null for null so the compiler can
+	/// still report a missing list as a conformance issue rather than a constructor exception.
+	/// </summary>
+	public static IReadOnlyList<string>? Freeze(IReadOnlyList<string>? values) =>
+		values is null ? null : Array.AsReadOnly(values.ToArray());
 }
 
 public sealed record PermissionDefinition(
@@ -78,16 +98,21 @@ public sealed record PermissionDefinition(
 /// </para>
 /// <para>
 /// <c>Prefixes</c> is what a player types to address the channel, without the leading slash.
-/// Resolved BEFORE the command catalogue, so a prefix colliding with a command name would shadow
-/// it — a guard test forbids that rather than leaving it to review.
+/// The client composer resolves prefixes BEFORE the command catalogue and compares them
+/// case-insensitively, so <see cref="Schema.SchemaCompiler"/> rejects a prefix that is empty,
+/// contains whitespace, repeats another channel's prefix (ignoring case) or equals a registered
+/// command id (ignoring case). A collision with a command not registered through the schema
+/// cannot be seen here and stays the game's responsibility.
 /// </para>
 /// <para>
 /// <c>Range</c> is the audible radius in world units, or null for a channel that is not positional.
-/// A ranged channel with no range would silently reach nobody, so the schema compiler catches it.
+/// Giving a channel a range is what makes it positional; the compiler rejects a range that is not
+/// finite and positive, and <c>ChatService</c> hands recipient resolvers this value and no other.
 /// </para>
 /// <para>
 /// <c>AllowedWhileDead</c> defaults to false: death silences. It is per-channel because "OOC works
 /// while dead" is a common house rule, and a game should not have to fork the framework to have it.
+/// <c>ChatService</c> enforces it on the host; the client composer only mirrors it for feedback.
 /// </para>
 /// </summary>
 public sealed record ChatChannelDefinition(
@@ -98,7 +123,16 @@ public sealed record ChatChannelDefinition(
 	float? Range = null,
 	string? Colour = null,
 	bool AllowedWhileDead = false
-) : IDefinition;
+) : IDefinition
+{
+	private readonly IReadOnlyList<string>? _prefixes = DefinitionLists.Freeze(Prefixes);
+
+	public IReadOnlyList<string>? Prefixes
+	{
+		get => _prefixes;
+		init => _prefixes = DefinitionLists.Freeze(value);
+	}
+}
 
 public enum CommandCostClass
 {

@@ -54,6 +54,31 @@ public sealed class AsyncOperationRegistryTests
 	}
 
 	[TestMethod]
+	public async Task RetainedFailuresAreCappedAtTheMostRecentAndTheRestAreCounted()
+	{
+		var registry = new AsyncOperationRegistry();
+		var total = AsyncOperationRegistry.RetainedFailureLimit + 10;
+		for ( var index = 0; index < total; index++ )
+		{
+			var name = $"failure_{index:D3}";
+			Assert.IsTrue( registry.TryStartTask( name, () =>
+				Task.FromException( new InvalidOperationException( name ) ) ) );
+		}
+
+		var drained = await registry.DrainAsync();
+
+		Assert.IsFalse( drained.Succeeded );
+		Assert.AreEqual( total, drained.AcceptedOperationCount );
+		Assert.AreEqual( total, drained.CompletedOperationCount );
+		Assert.HasCount( AsyncOperationRegistry.RetainedFailureLimit, drained.Failures );
+		Assert.AreEqual( 10, drained.DroppedFailureCount );
+		Assert.AreEqual( total, drained.TotalFailureCount );
+		// The oldest were dropped, the newest kept, in order.
+		Assert.AreEqual( "failure_010", drained.Failures[0].Name );
+		Assert.AreEqual( $"failure_{total - 1:D3}", drained.Failures[^1].Name );
+	}
+
+	[TestMethod]
 	public async Task StopAndDrainAreIdempotentAndRejectNewWorkWhileWaiting()
 	{
 		var registry = new AsyncOperationRegistry();

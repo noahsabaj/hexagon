@@ -200,6 +200,12 @@ public sealed class ChatAdmissionService : IChatAdmissionService
 	}
 }
 
+/// <summary>
+/// Runtime tuning for one schema channel. <see cref="Range"/> is NOT a second place to state the
+/// audible radius: the channel's <see cref="Kernel.Definitions.ChatChannelDefinition.Range"/> is
+/// the only source, and <see cref="ChatService"/> fills this from it. A rule that states a range
+/// of its own must state the same one, or registration throws.
+/// </summary>
 public sealed record ChatChannelRule
 {
 	public required string Id { get; init; }
@@ -253,11 +259,25 @@ public interface IPermissionAuthorizer
 	bool HasPermission( AccountId accountId, CharacterId characterId, string permissionId );
 }
 
+/// <summary>
+/// Host-side answer to "is this character alive right now". Liveness is runtime state that the
+/// persisted character does not carry, so the game supplies it; <see cref="ChatService"/> asks
+/// only for channels that are not <c>AllowedWhileDead</c>.
+/// </summary>
+public interface IChatLivenessSource
+{
+	bool IsAlive( ConnectionId connectionId, CharacterId characterId );
+}
+
 public sealed record ChatSendContext(
 	InventoryActor Actor,
 	CharacterRecord Character,
 	string ChannelId,
-	string Text );
+	string Text )
+{
+	/// <summary>What the liveness source reported when the message was admitted.</summary>
+	public bool IsAlive { get; init; } = true;
+}
 
 public sealed record ChatDelivery(
 	Guid MessageId,
@@ -278,9 +298,10 @@ public interface IChatRecipientResolver
 public sealed record ChatDeliveredEvent( ChatDelivery Delivery );
 
 /// <summary>
-/// Host chat boundary with fail-closed definitions/permissions, Unicode-scalar
-/// limits and per-connection token buckets. Recipient resolution captures the
-/// live inventory view exactly once and never queries persistence.
+/// Host chat boundary with fail-closed definitions/permissions, ban and liveness
+/// checks, Unicode-scalar limits and per-connection token buckets. Recipient
+/// resolution captures the live inventory view exactly once and never queries
+/// persistence.
 /// </summary>
 public sealed class ChatService
 {
@@ -293,6 +314,7 @@ public sealed class ChatService
 	private readonly ILiveInventoryView _inventory;
 	private readonly IHexClock _clock;
 	private readonly PolicyPipeline<ChatSendContext> _policy;
+	private readonly IChatLivenessSource _liveness;
 	private readonly PostCommitEventBus<ChatDeliveredEvent> _events;
 	private readonly ChatRateLimit _globalRateLimit;
 	private readonly IChatAdmissionService _admission;
@@ -305,6 +327,7 @@ public sealed class ChatService
 		ILiveInventoryView inventory,
 		IHexClock clock,
 		PolicyPipeline<ChatSendContext> policy,
+		IChatLivenessSource liveness,
 		PostCommitEventBus<ChatDeliveredEvent>? events = null,
 		ChatRateLimit? globalRateLimit = null,
 		IChatAdmissionService? admission = null )
@@ -315,6 +338,7 @@ public sealed class ChatService
 		_inventory = inventory ?? throw new ArgumentNullException( nameof(inventory) );
 		_clock = clock ?? throw new ArgumentNullException( nameof(clock) );
 		_policy = policy ?? throw new ArgumentNullException( nameof(policy) );
+		_liveness = liveness ?? throw new ArgumentNullException( nameof(liveness) );
 		_events = events ?? new PostCommitEventBus<ChatDeliveredEvent>();
 		_globalRateLimit = globalRateLimit ?? ChatRateLimit.Default;
 		_admission = admission ?? new ChatAdmissionService();
@@ -323,11 +347,18 @@ public sealed class ChatService
 		foreach ( var rule in rules ?? throw new ArgumentNullException( nameof(rules) ) )
 		{
 			ArgumentNullException.ThrowIfNull( rule );
-			if ( !_schema.ChatChannels.Contains( rule.Id ) )
+			if ( !_schema.ChatChannels.TryGet( rule.Id, out var definition ) )
 				throw new InvalidOperationException( $"Chat rule '{rule.Id}' has no schema definition." );
 			ValidateRateLimit( rule.RateLimit );
-			if ( rule.Range is <= 0f ) throw new ArgumentOutOfRangeException( nameof(rules), "Chat range must be positive." );
-			if ( !map.TryAdd( rule.Id, rule ) ) throw new InvalidOperationException( $"Chat rule '{rule.Id}' is duplicated." );
+			// The definition is the single source of a channel's range. A rule may restate it
+			// (older games built rules from a parallel table) but may not disagree with it.
+			if ( rule.Range is float range && (!float.IsFinite( range ) || range <= 0f) )
+				throw new ArgumentOutOfRangeException( nameof(rules), "Chat range must be finite and positive." );
+			if ( rule.Range is not null && rule.Range != definition!.Range )
+				throw new InvalidOperationException(
+					$"Chat rule '{rule.Id}' states range {rule.Range} but its definition states {definition.Range?.ToString() ?? "none"}." );
+			var bound = rule with { Range = definition!.Range };
+			if ( !map.TryAdd( rule.Id, bound ) ) throw new InvalidOperationException( $"Chat rule '{rule.Id}' is duplicated." );
 		}
 		foreach ( var definition in _schema.ChatChannels.All )
 			if ( !map.ContainsKey( definition.Id ) )
@@ -352,16 +383,23 @@ public sealed class ChatService
 			if ( !_permissions.HasPermission( actor.AccountId, actor.CharacterId, definition.PermissionId ) )
 				return OperationResult<ChatDelivery>.Failure( ErrorCode.Unauthorized, "Chat permission is denied." );
 		}
+		var now = _clock.UtcNow;
+		// Both checks live here, on the host, because the client composer's copy of them is
+		// feedback for the player and nothing more: a modified client sends whatever it likes.
+		if ( character.IsBanActive( now ) )
+			return OperationResult<ChatDelivery>.Failure( ErrorCode.Unauthorized, "Chat author is banned." );
+		var isAlive = _liveness.IsAlive( actor.ConnectionId, actor.CharacterId );
+		if ( !isAlive && !definition.AllowedWhileDead )
+			return OperationResult<ChatDelivery>.Failure( ErrorCode.PolicyDenied, "The dead cannot speak in this channel." );
 
 		var normalized = Normalize( rawText );
 		if ( normalized.Failed )
 			return OperationResult<ChatDelivery>.Failure( normalized.Error!.Code, normalized.Error.Message );
-		var context = new ChatSendContext( actor, character, channelId, normalized.Value );
+		var context = new ChatSendContext( actor, character, channelId, normalized.Value ) { IsAlive = isAlive };
 		var policy = _policy.Evaluate( context );
 		if ( policy.Failed )
 			return OperationResult<ChatDelivery>.Failure( policy.Error!.Code, policy.Error.Message );
 
-		var now = _clock.UtcNow;
 		var reserved = _admission.Reserve(
 			actor.ConnectionId, channelId, _globalRateLimit, rule.RateLimit, now );
 		if ( reserved.Failed )

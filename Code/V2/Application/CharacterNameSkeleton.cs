@@ -75,19 +75,40 @@ public static class CharacterNameSkeleton
 			var codePoint = char.ConvertToUtf32( value, index );
 			if ( char.IsHighSurrogate( value[index] ) ) index++;
 
+			// The table's output is folded again by the supplementary rules, because UTS #39 maps
+			// several letters onto DIGITS (U+01BC tone five onto '5', U+0222 ou onto '8', U+01A7
+			// onto '2') and a digit is exactly what the supplementary fold turns back into a
+			// letter. Folding only the misses left "Ƽara" distinct from "Sara" while "5ara" was
+			// not. One pass is a fixpoint: no prototype in the table is itself a table source,
+			// and no supplementary output is either.
 			if ( ConfusableMappings.TryMap( codePoint, out var single, out var sequence ) )
 			{
-				if ( sequence is not null ) builder.Append( sequence );
-				else builder.Append( char.ConvertFromUtf32( single ) );
+				if ( sequence is not null ) AppendSupplementaryFolded( builder, sequence );
+				else AppendSupplementaryFolded( builder, single );
 				continue;
 			}
 
-			var supplement = SupplementaryFold( codePoint );
-			if ( supplement is not null ) builder.Append( supplement );
-			else builder.Append( char.ConvertFromUtf32( codePoint ) );
+			AppendSupplementaryFolded( builder, codePoint );
 		}
 
 		return builder.ToString();
+	}
+
+	private static void AppendSupplementaryFolded( StringBuilder builder, string value )
+	{
+		for ( var index = 0; index < value.Length; index++ )
+		{
+			var codePoint = char.ConvertToUtf32( value, index );
+			if ( char.IsHighSurrogate( value[index] ) ) index++;
+			AppendSupplementaryFolded( builder, codePoint );
+		}
+	}
+
+	private static void AppendSupplementaryFolded( StringBuilder builder, int codePoint )
+	{
+		var supplement = SupplementaryFold( codePoint );
+		if ( supplement is not null ) builder.Append( supplement );
+		else builder.Append( char.ConvertFromUtf32( codePoint ) );
 	}
 
 	/// <summary>

@@ -76,12 +76,14 @@ internal sealed class ApplicationServiceTestEnvironment : IAsyncDisposable
 		int inventoryWidth = 4,
 		int inventoryHeight = 4,
 		ICharacterStateFactory? stateFactory = null,
-		CharacterRules.NameUniqueness nameUniqueness = CharacterRules.NameUniqueness.Skeleton)
+		CharacterRules.NameUniqueness nameUniqueness = CharacterRules.NameUniqueness.Skeleton,
+		ICharacterModelCatalog? models = null,
+		Action<Exception>? diagnostics = null)
 	{
 		return new CharacterService(
 			Repositories,
 			Schema,
-			new AllowAllModels(),
+			models ?? new AllowAllModels(),
 			stateFactory ?? new TestStateFactory(),
 			initializers ?? Array.Empty<ICharacterInitializer>(),
 			new TestIdGenerator(),
@@ -91,7 +93,8 @@ internal sealed class ApplicationServiceTestEnvironment : IAsyncDisposable
 			AllowPolicy<CharacterDeletionContext>(),
 			inventoryWidth: inventoryWidth,
 			inventoryHeight: inventoryHeight,
-			nameUniqueness: nameUniqueness);
+			nameUniqueness: nameUniqueness,
+			diagnostics: diagnostics);
 	}
 
 	public InventoryMutationService CreateInventoryMutationService() => new(

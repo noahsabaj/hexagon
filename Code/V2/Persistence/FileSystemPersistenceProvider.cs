@@ -95,6 +95,7 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 	private string _lastAckHash = string.Empty;
 	private long _retainedWalBytes;
 	private int _retainedCommitCount;
+	private long _storagePressureFloor;
 	private PendingCommitHead? _pendingCommitHead;
 
 	public FileSystemPersistenceProvider(
@@ -123,7 +124,16 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 	public string LegacyRootPath { get; }
 
 	protected override int AutomaticCheckpointCommitInterval => _options.CheckpointEveryCommits;
-	protected override bool ShouldCheckpointForStoragePressure => _retainedWalBytes >= _options.SoftCheckpointBytes;
+	/// <summary>
+	/// A pressure checkpoint exists to reclaim WAL, so after a prune fails it cannot help until the
+	/// WAL has grown by another <see cref="FileSystemPersistenceOptions.SoftCheckpointBytes"/> past
+	/// the level at which the prune failed; refiring on every commit would only mint checkpoint
+	/// generations that the same failing prune never reclaims. The commit-interval trigger, an
+	/// explicit checkpoint and the shutdown checkpoint all still retry the prune, and a prune that
+	/// succeeds drops the floor back to zero.
+	/// </summary>
+	protected override bool ShouldCheckpointForStoragePressure =>
+		_retainedWalBytes >= _storagePressureFloor + _options.SoftCheckpointBytes;
 	private protected override Func<Func<Task>, bool>? BackgroundCheckpointScheduler =>
 		_options.ScheduleBackgroundCheckpoint;
 	protected override bool LeaseIsReleased => _lease is null || _lease.IsReleased;
@@ -163,6 +173,19 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 	/// </summary>
 	private async ValueTask<OperationOutcome<RecoveryState>> QuarantineAndRebuildAsync( CancellationToken cancellationToken )
 	{
+		// format.json is the store's identity and sits outside quarantine's reach by design: it is
+		// preserved, never self-healed. Prove it readable BEFORE any artifact moves, because a
+		// rebuild cannot succeed without it and archiving an intact WAL for a rebuild that is about
+		// to fail on the same manifest would turn a fail-closed case into data loss.
+		var manifest = await AsyncOperation.Capture( () => EnsureFormatManifestAsync( cancellationToken ) );
+		if ( !manifest.Succeeded )
+		{
+			_options.Log?.Invoke(
+				$"HEXAGON_PERSISTENCE_QUARANTINE_REFUSED root={RootPath} reason=format-manifest " +
+				$"{manifest.Exception!.GetType().Name}: {manifest.Exception.Message}" );
+			return OperationOutcome<RecoveryState>.Failure( manifest.Exception! );
+		}
+
 		var quarantine = await AsyncOperation.Capture( () => QuarantineCorruptArtifactsAsync( cancellationToken ) );
 		if ( !quarantine.Succeeded )
 		{
@@ -230,6 +253,7 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 		_lastAckHash = string.Empty;
 		_retainedWalBytes = 0;
 		_retainedCommitCount = 0;
+		_storagePressureFloor = 0;
 		_pendingCommitHead = null;
 	}
 
@@ -365,16 +389,37 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 			await _storage.DeleteAsync( orphan, cancellationToken );
 			discardedUnacknowledgedFrames++;
 		}
+		// Every fail-closed check has passed by here, so what follows is housekeeping on a store
+		// that is known consistent: the sweep runs after validation so an armed quarantine still
+		// archives everything intact, and the prune retry degrades rather than aborts because its
+		// deletes only reclaim history the verified anchor checkpoint already supersedes.
+		var sweepDetail = await SweepInvalidCheckpointArtifactsAsync( checkpoint, cancellationToken );
+		var checkpointCleanupPending = false;
+		string? pruneDetail = null;
 		if ( pendingPrune is not null )
-			await ApplyPruneIntentAsync( pendingPrune, cancellationToken );
+		{
+			var prune = await AsyncOperation.Capture( () => ApplyPruneIntentAsync( pendingPrune, cancellationToken ) );
+			if ( !prune.Succeeded )
+			{
+				if ( prune.Exception is PersistenceCorruptionException or OperationCanceledException )
+					throw prune.Exception!;
+				checkpointCleanupPending = true;
+				pruneDetail = $"HEXAGON_PRUNE_INTENT_DEGRADED path={pendingPrune.Path} " +
+					$"detail={prune.Exception!.GetType().Name}:{prune.Exception.Message}";
+				_options.Log?.Invoke( pruneDetail );
+			}
+		}
 
 		_durableSequence = sequence;
 		_durableGeneration = generation;
 		_lastAckHash = previousAckHash;
 		await RecalculateWalUsageAsync( cancellationToken );
+		_storagePressureFloor = checkpointCleanupPending ? _retainedWalBytes : 0;
 
 		var detail = checkpoint.Detail;
 		if ( tornDetail is not null ) detail = detail is null ? tornDetail : $"{detail} {tornDetail}";
+		if ( sweepDetail is not null ) detail = detail is null ? sweepDetail : $"{detail} {sweepDetail}";
+		if ( pruneDetail is not null ) detail = detail is null ? pruneDetail : $"{detail} {pruneDetail}";
 		var legacyFiles = await _storage.ListAsync( LegacyRootPath, cancellationToken );
 		if ( legacyFiles.Count > 0 )
 		{
@@ -396,7 +441,43 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 				.ToArray(),
 			discardedUnacknowledgedFrames,
 			checkpoint.RecoveredFromFallback,
-			detail );
+			detail,
+			CheckpointCleanupPending: checkpointCleanupPending );
+	}
+
+	/// <summary>
+	/// Removes checkpoint artifacts that no verified generation references: completions that failed
+	/// verification, and manifests or blobs no valid completion names. They are either torn by a
+	/// crash inside a non-atomic adapter's publication window or left over from an interrupted
+	/// prune, and recovery already ignores them — but a torn file at its final content-addressed
+	/// name would make every later checkpoint at that sequence fail on an immutable-path collision,
+	/// so leaving it in place turns one crash into a permanent checkpoint outage.
+	/// </summary>
+	private async ValueTask<string?> SweepInvalidCheckpointArtifactsAsync(
+		CheckpointLoad checkpoint,
+		CancellationToken cancellationToken )
+	{
+		var removed = new List<string>();
+		foreach ( var (prefix, referenced) in new[]
+		{
+			(_checkpointCompletionPrefix, checkpoint.ValidCandidates.Select( value => value.CompletionPath )),
+			(_checkpointManifestPrefix, checkpoint.ValidCandidates.Select( value => value.ManifestPath )),
+			(_checkpointBlobPrefix, checkpoint.ValidCandidates.Select( value => value.BlobPath ))
+		} )
+		{
+			var retained = referenced.ToHashSet( StringComparer.Ordinal );
+			foreach ( var path in await _storage.ListAsync( prefix, cancellationToken ) )
+			{
+				if ( retained.Contains( path ) ) continue;
+				await _storage.DeleteAsync( path, cancellationToken );
+				removed.Add( path );
+			}
+		}
+		if ( removed.Count == 0 ) return null;
+		var message = $"HEXAGON_INVALID_CHECKPOINT_ARTIFACTS_DISCARDED count={removed.Count} " +
+			$"paths={string.Join( ",", removed )}";
+		_options.Log?.Invoke( message );
+		return message;
 	}
 
 	/// <summary>
@@ -582,16 +663,23 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 		try
 		{
 			await PruneAfterVerifiedCheckpointAsync( cancellationToken );
+			_storagePressureFloor = 0;
 			return CheckpointPersistenceOutcome.Clean;
 		}
 		catch ( Exception exception )
 		{
 			// The verified completion is already the durable publication point. Pruning only
 			// reclaims older immutable files, so failure must not leave the live provider on
-			// the pre-compaction generation and admit stale transactions.
+			// the pre-compaction generation and admit stale transactions. The prune may have
+			// deleted part of the WAL before failing, so the retained usage is re-measured from
+			// what actually remains (best effort: a failed re-measure keeps the last figure), and
+			// the pressure floor is raised to that level so the storage-pressure trigger backs off
+			// instead of minting a fresh checkpoint generation on every commit.
+			_ = await AsyncOperation.Capture( () => RecalculateWalUsageAsync( CancellationToken.None ) );
+			_storagePressureFloor = _retainedWalBytes;
 			_options.Log?.Invoke(
 				$"HEXAGON_COMPACTION_DEGRADED sequence={snapshot.Sequence} generation={snapshot.CompactionGeneration} " +
-				$"detail={exception.GetType().Name}:{exception.Message}" );
+				$"retainedWalBytes={_retainedWalBytes} detail={exception.GetType().Name}:{exception.Message}" );
 			return CheckpointPersistenceOutcome.Degraded( exception );
 		}
 	}
@@ -759,7 +847,7 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 	{
 		var completionPaths = await _storage.ListAsync( _checkpointCompletionPrefix, cancellationToken );
 		if ( completionPaths.Count == 0 )
-			return new CheckpointLoad( null, false, null, Array.Empty<CheckpointSnapshot>() );
+			return new CheckpointLoad( null, false, null, Array.Empty<CheckpointCandidate>() );
 		var valid = new List<CheckpointCandidate>();
 		var failures = new List<string>();
 		foreach ( var path in completionPaths )
@@ -773,7 +861,7 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 		if ( valid.Count == 0 )
 			return new CheckpointLoad( null, true,
 				$"No valid checkpoint generation was available; replaying acknowledged WAL. {string.Join( " | ", failures )}",
-				Array.Empty<CheckpointSnapshot>() );
+				Array.Empty<CheckpointCandidate>() );
 		var selected = valid.OrderByDescending( value => value.Snapshot.Sequence )
 			.ThenByDescending( value => value.Snapshot.CompactionGeneration ).First();
 		return new CheckpointLoad(
@@ -782,7 +870,7 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 			failures.Count > 0
 				? $"Recovered checkpoint {selected.Snapshot.Sequence} after invalid generation(s): {string.Join( " | ", failures )}"
 				: null,
-			valid.Select( value => value.Snapshot ).ToArray() );
+			valid );
 	}
 
 	private static ChainAnchor DetermineRetainedChainAnchor(
@@ -1181,7 +1269,10 @@ public sealed class FileSystemPersistenceProvider : TransactionalPersistenceProv
 		CheckpointSnapshot? Snapshot,
 		bool RecoveredFromFallback,
 		string? Detail,
-		IReadOnlyList<CheckpointSnapshot> ValidSnapshots );
+		IReadOnlyList<CheckpointCandidate> ValidCandidates )
+	{
+		public IEnumerable<CheckpointSnapshot> ValidSnapshots => ValidCandidates.Select( value => value.Snapshot );
+	}
 	private sealed record PendingPruneIntent( string Path, CheckpointPruneIntent Intent );
 	private sealed record PendingCommitHead( string Path, ReadOnlyMemory<byte> Content );
 	private readonly record struct ChainAnchor( long Sequence, string Hash );

@@ -65,6 +65,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'verify-common.ps1')
+
 . (Join-Path $PSScriptRoot 'release-inputs.ps1')
 
 $hexagonRoot = Split-Path -Parent $PSScriptRoot
@@ -73,21 +75,6 @@ if ([string]::IsNullOrWhiteSpace($SchemaRoot)) {
 }
 $schemaRootPath = (Resolve-Path -LiteralPath $SchemaRoot).Path
 $schemaManifest = Join-Path $schemaRootPath 'hl2rp.sbproj'
-
-function Invoke-CheckedCommand {
-    param(
-        [Parameter(Mandatory)][string] $Description,
-        [Parameter(Mandatory)][string] $FilePath,
-        [Parameter(Mandatory)][string[]] $Arguments
-    )
-
-    Write-Host "==> $Description" -ForegroundColor Cyan
-    $global:LASTEXITCODE = 0
-    & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Description failed with exit code $LASTEXITCODE."
-    }
-}
 
 function Get-NormalizedAbsolutePath {
     param(
@@ -141,17 +128,6 @@ function Test-ExactPath {
         (Get-NormalizedAbsolutePath -Path $Left),
         (Get-NormalizedAbsolutePath -Path $Right)
     )
-}
-
-function Get-RepositoryHead {
-    param([Parameter(Mandatory)][string] $Root)
-
-    $global:LASTEXITCODE = 0
-    $head = (& git -C $Root rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or $head -cnotmatch '^[a-f0-9]{40}$') {
-        throw "Could not resolve a lowercase full Git HEAD for '$Root'."
-    }
-    return $head
 }
 
 Write-Host '==> Validating package and asset layout' -ForegroundColor Cyan

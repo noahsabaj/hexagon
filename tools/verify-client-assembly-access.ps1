@@ -40,8 +40,7 @@ $baseLibraryAssemblyPath = Join-Path $generatedOutput 'Base Library.dll'
 foreach ($requiredPath in @(
     $generatedProject,
     $accessAssemblyPath,
-    $cecilAssemblyPath,
-    $baseLibraryAssemblyPath
+    $cecilAssemblyPath
 )) {
     if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
         throw "Client assembly access verification requires '$requiredPath'."
@@ -142,7 +141,14 @@ try {
     [void]$rules.Whitelist.Add([regex]::new('^Base Library/.*$'))
 
     $dependencies = [System.Collections.Generic.List[object]]::new()
-    foreach ($dependencyPath in @($hexagonAssemblyPath, $baseLibraryAssemblyPath)) {
+    # Engine builds from 26.09 on no longer emit a separate 'Base Library.dll'; its types moved
+    # into the engine assemblies the verifier already trusts. Load it only where it still exists,
+    # so the gate runs on both engine generations instead of refusing to start.
+    $dependencyPaths = @($hexagonAssemblyPath)
+    if (Test-Path -LiteralPath $baseLibraryAssemblyPath -PathType Leaf) {
+        $dependencyPaths += $baseLibraryAssemblyPath
+    }
+    foreach ($dependencyPath in $dependencyPaths) {
         $dependency = [Mono.Cecil.AssemblyDefinition]::ReadAssembly($dependencyPath, $reader)
         $dependencies.Add($dependency)
         if (-not $assemblies.TryAdd($dependency.Name, $dependency)) {

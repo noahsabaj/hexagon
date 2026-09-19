@@ -56,6 +56,7 @@ public sealed class CharacterService
 	private readonly CharacterRules.NameUniqueness _nameUniqueness;
 	private readonly int _inventoryWidth;
 	private readonly int _inventoryHeight;
+	private readonly Action<Exception>? _diagnostics;
 
 	public CharacterService(
 		DomainRepositories repositories,
@@ -72,8 +73,10 @@ public sealed class CharacterService
 		PostCommitEventBus<CharacterDeletedEvent>? deletedEvents = null,
 		int inventoryWidth = 8,
 		int inventoryHeight = 6,
-		CharacterRules.NameUniqueness nameUniqueness = CharacterRules.NameUniqueness.Skeleton )
+		CharacterRules.NameUniqueness nameUniqueness = CharacterRules.NameUniqueness.Skeleton,
+		Action<Exception>? diagnostics = null )
 	{
+		_diagnostics = diagnostics;
 		_repositories = repositories ?? throw new ArgumentNullException( nameof(repositories) );
 		_schema = schema ?? throw new ArgumentNullException( nameof(schema) );
 		_models = models ?? throw new ArgumentNullException( nameof(models) );
@@ -100,9 +103,23 @@ public sealed class CharacterService
 	/// The comparison key for a name under the configured scheme. Applied to the submitted name and
 	/// to every existing one from the same method, so the two sides of the comparison cannot drift.
 	/// </summary>
-	private string NameKey( string name ) => _nameUniqueness == CharacterRules.NameUniqueness.Skeleton
-		? CharacterNameSkeleton.Of( name )
-		: CharacterNameSkeleton.Exact( name );
+	// Uniqueness is decided against every existing character, and reducing a name costs several
+	// Unicode normalizations. A name's key never changes for a given mode, so the reduction is
+	// remembered; the characters themselves stay the authority on which names are in use.
+	private const int MaximumCachedNameKeys = 8_192;
+	private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _nameKeys =
+		new( StringComparer.Ordinal );
+
+	private string NameKey( string name )
+	{
+		if ( _nameKeys.TryGetValue( name, out var cached ) ) return cached;
+		var key = _nameUniqueness == CharacterRules.NameUniqueness.Skeleton
+			? CharacterNameSkeleton.Of( name )
+			: CharacterNameSkeleton.Exact( name );
+		if ( _nameKeys.Count >= MaximumCachedNameKeys ) _nameKeys.Clear();
+		_nameKeys[name] = key;
+		return key;
+	}
 
 	public IReadOnlyList<CharacterRecord> ListForAccount( AccountId accountId )
 	{
@@ -275,7 +292,21 @@ public sealed class CharacterService
 				return OperationResult<CharacterCreationReceipt>.Failure( ErrorCode.PolicyDenied, "Class is not valid for the selected faction." );
 		}
 
-		if ( !_models.IsAllowed( request.Model, request.Faction, selectedClass ) )
+		// The model catalogue, state factory and initializers are game code. A throw from any of
+		// them is caught here and reported as a failed creation - the same fail-closed shape
+		// ItemActionService gives a throwing action handler - rather than escaping as an
+		// unhandled exception from a request path.
+		bool modelAllowed;
+		try
+		{
+			modelAllowed = _models.IsAllowed( request.Model, request.Faction, selectedClass );
+		}
+		catch ( Exception exception )
+		{
+			_diagnostics?.Invoke( exception );
+			return OperationResult<CharacterCreationReceipt>.Failure( ErrorCode.InternalError, "Character model catalogue failed closed." );
+		}
+		if ( !modelAllowed )
 			return OperationResult<CharacterCreationReceipt>.Failure( ErrorCode.PolicyDenied, "Model is not allowed for the selected faction and class." );
 
 		// ValidateCreationRequest above already proved both canonicalize, so persisting the
@@ -299,9 +330,20 @@ public sealed class CharacterService
 		if ( policy.Failed )
 			return OperationResult<CharacterCreationReceipt>.Failure( policy.Error!.Code, policy.Error.Message );
 
-		var state = _stateFactory.Create( context );
+		OperationResult<CharacterStatePlan> state;
+		try
+		{
+			state = _stateFactory.Create( context );
+		}
+		catch ( Exception exception )
+		{
+			_diagnostics?.Invoke( exception );
+			return OperationResult<CharacterCreationReceipt>.Failure( ErrorCode.InternalError, "Character state factory failed closed." );
+		}
 		if ( state.Failed )
 			return OperationResult<CharacterCreationReceipt>.Failure( state.Error!.Code, state.Error.Message );
+		if ( state.Value is null )
+			return OperationResult<CharacterCreationReceipt>.Failure( ErrorCode.InternalError, "Character state factory returned no plan." );
 		if ( state.Value.StartingBalance < 0 )
 			return OperationResult<CharacterCreationReceipt>.Failure( ErrorCode.InvalidArgument, "Starting balance cannot be negative." );
 		var stateType = ValidateTypedPayload( state.Value.State );
@@ -311,11 +353,24 @@ public sealed class CharacterService
 		var contributions = new List<CharacterInitializerContribution>();
 		foreach ( var initializer in _initializers )
 		{
-			var contribution = initializer.Build( context, state.Value );
+			OperationResult<CharacterInitializerContribution> contribution;
+			try
+			{
+				contribution = initializer.Build( context, state.Value );
+			}
+			catch ( Exception exception )
+			{
+				_diagnostics?.Invoke( exception );
+				return OperationResult<CharacterCreationReceipt>.Failure(
+					ErrorCode.InternalError, $"Initializer '{initializer.Id}' failed closed." );
+			}
 			if ( contribution.Failed )
 				return OperationResult<CharacterCreationReceipt>.Failure(
 					contribution.Error!.Code,
 					$"Initializer '{initializer.Id}' failed: {contribution.Error.Message}" );
+			if ( contribution.Value is null )
+				return OperationResult<CharacterCreationReceipt>.Failure(
+					ErrorCode.InternalError, $"Initializer '{initializer.Id}' returned no contribution." );
 			contributions.Add( contribution.Value );
 		}
 

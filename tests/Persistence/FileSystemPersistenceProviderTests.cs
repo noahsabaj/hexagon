@@ -201,6 +201,49 @@ public sealed class FileSystemPersistenceProviderTests
 	}
 
 	[TestMethod]
+	public async Task CorruptFormatManifestIsNeverQuarantinedAndMovesNothingWhenArmed()
+	{
+		var storage = new FaultInjectingStorage();
+		await using ( var first = PersistenceTestSupport.CreateFileProvider( storage ) )
+		{
+			await first.InitializeAsync();
+			var repository = first.Repository<TestDocument>( "characters" );
+			await using ( var create = first.BeginUnitOfWork() )
+			{
+				create.Create( repository, "alyx", new TestDocument( "Alyx", 1 ) );
+				Assert.IsTrue( (await create.CommitAsync()).Succeeded );
+			}
+			Assert.IsTrue( (await first.ShutdownAsync()).IsClean );
+		}
+		var formatPath = Root + "/format.json";
+		await storage.CorruptByteAsync( formatPath, 0 );
+		var corruptManifest = (await storage.ReadAsync( formatPath ))!.Value.ToArray();
+		var walBefore = await storage.ListAsync( Root + "/wal" );
+		var checkpointsBefore = await storage.ListAsync( Root + "/checkpoints" );
+		Assert.IsNotEmpty( walBefore );
+		Assert.IsNotEmpty( checkpointsBefore );
+
+		// format.json is the one class the docs promise is preserved, not self-healed: arming
+		// quarantine must refuse before a single intact artifact is archived, because the
+		// rebuild would fail on the very same manifest and the move would be pure data loss.
+		var log = new List<string>();
+		await using var armed = new FileSystemPersistenceProvider(
+			storage,
+			new FileSystemPersistenceOptions( "test-schema" ) { QuarantineCorruptStore = true, Log = log.Add },
+			PersistenceTestSupport.CreateRegistry() );
+		await Assert.ThrowsAsync<PersistenceCorruptionException>( async () => await armed.InitializeAsync() );
+
+		Assert.AreEqual( PersistenceHealthStatus.Fatal, armed.Health.Status );
+		Assert.IsTrue( log.Any( entry => entry.StartsWith( "HEXAGON_PERSISTENCE_QUARANTINE_REFUSED", StringComparison.Ordinal ) ) );
+		Assert.IsFalse( log.Any( entry => entry.StartsWith( "HEXAGON_PERSISTENCE_QUARANTINED", StringComparison.Ordinal ) ) );
+		Assert.IsEmpty( await storage.ListAsync( Root + "/quarantine" ) );
+		CollectionAssert.AreEqual( walBefore.ToArray(), (await storage.ListAsync( Root + "/wal" )).ToArray() );
+		CollectionAssert.AreEqual( checkpointsBefore.ToArray(), (await storage.ListAsync( Root + "/checkpoints" )).ToArray() );
+		CollectionAssert.AreEqual( corruptManifest, (await storage.ReadAsync( formatPath ))!.Value.ToArray(),
+			"The corrupt manifest must be preserved untouched for the operator." );
+	}
+
+	[TestMethod]
 	public async Task IntactStoreIsNotQuarantinedEvenWhenArmed()
 	{
 		var storage = new FaultInjectingStorage();

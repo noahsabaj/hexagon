@@ -57,7 +57,7 @@ public static class ClientBootstrapDiagnosticContract
 			return Failure( "The bootstrap diagnostic detail is null." );
 		if ( detail.Length > MaximumDetailCharacters )
 			return Failure( $"The bootstrap diagnostic detail exceeds {MaximumDetailCharacters} characters." );
-		if ( !HasValidUnicode( detail ) )
+		if ( !ClientPayloadLimits.HasValidUnicode( detail ) )
 			return Failure( "The bootstrap diagnostic detail contains invalid Unicode." );
 		if ( Encoding.UTF8.GetByteCount( detail ) > MaximumDetailUtf8Bytes )
 			return Failure( $"The bootstrap diagnostic detail exceeds {MaximumDetailUtf8Bytes} UTF-8 bytes." );
@@ -163,19 +163,6 @@ public static class ClientBootstrapDiagnosticContract
 			utf8Bytes += encodedBytes;
 		}
 		return normalized.ToString();
-	}
-
-	private static bool HasValidUnicode( string value )
-	{
-		for ( var index = 0; index < value.Length; index++ )
-		{
-			if ( char.IsHighSurrogate( value[index] ) )
-			{
-				if ( index + 1 >= value.Length || !char.IsLowSurrogate( value[++index] ) ) return false;
-			}
-			else if ( char.IsLowSurrogate( value[index] ) ) return false;
-		}
-		return true;
 	}
 
 	private static OperationResult<ClientBootstrapDiagnostic> Failure( string message ) =>

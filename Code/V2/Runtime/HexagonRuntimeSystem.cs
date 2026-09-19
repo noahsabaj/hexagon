@@ -42,6 +42,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 	private readonly AsyncOperationRegistry _hostOperations = new();
 	private Task? _hostInitialization;
 	private Task<OperationResult>? _hostShutdown;
+	private RuntimePlayerSession<HexPlayerBody>[]? _shutdownSessions;
 	private Task<OperationResult>? _resourceShutdown;
 	private IPersistenceProvider? _persistence;
 	private CompiledSchema? _hostSchema;
@@ -315,6 +316,9 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 			Log.Error(
 				$"HEXAGON_PLAYER_SPAWN_FAILED connection={connection.Id} reason=no_spawn_point " +
 				$"detail={spawn.Error!.Message}" );
+			// Without a session the client's bind request can only ever conflict, and that
+			// conflict is deliberately unlogged, so the player would retry forever in silence.
+			connection.Kick( "The server has no spawn point configured." );
 			return;
 		}
 
@@ -564,7 +568,8 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 	public override void Dispose()
 	{
 		RequestShutdown();
-		if ( _persistence is not null || HostApplication is not null || _hostInitialization is not null )
+		var coordinated = _persistence is not null || HostApplication is not null || _hostInitialization is not null;
+		if ( coordinated )
 			_ = BeginCoordinatedShutdown();
 		else
 			DisposeHostLifetime();
@@ -573,7 +578,10 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		ClientTransport = null;
 		ClientStore?.ClearSession();
 		ClientReadiness = HexRuntimeReadiness.Disposed;
-		foreach ( var session in _sessions.Values ) session.Dispose();
+		// A coordinated shutdown owns its captured sessions and disposes them after it has
+		// delivered Disconnected; disposing them here first would cancel the actors it builds.
+		if ( !coordinated )
+			foreach ( var session in _sessions.Values ) session.Dispose();
 		_sessions.Clear();
 		_spawnSlots.Clear();
 		base.Dispose();
@@ -782,6 +790,9 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 	private Task<OperationResult> BeginCoordinatedShutdown()
 	{
 		if ( _hostShutdown is not null ) return _hostShutdown;
+		// Captured now because Dispose clears the live table while the shutdown may still be
+		// waiting on host initialization; the drain must still deliver Disconnected to these.
+		_shutdownSessions = _sessions.Values.ToArray();
 		_hostShutdown = CoordinateShutdownAsync( _hostInitialization );
 		if ( !string.IsNullOrWhiteSpace( _persistenceRoot ) )
 			SceneShutdownBarrier.Publish( _persistenceRoot, _hostShutdown );
@@ -809,7 +820,7 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		PersistenceShutdownResult? persistenceShutdown = null;
 		var application = HostApplication;
 		var disconnects = new List<(RuntimePlayerSession<HexPlayerBody> Session, RpcActor? Actor)>();
-		foreach ( var session in _sessions.Values )
+		foreach ( var session in _shutdownSessions ?? _sessions.Values.ToArray() )
 		{
 			RpcActor? actor = null;
 			if ( session.Player.HostConnection is Connection connection && session.Scope is not null )
@@ -836,7 +847,9 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 					Log.Error( exception, $"Host application disconnect failed for '{actor.Connection.Id}'." );
 				}
 			}
+			disconnect.Session.Dispose();
 		}
+		_shutdownSessions = null;
 
 		var commandDrain = await _hostOperations.DrainAsync();
 		foreach ( var failure in commandDrain.Failures )
@@ -981,15 +994,8 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		if ( string.IsNullOrWhiteSpace( bootstraps[0].SchemaId ) )
 			return OperationResult<HexagonBootstrapComponent>.Failure(
 				ErrorCode.SchemaInvalid, "Hexagon bootstrap schema ID is blank." );
-		try
-		{
-			if ( !string.IsNullOrWhiteSpace( bootstraps[0].PersistenceRootOverride ) )
-				_ = PrefixedPersistenceStorage.Normalize( bootstraps[0].PersistenceRootOverride );
-		}
-		catch ( Exception exception )
-		{
-			return OperationResult<HexagonBootstrapComponent>.Failure( ErrorCode.ConfigurationInvalid, exception.Message );
-		}
+		// The persistence root override is validated once, by ResolveHostOptions, on the host
+		// path that consumes it; a client never opens a store.
 		return OperationResult<HexagonBootstrapComponent>.Success( bootstraps[0] );
 	}
 
@@ -1035,7 +1041,17 @@ public sealed class HexagonRuntimeSystem : GameObjectSystem<HexagonRuntimeSystem
 		finally
 		{
 			if ( !session.CompleteApplicationConnection( succeeded ) || !succeeded )
+			{
 				session.Disconnect();
+				// The revoked client cannot retry: its session schedule is terminal. Leaving the
+				// connection up strands the player in a spawned body with a dead interface, so
+				// drop it and let a reconnect start a clean session.
+				try { actor.Connection.Kick( "The server could not initialize your session. Please reconnect." ); }
+				catch ( Exception exception )
+				{
+					Log.Error( exception, $"Could not drop connection '{actor.Connection.Id}' after failed initialization." );
+				}
+			}
 		}
 	}
 

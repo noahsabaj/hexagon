@@ -99,6 +99,7 @@ public static class SchemaCompiler
 		ValidateFactions(factions, classes, issues);
 		ValidateItems(items, actions, issues);
 		ValidatePermissionReferences(channels, commands, permissions, issues);
+		ValidateChatChannels(channels, commands, issues);
 		ValidateConcreteTypes(panels.Values.Select(x => (x.Id, x.PanelType)), "panels", issues);
 		ValidateConcreteTypes(initializers.Values.Select(x => (x.Id, x.InitializerType)),
 			"initializers", issues);
@@ -469,6 +470,60 @@ public static class SchemaCompiler
 				issues.Add(new ConformanceIssue(ErrorCode.UnknownDefinition,
 					$"commands.{command.Id}",
 					$"Command '{command.Id}' references unknown permission '{command.PermissionId}'."));
+			}
+		}
+	}
+
+	/// <summary>
+	/// Range must be finite and positive when given: NaN or infinity would pass a naive
+	/// "&gt; 0" check and reach nobody or everybody. Prefixes are matched by the client
+	/// composer ignoring case and split on the first space, so they must be non-empty, free of
+	/// whitespace, unique across channels ignoring case, and distinct from every command id
+	/// ignoring case - a prefix that equals a command would shadow that command for good.
+	/// </summary>
+	private static void ValidateChatChannels(
+		IReadOnlyDictionary<string, ChatChannelDefinition> channels,
+		IReadOnlyDictionary<string, CommandDefinition> commands,
+		List<ConformanceIssue> issues)
+	{
+		var claimed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		foreach (var channel in channels.Values.OrderBy(x => x.Id, StringComparer.Ordinal))
+		{
+			var path = $"chat_channels.{channel.Id}";
+			if (channel.Range is float range && (!float.IsFinite(range) || range <= 0f))
+			{
+				issues.Add(new ConformanceIssue(ErrorCode.SchemaInvalid, $"{path}.range",
+					$"Chat channel '{channel.Id}' range must be finite and positive when specified."));
+			}
+
+			if (channel.Prefixes is null)
+				continue;
+
+			foreach (var prefix in channel.Prefixes)
+			{
+				var prefixPath = $"{path}.prefixes";
+				if (string.IsNullOrEmpty(prefix) || prefix.Any(char.IsWhiteSpace))
+				{
+					issues.Add(new ConformanceIssue(ErrorCode.SchemaInvalid, prefixPath,
+						$"Chat channel '{channel.Id}' has a prefix that is empty or contains whitespace."));
+					continue;
+				}
+
+				if (claimed.TryGetValue(prefix, out var owner) && owner != channel.Id)
+				{
+					issues.Add(new ConformanceIssue(ErrorCode.DuplicateRegistration, prefixPath,
+						$"Chat channel '{channel.Id}' prefix '{prefix}' is already used by channel '{owner}'."));
+					continue;
+				}
+
+				claimed[prefix] = channel.Id;
+				var shadowed = commands.Keys.FirstOrDefault(id =>
+					string.Equals(id, prefix, StringComparison.OrdinalIgnoreCase));
+				if (shadowed is not null)
+				{
+					issues.Add(new ConformanceIssue(ErrorCode.SchemaInvalid, prefixPath,
+						$"Chat channel '{channel.Id}' prefix '{prefix}' would shadow command '{shadowed}'."));
+				}
 			}
 		}
 	}

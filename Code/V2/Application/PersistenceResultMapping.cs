@@ -5,7 +5,7 @@ using Hexagon.V2.Persistence;
 
 namespace Hexagon.V2.Application;
 
-internal static class PersistenceResultMapping
+public static class PersistenceResultMapping
 {
 	public static OperationResult<T> Failure<T>( PersistenceError error ) =>
 		OperationResult<T>.Failure( MapCode( error.Code ), error.Message );
@@ -13,7 +13,7 @@ internal static class PersistenceResultMapping
 	public static OperationResult Failure( PersistenceError error ) =>
 		OperationResult.Failure( MapCode( error.Code ), error.Message );
 
-	internal static ErrorCode MapCode( PersistenceErrorCode code ) => code switch
+	public static ErrorCode MapCode( PersistenceErrorCode code ) => code switch
 	{
 		PersistenceErrorCode.NotFound => ErrorCode.NotFound,
 		PersistenceErrorCode.AlreadyExists => ErrorCode.Conflict,

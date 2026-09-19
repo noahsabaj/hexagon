@@ -85,9 +85,9 @@ public sealed class LayerBoundaryTests
 		// The player is one connection-owned object running a native, owner-simulated
 		// PlayerController. This is the engine idiom (ownership == authority) that keeps the
 		// body from being pinned to the world origin by host physics.
-		StringAssert.Contains( playerBody, "controller.UseInputControls = true" );
-		StringAssert.Contains( playerBody, "controller.UseLookControls = true" );
-		StringAssert.Contains( playerBody, "controller.EnablePressing = true" );
+		SourcePin.Contains( playerBody, "controller.UseInputControls = true" );
+		SourcePin.Contains( playerBody, "controller.UseLookControls = true" );
+		SourcePin.Contains( playerBody, "controller.EnablePressing = true" );
 		// No separate unowned body, and no revived custom client predictor.
 		Assert.IsFalse( playerBody.Contains( "Owner = null!", StringComparison.Ordinal ),
 			"The player body is the connection-owned object; no unowned host-simulated body may be spawned." );
@@ -95,7 +95,7 @@ public sealed class LayerBoundaryTests
 			"The custom client predictor is removed in favour of the native controller's prediction." );
 
 		var runtime = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.cs" ) );
-		StringAssert.Contains( runtime, "playerObject.NetworkSpawn( connection )" );
+		SourcePin.Contains( runtime, "playerObject.NetworkSpawn( connection )" );
 	}
 
 	[TestMethod]
@@ -109,29 +109,29 @@ public sealed class LayerBoundaryTests
 		// window whose travel exceeds the envelope escalates to a KICK rather than a snap-back, because
 		// per-tick correction fed itself and players experienced it as rubber-banding. Either way a
 		// client can never mint spatial authority: gameplay reads the host's accepted position.
-		StringAssert.Contains( playerBody, "Sandbox.Networking.IsHost && GameObject.Network.IsProxy && IsEmbodied" );
-		StringAssert.Contains( playerBody, "HostValidateMovement" );
-		StringAssert.Contains( playerBody, "HexMovementValidator.Observe" );
+		SourcePin.Contains( playerBody, "Sandbox.Networking.IsHost && GameObject.Network.IsProxy && IsEmbodied" );
+		SourcePin.Contains( playerBody, "HostValidateMovement" );
+		SourcePin.Contains( playerBody, "HexMovementValidator.Observe" );
 		// The correction pulse is the only authority write to position, and it is host-authored.
-		StringAssert.Contains( playerBody, "[Sync( SyncFlags.FromHost )] public Vector3 AuthoritativePosition" );
-		StringAssert.Contains( playerBody, "[Sync( SyncFlags.FromHost )] public int CorrectionTick" );
+		SourcePin.Contains( playerBody, "[Sync( SyncFlags.FromHost )] public Vector3 AuthoritativePosition" );
+		SourcePin.Contains( playerBody, "[Sync( SyncFlags.FromHost )] public int CorrectionTick" );
 		// The owner APPLIES corrections; it does not author them.
-		StringAssert.Contains( playerBody, "GameObject.WorldPosition = AuthoritativePosition" );
-		StringAssert.Contains( playerBody, "AuthoritativeBody" );
+		SourcePin.Contains( playerBody, "GameObject.WorldPosition = AuthoritativePosition" );
+		SourcePin.Contains( playerBody, "AuthoritativeBody" );
 		// Gameplay resolves spatial checks against the host-validated position (not the raw client
 		// transform), and a client that keeps reporting out-of-envelope positions is enforced
 		// against — kicked, not merely nudged.
-		StringAssert.Contains( playerBody, "public Vector3 AuthoritativeWorldPosition" );
-		StringAssert.Contains( playerBody, "connection?.Kick(" );
+		SourcePin.Contains( playerBody, "public Vector3 AuthoritativeWorldPosition" );
+		SourcePin.Contains( playerBody, "connection?.Kick(" );
 		// The deleted owner->host input pump must not return in any form.
 		Assert.IsFalse( playerBody.Contains( "SubmitInputFrame", StringComparison.Ordinal ),
 			"Movement is owner-simulated; there must be no owner->host input RPC." );
 		Assert.IsFalse( playerBody.Contains( "PlayableBody", StringComparison.Ordinal ) );
 
 		var runtime = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.cs" ) );
-		StringAssert.Contains( runtime, "connection.CanSpawnObjects = false" );
-		StringAssert.Contains( runtime, "connection.CanRefreshObjects = false" );
-		StringAssert.Contains( runtime, "connection.CanDestroyObjects = false" );
+		SourcePin.Contains( runtime, "connection.CanSpawnObjects = false" );
+		SourcePin.Contains( runtime, "connection.CanRefreshObjects = false" );
+		SourcePin.Contains( runtime, "connection.CanDestroyObjects = false" );
 	}
 
 	[TestMethod]
@@ -147,27 +147,27 @@ public sealed class LayerBoundaryTests
 			// no domain services, and no persistence lease; both flags must stay closed.
 			"\"DestroyLobbyWhenHostLeaves\": true",
 			"\"AutoSwitchToBestHost\": false"
-		} ) StringAssert.Contains( networking, permission );
-		StringAssert.Contains( networking, "\"UpdateRate\": 30" );
+		} ) SourcePin.Contains( networking, permission );
+		SourcePin.Contains( networking, "\"UpdateRate\": 30" );
 
 		var runtime = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.cs" ) );
-		StringAssert.Contains( runtime, "void Component.INetworkListener.OnBecameHost( Connection previousHost )" );
-		StringAssert.Contains( runtime, "HEXAGON_HOST_MIGRATION_REFUSED" );
-		StringAssert.Contains( runtime, "Networking.Disconnect()" );
+		SourcePin.Contains( runtime, "void Component.INetworkListener.OnBecameHost( Connection previousHost )" );
+		SourcePin.Contains( runtime, "HEXAGON_HOST_MIGRATION_REFUSED" );
+		SourcePin.Contains( runtime, "Networking.Disconnect()" );
 		var collision = File.ReadAllText( Path.Combine( ProductRoot(), "ProjectSettings", "Collision.config" ) );
-		StringAssert.Contains( collision, "\"b\": \"prediction\"" );
-		StringAssert.Contains( collision, "\"r\": \"Ignore\"" );
+		SourcePin.Contains( collision, "\"b\": \"prediction\"" );
+		SourcePin.Contains( collision, "\"r\": \"Ignore\"" );
 	}
 
 	[TestMethod]
 	public void HostServicePublicationAndRpcShutdownAreFailClosed()
 	{
 		var runtime = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexagonRuntimeSystem.cs" ) );
-		StringAssert.Contains( runtime, "OperationResult<HexHostServicesComponent> CreateHostServices()" );
-		StringAssert.Contains( runtime, "HostServicePublication.RequirePublished" );
-		StringAssert.Contains( runtime, "servicesObject.NetworkSpawn" );
-		StringAssert.Contains( runtime, "if ( servicesObject.IsValid() ) servicesObject.Destroy()" );
-		StringAssert.Contains( runtime, "if ( hostServices.Failed )" );
+		SourcePin.Contains( runtime, "OperationResult<HexHostServicesComponent> CreateHostServices()" );
+		SourcePin.Contains( runtime, "HostServicePublication.RequirePublished" );
+		SourcePin.Contains( runtime, "servicesObject.NetworkSpawn" );
+		SourcePin.Contains( runtime, "if ( servicesObject.IsValid() ) servicesObject.Destroy()" );
+		SourcePin.Contains( runtime, "if ( hostServices.Failed )" );
 
 		var shutdown = runtime.IndexOf( "private async Task<OperationResult> ShutdownHostAsync()", StringComparison.Ordinal );
 		var commandDrain = runtime.IndexOf( "_hostOperations.DrainAsync()", shutdown, StringComparison.Ordinal );
@@ -188,7 +188,7 @@ public sealed class LayerBoundaryTests
 		Assert.IsLessThan( quiescedEvidence, persistenceDispose, "Quiesced evidence must follow persistence disposal." );
 
 		var services = SourceWithoutComments( Path.Combine( V2Root(), "Runtime", "HexHostServicesComponent.cs" ) );
-		StringAssert.Contains( services, "runtime.TryStartHostOperation" );
+		SourcePin.Contains( services, "runtime.TryStartHostOperation" );
 		Assert.IsFalse( services.Contains( "_ = DispatchAsync", StringComparison.Ordinal ) );
 	}
 
@@ -279,7 +279,7 @@ public sealed class LayerBoundaryTests
 	}
 
 	[TestMethod]
-	public void LegacyNamespacesAreReportedWithoutGatingV2()
+	public void NoLegacyHexagonNamespaceSurvivesOutsideV2()
 	{
 		var codeRoot = Path.Combine(ProductRoot(), "Code");
 		var legacyFiles = Directory.EnumerateFiles(codeRoot, "*.cs", SearchOption.AllDirectories)
@@ -291,9 +291,9 @@ public sealed class LayerBoundaryTests
 			.OrderBy(file => file, StringComparer.Ordinal)
 			.ToArray();
 
-		TestContext.WriteLine($"Legacy Hexagon namespace files (non-gating): {legacyFiles.Length}");
-		foreach (var file in legacyFiles.Take(25))
-			TestContext.WriteLine(file);
+		// v2 is a clean break. This used to only print a count, so it could never fail.
+		Assert.IsEmpty(legacyFiles,
+			$"Legacy Hexagon sources outside Code/V2: {string.Join(", ", legacyFiles.Take(25))}");
 	}
 
 	[TestMethod]
@@ -303,15 +303,15 @@ public sealed class LayerBoundaryTests
 		// The scene-handoff gate awaits the previous owner (bounded) and then defers ownership and
 		// integrity to the exclusive lease and WAL recovery — it must never fail-closed on the
 		// predecessor's drain outcome again (that was the self-poisoning wedge).
-		StringAssert.Contains( runtime, "AwaitPredecessorSettlementAsync" );
-		StringAssert.Contains( runtime, "SceneHandoffPolicy.EvaluatePredecessor" );
+		SourcePin.Contains( runtime, "AwaitPredecessorSettlementAsync" );
+		SourcePin.Contains( runtime, "SceneHandoffPolicy.EvaluatePredecessor" );
 		Assert.IsFalse( runtime.Contains( "did not drain cleanly", StringComparison.Ordinal ),
 			"The barrier must not fail-closed on a predecessor drain; the lease and recovery are the authorities." );
 		// Corruption recovery is operator-armed and one-shot, never automatic.
 		// The arming is consumed per host-start (read into a local, then reset) so it cannot linger
 		// and silently quarantine a later store.
-		StringAssert.Contains( runtime, "var quarantineCorruptStore = HexagonRuntimeOverrides.QuarantineCorruptStore" );
-		StringAssert.Contains( runtime, "HexagonRuntimeOverrides.QuarantineCorruptStore = false" );
+		SourcePin.Contains( runtime, "var quarantineCorruptStore = HexagonRuntimeOverrides.QuarantineCorruptStore" );
+		SourcePin.Contains( runtime, "HexagonRuntimeOverrides.QuarantineCorruptStore = false" );
 	}
 
 	[TestMethod]

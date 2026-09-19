@@ -1,5 +1,6 @@
 #nullable enable
 
+using Hexagon.V2.Composition;
 using Hexagon.V2.Domain;
 using Hexagon.V2.Infrastructure;
 using Sandbox;
@@ -37,9 +38,8 @@ public sealed class HexagonBootstrapComponent : Component
 	{
 		base.OnValidate();
 		SchemaId = string.IsNullOrWhiteSpace( SchemaId ) ? "hl2rp" : StableIdentifier.Require( SchemaId, nameof(SchemaId) );
-		PersistenceRootOverride = string.IsNullOrWhiteSpace( PersistenceRootOverride )
-			? string.Empty
-			: PrefixedPersistenceStorage.Normalize( PersistenceRootOverride );
+		PersistenceRootOverride = HostBootstrapResolution.NormalizeRoot(
+			PersistenceRootOverride, PrefixedPersistenceStorage.Normalize );
 		VerificationProbe = (VerificationProbe ?? string.Empty).Trim();
 		if ( VerificationProbe.Length > 128 ) VerificationProbe = VerificationProbe[..128];
 	}

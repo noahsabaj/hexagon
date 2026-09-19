@@ -28,12 +28,6 @@ internal readonly record struct SceneHandoffVerdict(
 	SceneHandoffPredecessorState State,
 	string? Diagnostic )
 {
-	/// <summary>
-	/// The successor always continues to lease acquisition and WAL recovery; the predecessor's
-	/// drain outcome never blocks it.
-	/// </summary>
-	public bool ProceedsToRecovery => true;
-
 	/// <summary>A non-clean predecessor is worth a breadcrumb, never a refusal.</summary>
 	public bool ShouldWarn => State != SceneHandoffPredecessorState.Clean;
 }

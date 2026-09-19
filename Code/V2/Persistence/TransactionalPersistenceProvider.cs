@@ -200,17 +200,12 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		_checkpointSequence = snapshot.Sequence;
 		ApplySuccessfulCheckpoint( snapshot );
 		var checkpointOutcome = persistence.Value!;
-		_health = new PersistenceHealth(
+		_health = RefreshHealth(
 			checkpointOutcome.CleanupSucceeded
 				? PersistenceHealthStatus.Healthy
 				: PersistenceHealthStatus.Degraded,
-			_sequence,
-			_checkpointSequence,
-			!checkpointOutcome.CleanupSucceeded,
-			_health.DiscardedUnacknowledgedFrames,
-			_health.RecoveredFromCheckpointFallback,
-			checkpointOutcome.Detail,
-			DateTimeOffset.UtcNow );
+			checkpointRetryPending: !checkpointOutcome.CleanupSucceeded,
+			checkpointOutcome.Detail );
 		return PersistenceResult<long>.Success( snapshot.Sequence );
 	}
 
@@ -240,17 +235,12 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 					LeaseReleased = retriedLeaseReleased,
 					Detail = retriedDetail
 				};
-				_health = new PersistenceHealth(
+				_health = RefreshHealth(
 					State == PersistenceProviderState.Faulted
 						? PersistenceHealthStatus.Fatal
 						: PersistenceHealthStatus.Disposed,
-					_sequence,
-					_checkpointSequence,
-					!pending.Checkpoint.Succeeded,
-					_health.DiscardedUnacknowledgedFrames,
-					_health.RecoveredFromCheckpointFallback,
-					retriedDetail,
-					DateTimeOffset.UtcNow );
+					checkpointRetryPending: !pending.Checkpoint.Succeeded,
+					retriedDetail );
 				return _shutdownResult;
 			}
 			_accepting = false;
@@ -296,15 +286,10 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 						ApplySuccessfulCheckpoint( snapshot );
 						if ( !checkpointCleanup.CleanupSucceeded )
 						{
-							_health = new PersistenceHealth(
+							_health = RefreshHealth(
 								PersistenceHealthStatus.Degraded,
-								_sequence,
-								_checkpointSequence,
-								true,
-								_health.DiscardedUnacknowledgedFrames,
-								_health.RecoveredFromCheckpointFallback,
-								checkpointCleanup.Detail,
-								DateTimeOffset.UtcNow );
+								checkpointRetryPending: true,
+								checkpointCleanup.Detail );
 						}
 						checkpoint = PersistenceResult<long>.Success( snapshot.Sequence );
 					}
@@ -347,17 +332,12 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 				checkpoint,
 				leaseReleased,
 				detail );
-			_health = new PersistenceHealth(
+			_health = RefreshHealth(
 				priorState == PersistenceProviderState.Faulted
 					? PersistenceHealthStatus.Fatal
 					: PersistenceHealthStatus.Disposed,
-				_sequence,
-				_checkpointSequence,
-				!checkpoint.Succeeded,
-				_health.DiscardedUnacknowledgedFrames,
-				_health.RecoveredFromCheckpointFallback,
-				detail,
-				DateTimeOffset.UtcNow );
+				checkpointRetryPending: !checkpoint.Succeeded,
+				detail );
 			SetProviderState( priorState == PersistenceProviderState.Faulted
 				? PersistenceProviderState.Faulted
 				: PersistenceProviderState.Disposed );
@@ -807,8 +787,9 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		}
 
 		// Discarded unacknowledged frames are normal crash recovery (the transactions were never
-		// acknowledged), so only a checkpoint-fallback recovery degrades the store.
-		var recoveredDegraded = recovered.RecoveredFromCheckpointFallback;
+		// acknowledged), so only a checkpoint-fallback recovery or a prune the next checkpoint
+		// must retry degrades the store.
+		var recoveredDegraded = recovered.RecoveredFromCheckpointFallback || recovered.CheckpointCleanupPending;
 		_health = new PersistenceHealth(
 			recoveredDegraded ? PersistenceHealthStatus.Degraded : PersistenceHealthStatus.Healthy,
 			_sequence,
@@ -852,25 +833,33 @@ public abstract class TransactionalPersistenceProvider : IPersistenceProvider
 		return exception;
 	}
 
-	private PersistenceHealth CreateCheckpointFailureHealth( Exception exception, bool final ) => new(
-		PersistenceHealthStatus.Degraded,
-		_sequence,
-		_checkpointSequence,
-		true,
-		_health.DiscardedUnacknowledgedFrames,
-		_health.RecoveredFromCheckpointFallback,
-		$"{(final ? "Final checkpoint failed" : "Checkpoint failed and will be retried")}: {exception.Message}",
-		DateTimeOffset.UtcNow );
+	/// <summary>
+	/// Re-stamps health with the current sequence numbers and a new status, retry flag and detail,
+	/// keeping every recovery-time fact (discarded frames, checkpoint fallback, quarantine) that a
+	/// positional rebuild would silently reset.
+	/// </summary>
+	private PersistenceHealth RefreshHealth(
+		PersistenceHealthStatus status,
+		bool checkpointRetryPending,
+		string? detail ) => _health with
+	{
+		Status = status,
+		Sequence = _sequence,
+		CheckpointSequence = _checkpointSequence,
+		CheckpointRetryPending = checkpointRetryPending,
+		Detail = detail,
+		ObservedAtUtc = DateTimeOffset.UtcNow
+	};
 
-	private PersistenceHealth CreateFatalCommitHealth( Exception exception ) => new(
+	private PersistenceHealth CreateCheckpointFailureHealth( Exception exception, bool final ) => RefreshHealth(
+		PersistenceHealthStatus.Degraded,
+		checkpointRetryPending: true,
+		$"{(final ? "Final checkpoint failed" : "Checkpoint failed and will be retried")}: {exception.Message}" );
+
+	private PersistenceHealth CreateFatalCommitHealth( Exception exception ) => RefreshHealth(
 		PersistenceHealthStatus.Fatal,
-		_sequence,
-		_checkpointSequence,
 		_health.CheckpointRetryPending,
-		_health.DiscardedUnacknowledgedFrames,
-		_health.RecoveredFromCheckpointFallback,
-		$"Commit durability or publication failed; restart is required before more writes: {exception.Message}",
-		DateTimeOffset.UtcNow );
+		$"Commit durability or publication failed; restart is required before more writes: {exception.Message}" );
 
 	private PersistenceHealth CreateCommitMetadataRepairFailureHealth( Exception exception ) => _health with
 	{

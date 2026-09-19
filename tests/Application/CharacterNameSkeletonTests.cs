@@ -57,6 +57,22 @@ public sealed class CharacterNameSkeletonTests
 	}
 
 	[TestMethod]
+	public void LettersThatUnicodeFoldsOntoDigitsContinueOntoTheLetterTheDigitImitates()
+	{
+		// UTS #39 maps these letters onto digits, and the supplementary fold maps those digits
+		// onto letters. Both steps must apply, or the table's own output escapes the fold.
+		var sara = CharacterNameSkeleton.Of( "Sara" );
+		Assert.AreEqual( sara, CharacterNameSkeleton.Of( "5ara" ) );
+		Assert.AreEqual( sara, CharacterNameSkeleton.Of( "Ƽara" ) );   // Ƽ, tone five -> 5 -> s
+		var bob = CharacterNameSkeleton.Of( "Bob" );
+		Assert.AreEqual( bob, CharacterNameSkeleton.Of( "Ȣob" ) );     // Ȣ, ou -> 8 -> b
+		var zed = CharacterNameSkeleton.Of( "Zed" );
+		Assert.AreEqual( zed, CharacterNameSkeleton.Of( "Ƨed" ) );     // Ƨ, tone two -> 2 -> z
+		var ezra = CharacterNameSkeleton.Of( "Ezra" );
+		Assert.AreEqual( ezra, CharacterNameSkeleton.Of( "Ʒzra" ) );   // Ʒ, ezh -> 3 -> e
+	}
+
+	[TestMethod]
 	public void DistinctNamesKeepDistinctSkeletons()
 	{
 		Assert.AreNotEqual( CharacterNameSkeleton.Of( "Alice" ), CharacterNameSkeleton.Of( "Alicia" ) );

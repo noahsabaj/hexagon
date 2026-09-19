@@ -51,7 +51,7 @@ public sealed record ClientStateSnapshot
 	public IReadOnlyList<InventorySnapshot> Inventories { get; }
 	public ActionProgressSnapshot? ActiveAction { get; }
 
-	public static void ValidatePayload(
+	private static void ValidatePayload(
 		PlayerPublicSnapshot player,
 		PlayerPrivateSnapshot? privatePlayer,
 		PlayerRosterSnapshot roster,

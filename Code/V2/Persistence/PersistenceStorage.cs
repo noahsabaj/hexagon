@@ -291,4 +291,5 @@ internal sealed record RecoveryState(
 	bool RecoveredFromCheckpointFallback,
 	string? Detail,
 	bool RecoveredByQuarantine = false,
-	string? QuarantinePath = null );
+	string? QuarantinePath = null,
+	bool CheckpointCleanupPending = false );

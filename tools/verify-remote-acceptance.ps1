@@ -24,6 +24,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'verify-common.ps1')
+
 . (Join-Path $PSScriptRoot 'release-inputs.ps1')
 
 $requiredObservations = @(
@@ -40,17 +42,6 @@ $requiredObservations = @(
     'world_item_remote_flow',
     'restart_restores_all_state'
 )
-
-function Get-RepositoryHead {
-    param([Parameter(Mandatory)][string] $Root)
-
-    $global:LASTEXITCODE = 0
-    $head = (& git -C $Root rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or $head -cnotmatch '^[a-f0-9]{40}$') {
-        throw "Could not resolve a lowercase full Git HEAD for '$Root'."
-    }
-    return $head
-}
 
 function Get-SourceFingerprint {
     param([Parameter(Mandatory)][object[]] $Repositories)

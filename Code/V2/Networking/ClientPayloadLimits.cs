@@ -7,7 +7,11 @@ using Hexagon.V2.Kernel;
 
 namespace Hexagon.V2.Networking;
 
-/// <summary>Framework-wide, allocation-bounding validation for all client commands.</summary>
+/// <summary>
+/// Framework-wide shape and size validation for client commands. It bounds what the host goes
+/// on to process, not what has been allocated: the engine has already deserialized the RPC
+/// arguments, and the command records defensively copy their maps, before this runs.
+/// </summary>
 public static class ClientPayloadLimits
 {
 	public const int MaximumMapEntries = 32;
@@ -105,8 +109,14 @@ public static class ClientPayloadLimits
 			: Failure( path, $"Command exceeds {MaximumUtf8Bytes} UTF-8 bytes." );
 	}
 
-	private static bool HasValidUnicode( string value )
+	/// <summary>
+	/// True when every UTF-16 surrogate in <paramref name="value"/> belongs to a well-formed
+	/// pair. The one implementation shared by every wire boundary that refuses unpaired
+	/// surrogates before a string is re-encoded or logged.
+	/// </summary>
+	public static bool HasValidUnicode( string value )
 	{
+		ArgumentNullException.ThrowIfNull( value );
 		for ( var i = 0; i < value.Length; i++ )
 		{
 			var current = value[i];

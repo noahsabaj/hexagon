@@ -194,17 +194,30 @@ public sealed class InteractionAuthorityService
 			_lastValidation[session.Id] = _clock.UtcNow;
 		}
 
-		foreach ( var grant in offer.InventoryGrants )
+		// Grants are issued after the session exists because they are keyed by its id. If one
+		// refuses (a closed connection epoch, an empty capability set), the session is revoked
+		// rather than left open with whatever grants preceded the failure; revocation also
+		// strips those partial grants through the SessionRevoked subscription above.
+		try
 		{
-			_inventoryAccess.Grant( new InventoryGrant
+			foreach ( var grant in offer.InventoryGrants )
 			{
-				ConnectionId = connectionId,
-				CharacterId = characterId,
-				InventoryId = grant.InventoryId,
-				Capabilities = grant.Capabilities,
-				Kind = grant.Kind,
-				SessionId = session!.Id
-			} );
+				_inventoryAccess.Grant( new InventoryGrant
+				{
+					ConnectionId = connectionId,
+					CharacterId = characterId,
+					InventoryId = grant.InventoryId,
+					Capabilities = grant.Capabilities,
+					Kind = grant.Kind,
+					SessionId = session!.Id
+				} );
+			}
+		}
+		catch ( Exception ) when ( session is not null )
+		{
+			_sessions.Revoke( session.Id, "grant_failed" );
+			return OperationResult<InteractionOpened>.Failure(
+				ErrorCode.InternalError, "Interaction could not issue its inventory grants." );
 		}
 
 		return OperationResult<InteractionOpened>.Success( new InteractionOpened( offer, session ) );
@@ -253,6 +266,15 @@ public sealed class InteractionAuthorityService
 		{
 			_sessions.Revoke( sessionId, "authorization_changed" );
 			return OperationResult<InteractionSession>.Failure( authorized.Error!.Code, authorized.Error.Message );
+		}
+		// A session lives only while its interactable would still offer that kind. An
+		// interactable may authorize a weaker, session-less interaction for the same actor;
+		// that must not keep an earlier session and its grants alive.
+		if ( authorized.Value.SessionKind != session.Kind )
+		{
+			_sessions.Revoke( sessionId, "session_no_longer_offered" );
+			return OperationResult<InteractionSession>.Failure(
+				ErrorCode.PolicyDenied, "The target no longer offers this interaction session." );
 		}
 		_lastValidation[sessionId] = _clock.UtcNow;
 		return OperationResult<InteractionSession>.Success( session );
@@ -371,7 +393,8 @@ public sealed class InteractionAuthorityService
 					_world.TryBuildContext(
 						session.ConnectionId, session.CharacterId, session.Target, out var context ) &&
 					ValidateContext( context, interactable.Policy ).Succeeded &&
-					interactable.Authorize( context ) is { Succeeded: true };
+					interactable.Authorize( context ) is { Succeeded: true } offered &&
+					offered.Value.SessionKind == session.Kind;
 			}
 			catch ( Exception )
 			{

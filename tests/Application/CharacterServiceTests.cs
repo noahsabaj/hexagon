@@ -108,6 +108,56 @@ public sealed class CharacterServiceTests
 	}
 
 	[TestMethod]
+	public async Task ThrowingGameHooksFailClosedWithDiagnosticsAndWriteNothing()
+	{
+		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();
+		var account = new AccountId( 7656150 );
+		var request = ApplicationServiceTestEnvironment.Request();
+
+		var modelDiagnostics = new List<Exception>();
+		var models = environment.CreateCharacterService(
+			models: new ThrowingModels(), diagnostics: modelDiagnostics.Add );
+		var modelResult = await models.CreateAsync( account, request );
+		Assert.AreEqual( ErrorCode.InternalError, modelResult.Error!.Code );
+		Assert.HasCount( 1, modelDiagnostics );
+
+		var stateDiagnostics = new List<Exception>();
+		var states = environment.CreateCharacterService(
+			stateFactory: new ThrowingStateFactory(), diagnostics: stateDiagnostics.Add );
+		var stateResult = await states.CreateAsync( account, request );
+		Assert.AreEqual( ErrorCode.InternalError, stateResult.Error!.Code );
+		Assert.HasCount( 1, stateDiagnostics );
+
+		var initializerDiagnostics = new List<Exception>();
+		var initializers = environment.CreateCharacterService(
+			new[]
+			{
+				new TestCharacterInitializer( "broken", ( _, _ ) => throw new InvalidOperationException( "initializer threw" ) )
+			},
+			diagnostics: initializerDiagnostics.Add );
+		var initializerResult = await initializers.CreateAsync( account, request );
+		Assert.AreEqual( ErrorCode.InternalError, initializerResult.Error!.Code );
+		Assert.Contains( "broken", initializerResult.Error.Message );
+		Assert.HasCount( 1, initializerDiagnostics );
+
+		Assert.IsEmpty( environment.Repositories.Characters.All() );
+		Assert.IsEmpty( environment.Repositories.CharacterSlots.All() );
+		Assert.IsEmpty( environment.Repositories.UniqueReservations.All() );
+	}
+
+	private sealed class ThrowingModels : ICharacterModelCatalog
+	{
+		public bool IsAllowed( DefinitionId model, FactionId faction, ClassId? characterClass ) =>
+			throw new InvalidOperationException( "model catalogue threw" );
+	}
+
+	private sealed class ThrowingStateFactory : ICharacterStateFactory
+	{
+		public OperationResult<CharacterStatePlan> Create( CharacterCreationContext context ) =>
+			throw new InvalidOperationException( "state factory threw" );
+	}
+
+	[TestMethod]
 	public async Task ASecondCharacterWhoseNameOnlyReadsLikeAnExistingOneIsRefused()
 	{
 		await using var environment = await ApplicationServiceTestEnvironment.CreateAsync();

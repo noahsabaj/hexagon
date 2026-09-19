@@ -18,7 +18,7 @@ namespace Hexagon.V2.Runtime;
 /// layers — the previous unowned, host-simulated body was pinned to the world origin
 /// because on the host its physics body seeded at the origin and drove the transform.
 /// </summary>
-public sealed class HexPlayerBody : Component, IRuntimePlayer
+public sealed class HexPlayerBody : Component
 {
 	private int _appliedCorrectionTick = -1;
 

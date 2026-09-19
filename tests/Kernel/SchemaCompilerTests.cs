@@ -141,6 +141,81 @@ public sealed class SchemaCompilerTests
 			issue.Code == ErrorCode.SchemaInvalid && issue.Path == "commands.invalid.cost" ) );
 	}
 
+	[TestMethod]
+	public void ChatChannelRangeMustBeFiniteAndPositiveWhenGiven()
+	{
+		var report = SchemaCompiler.Validate( new DelegateSchema( "test_schema", builder =>
+		{
+			builder.RegisterChatChannel( new ChatChannelDefinition( "nan", Range: float.NaN ) );
+			builder.RegisterChatChannel( new ChatChannelDefinition( "infinite", Range: float.PositiveInfinity ) );
+			builder.RegisterChatChannel( new ChatChannelDefinition( "zero", Range: 0f ) );
+			builder.RegisterChatChannel( new ChatChannelDefinition( "negative", Range: -1f ) );
+			builder.RegisterChatChannel( new ChatChannelDefinition( "fine", Range: 300f ) );
+			builder.RegisterChatChannel( new ChatChannelDefinition( "global" ) );
+		} ) );
+
+		CollectionAssert.AreEquivalent(
+			new[]
+			{
+				"chat_channels.infinite.range", "chat_channels.nan.range",
+				"chat_channels.negative.range", "chat_channels.zero.range"
+			},
+			report.Issues.Select( issue => issue.Path ).ToArray() );
+		Assert.IsTrue( report.Issues.All( issue => issue.Code == ErrorCode.SchemaInvalid ) );
+	}
+
+	[TestMethod]
+	public void ChatChannelPrefixesMustBeUniqueAcrossChannelsAndMustNotShadowCommands()
+	{
+		var report = SchemaCompiler.Validate( new DelegateSchema( "test_schema", builder =>
+		{
+			builder.RegisterCommand( new CommandDefinition( "roll" ) );
+			builder.RegisterChatChannel( new ChatChannelDefinition( "ic", Prefixes: new[] { "ic", "say" } ) );
+			// Same prefix as "ic" in another case: the composer matches ignoring case.
+			builder.RegisterChatChannel( new ChatChannelDefinition( "looc", Prefixes: new[] { "looc", "SAY" } ) );
+			// Would shadow the "roll" command for every player.
+			builder.RegisterChatChannel( new ChatChannelDefinition( "dice", Prefixes: new[] { "Roll" } ) );
+			builder.RegisterChatChannel( new ChatChannelDefinition( "broken", Prefixes: new[] { "", "two words" } ) );
+			builder.RegisterChatChannel( new ChatChannelDefinition( "ooc", Prefixes: new[] { "ooc" } ) );
+		} ) );
+
+		Assert.IsFalse( report.IsValid );
+		Assert.IsTrue( report.Issues.Any( issue =>
+			issue.Code == ErrorCode.DuplicateRegistration && issue.Path == "chat_channels.looc.prefixes" ) );
+		Assert.IsTrue( report.Issues.Any( issue =>
+			issue.Code == ErrorCode.SchemaInvalid && issue.Path == "chat_channels.dice.prefixes" &&
+			issue.Message.Contains( "roll" ) ) );
+		Assert.AreEqual( 2, report.Issues.Count( issue => issue.Path == "chat_channels.broken.prefixes" ) );
+		Assert.IsFalse( report.Issues.Any( issue => issue.Path.StartsWith( "chat_channels.ic." ) ) );
+		Assert.IsFalse( report.Issues.Any( issue => issue.Path.StartsWith( "chat_channels.ooc." ) ) );
+	}
+
+	[TestMethod]
+	public void DefinitionListsAreCopiedSoCallerMutationCannotReachTheRegistry()
+	{
+		var actions = new List<string> { "use" };
+		var prefixes = new List<string> { "ic" };
+		var compiled = SchemaCompiler.Compile( new DelegateSchema( "test_schema", builder =>
+		{
+			builder.RegisterAction( new ActionDefinition( "use" ) );
+			builder.RegisterItem( new ItemDefinition( "tool", actions ) );
+			builder.RegisterChatChannel( new ChatChannelDefinition( "ic", Prefixes: prefixes ) );
+		} ) );
+		Assert.IsTrue( compiled.Succeeded, compiled.Error?.Message );
+
+		actions.Add( "missing_action" );
+		prefixes.Clear();
+
+		CollectionAssert.AreEqual( new[] { "use" }, compiled.Value.Items.Require( "tool" ).Value.ActionIds.ToArray() );
+		CollectionAssert.AreEqual( new[] { "ic" }, compiled.Value.ChatChannels.Require( "ic" ).Value.Prefixes!.ToArray() );
+
+		// The same holds for a list assigned through "with".
+		var replacement = new List<string> { "use" };
+		var rewritten = new ItemDefinition( "tool", Array.Empty<string>() ) with { ActionIds = replacement };
+		replacement.Clear();
+		CollectionAssert.AreEqual( new[] { "use" }, rewritten.ActionIds.ToArray() );
+	}
+
 	private sealed record Payload(string Value);
 	private abstract record AbstractPayload;
 

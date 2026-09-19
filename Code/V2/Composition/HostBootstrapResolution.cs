@@ -20,6 +20,17 @@ public static class HostBootstrapResolution
 {
 	public const int MaximumProbeLength = 128;
 
+	/// <summary>
+	/// The one rule for a persistence root override: blank means "no override" and yields an
+	/// empty string; anything else must survive <paramref name="normalizeRoot"/>, which throws
+	/// for a root that is not a normalized relative prefix.
+	/// </summary>
+	public static string NormalizeRoot( string? root, Func<string, string> normalizeRoot )
+	{
+		ArgumentNullException.ThrowIfNull( normalizeRoot );
+		return string.IsNullOrWhiteSpace( root ) ? string.Empty : normalizeRoot( root );
+	}
+
 	public static OperationResult<HostBootstrapOptions> Resolve(
 		string? overrideRoot,
 		string? sceneRoot,
@@ -31,9 +42,7 @@ public static class HostBootstrapResolution
 		try
 		{
 			var requestedRoot = string.IsNullOrWhiteSpace( overrideRoot ) ? sceneRoot : overrideRoot;
-			var root = string.IsNullOrWhiteSpace( requestedRoot )
-				? string.Empty
-				: normalizeRoot( requestedRoot );
+			var root = NormalizeRoot( requestedRoot, normalizeRoot );
 			var requestedProbe = string.IsNullOrWhiteSpace( overrideProbe ) ? sceneProbe : overrideProbe;
 			var probe = (requestedProbe ?? string.Empty).Trim();
 			if ( probe.Length > MaximumProbeLength ) probe = probe[..MaximumProbeLength];

@@ -7,15 +7,11 @@ using Hexagon.V2.Networking;
 namespace Hexagon.V2.Runtime;
 
 /// <summary>
-/// Engine seam for the player body a session owns. The session only stores and hands the
-/// body back to the composition root, so this marker keeps the session compilable and
-/// testable without binding Sandbox types.
+/// Host-side state for one connection: its player body, session boundary, admission
+/// controllers, and the application-connection latch. The body type is unconstrained so the
+/// session compiles and tests without binding Sandbox types.
 /// </summary>
-internal interface IRuntimePlayer
-{
-}
-
-internal sealed class RuntimePlayerSession<TPlayer> : IDisposable where TPlayer : class, IRuntimePlayer
+internal sealed class RuntimePlayerSession<TPlayer> : IDisposable where TPlayer : class
 {
 	private readonly object _sync = new();
 	private readonly CommandAdmissionController _admission = new( Stopwatch.Frequency );

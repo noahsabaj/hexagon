@@ -731,6 +731,167 @@ public sealed class ImmutableWalPersistenceProviderTests
 	}
 
 	[TestMethod]
+	public async Task PersistentlyUndeletableWalFileDegradesWithoutCheckpointingEveryCommit()
+	{
+		// One commit's WAL footprint, measured rather than guessed, so the soft threshold below
+		// is a known multiple of it: six commits of growth are needed to re-arm pressure, which
+		// is more than the four-commit interval, so a healthy provider checkpoints on the
+		// interval and a backed-off one never checkpoints more often than that.
+		var commitWalBytes = await MeasureCommitWalBytesAsync();
+		const int interval = 4;
+		const int commits = 20;
+		var storage = new FaultInjectingStorage();
+		var log = new List<string>();
+		var options = new FileSystemPersistenceOptions( "test-schema" )
+		{
+			CheckpointEveryCommits = interval,
+			SoftCheckpointBytes = 6 * commitWalBytes,
+			MaximumRetainedWalBytes = 1_024 * 1_024,
+			MaximumFrameBytes = 64 * 1_024,
+			Log = log.Add
+		};
+		storage.FailDelete = path => path.EndsWith( "/wal/acks/00000000000000000001.ack", StringComparison.Ordinal );
+
+		await using ( var provider = new FileSystemPersistenceProvider(
+			storage, options, PersistenceTestSupport.CreateRegistry() ) )
+		{
+			await provider.InitializeAsync();
+			var repository = provider.Repository<TestDocument>( "documents" );
+			for ( var score = 1; score <= commits; score++ )
+			{
+				await using var unit = provider.BeginUnitOfWork();
+				unit.Put( repository, "one", new TestDocument( "one", score ) );
+				var committed = await unit.CommitAsync();
+				Assert.IsTrue( committed.Succeeded, $"Commit {score}: {committed.Error?.Message}" );
+			}
+
+			Assert.AreEqual( PersistenceHealthStatus.Degraded, provider.Health.Status );
+			Assert.IsTrue( provider.Health.CheckpointRetryPending );
+			Assert.IsTrue( log.Any( entry => entry.StartsWith( "HEXAGON_COMPACTION_DEGRADED", StringComparison.Ordinal ) ) );
+			// Nothing is ever pruned while the acknowledgement stays undeletable, so every
+			// checkpoint generation ever produced is still listed: the first (clean, nothing to
+			// prune yet), the first to fail, and then at most one per interval.
+			var completions = await storage.ListAsync( Completions );
+			Assert.IsLessThanOrEqualTo( 2 + commits / interval, completions.Count,
+				$"A failing prune must not turn storage pressure into a checkpoint on every commit; saw {completions.Count} for {commits} commits." );
+			Assert.IsTrue( await storage.ExistsAsync( Root + "/wal/acks/00000000000000000001.ack" ) );
+
+			var shutdown = await provider.ShutdownAsync();
+			Assert.IsFalse( shutdown.IsClean );
+			Assert.IsTrue( shutdown.IsRecoverable );
+		}
+
+		// The pending prune intent still cannot be applied on restart: recovery must degrade,
+		// not abort, and the store must be fully readable.
+		await using var recovered = new FileSystemPersistenceProvider(
+			storage, options, PersistenceTestSupport.CreateRegistry() );
+		await recovered.InitializeAsync();
+		Assert.AreEqual( PersistenceHealthStatus.Degraded, recovered.Health.Status );
+		Assert.IsTrue( recovered.Health.CheckpointRetryPending );
+		Assert.IsTrue( log.Any( entry => entry.StartsWith( "HEXAGON_PRUNE_INTENT_DEGRADED", StringComparison.Ordinal ) ) );
+		Assert.AreEqual( commits, recovered.Repository<TestDocument>( "documents" ).Find( "one" )!.Value.Score );
+		Assert.HasCount( 1, await storage.ListAsync( Root + "/checkpoints/prune-intents" ) );
+
+		// Once the file becomes deletable the next checkpoint finishes the prune and heals.
+		storage.FailDelete = null;
+		var healed = await recovered.CheckpointAsync();
+		Assert.IsTrue( healed.Succeeded, healed.Error?.Message );
+		Assert.AreEqual( PersistenceHealthStatus.Healthy, recovered.Health.Status );
+		Assert.IsEmpty( await storage.ListAsync( Root + "/checkpoints/prune-intents" ) );
+		Assert.HasCount( 2, await storage.ListAsync( Completions ) );
+	}
+
+	[TestMethod]
+	public async Task TornCheckpointBlobAtItsFinalNameIsSweptSoTheSameSequenceCanCheckpointAgain()
+	{
+		var storage = new FaultInjectingStorage();
+		var log = new List<string>();
+		await using ( var provider = CreateLogging( storage, log ) )
+		{
+			await provider.InitializeAsync();
+			var repository = provider.Repository<TestDocument>( "documents" );
+			await using ( var create = provider.BeginUnitOfWork() )
+			{
+				create.Create( repository, "one", new TestDocument( "one", 1 ) );
+				Assert.IsTrue( (await create.CommitAsync()).Succeeded );
+			}
+			Assert.IsTrue( (await provider.CheckpointAsync()).Succeeded );
+			await using ( var update = provider.BeginUnitOfWork() )
+			{
+				update.Put( repository, "one", new TestDocument( "one", 2 ) );
+				Assert.IsTrue( (await update.CommitAsync()).Succeeded );
+			}
+			// A crash inside the final checkpoint after its blob and manifest reached their
+			// content-addressed names but before the completion did.
+			storage.FailNextImmutableWrite = path => path.Contains( "/checkpoints/complete/", StringComparison.Ordinal );
+			var shutdown = await provider.ShutdownAsync();
+			Assert.IsFalse( shutdown.IsClean );
+			Assert.IsTrue( shutdown.IsRecoverable );
+		}
+		var validBlob = await ReadReferencedBlobPathAsync( storage, (await storage.ListAsync( Completions )).Single() );
+		var tornBlob = (await storage.ListAsync( Root + "/checkpoints/blobs" )).Single( path => path != validBlob );
+		await storage.OverwriteAsync( tornBlob, TornBytes );
+		Assert.HasCount( 2, await storage.ListAsync( Root + "/checkpoints/manifests" ) );
+
+		await using var recovered = CreateLogging( storage, log );
+		await recovered.InitializeAsync();
+		Assert.AreEqual( 2, recovered.Repository<TestDocument>( "documents" ).Find( "one" )!.Value.Score );
+		Assert.IsFalse( await storage.ExistsAsync( tornBlob ), "The torn blob must not survive recovery." );
+		Assert.HasCount( 1, await storage.ListAsync( Root + "/checkpoints/blobs" ) );
+		Assert.HasCount( 1, await storage.ListAsync( Root + "/checkpoints/manifests" ) );
+		Assert.IsTrue( log.Any( entry => entry.StartsWith( "HEXAGON_INVALID_CHECKPOINT_ARTIFACTS_DISCARDED", StringComparison.Ordinal ) ) );
+
+		// The retry at the same sequence produces byte-identical artifacts, so it lands on the
+		// very name the torn file occupied; it must succeed instead of colliding forever.
+		var retried = await recovered.CheckpointAsync();
+		Assert.IsTrue( retried.Succeeded, retried.Error?.Message );
+		Assert.AreEqual( 2L, recovered.Health.CheckpointSequence );
+		Assert.IsTrue( await storage.ExistsAsync( tornBlob ), "The retry must rewrite the same content-addressed blob." );
+		Assert.HasCount( 2, await storage.ListAsync( Completions ) );
+	}
+
+	[TestMethod]
+	public async Task TornCheckpointCompletionAtItsFinalNameIsSweptSoTheSameSequenceCanCheckpointAgain()
+	{
+		var storage = new FaultInjectingStorage();
+		string tornCompletion;
+		await using ( var provider = Create( storage ) )
+		{
+			await provider.InitializeAsync();
+			var repository = provider.Repository<TestDocument>( "documents" );
+			for ( var score = 1; score <= 2; score++ )
+			{
+				await using var unit = provider.BeginUnitOfWork();
+				unit.Put( repository, "one", new TestDocument( "one", score ) );
+				Assert.IsTrue( (await unit.CommitAsync()).Succeeded );
+				Assert.IsTrue( (await provider.CheckpointAsync()).Succeeded );
+			}
+			tornCompletion = (await storage.ListAsync( Completions ))
+				.OrderByDescending( path => path, StringComparer.Ordinal ).First();
+			await storage.OverwriteAsync( tornCompletion, TornBytes );
+			// The final checkpoint at sequence 2 collides with the torn completion: degraded,
+			// but the acknowledged WAL is intact, so recoverable.
+			var shutdown = await provider.ShutdownAsync();
+			Assert.IsFalse( shutdown.IsClean );
+			Assert.IsTrue( shutdown.IsRecoverable );
+		}
+
+		await using var recovered = Create( storage );
+		await recovered.InitializeAsync();
+		Assert.IsTrue( recovered.Health.RecoveredFromCheckpointFallback );
+		Assert.AreEqual( 2, recovered.Repository<TestDocument>( "documents" ).Find( "one" )!.Value.Score );
+		Assert.IsFalse( await storage.ExistsAsync( tornCompletion ) );
+		Assert.HasCount( 1, await storage.ListAsync( Completions ) );
+		Assert.HasCount( 1, await storage.ListAsync( Root + "/checkpoints/manifests" ) );
+		Assert.HasCount( 1, await storage.ListAsync( Root + "/checkpoints/blobs" ) );
+
+		var retried = await recovered.CheckpointAsync();
+		Assert.IsTrue( retried.Succeeded, retried.Error?.Message );
+		Assert.AreEqual( 2L, recovered.Health.CheckpointSequence );
+		Assert.IsTrue( await storage.ExistsAsync( tornCompletion ), "The retry must republish the same completion name." );
+	}
+
+	[TestMethod]
 	public async Task EveryPruneDeletionPhaseIsRestartSafe()
 	{
 		var failureSelectors = new Func<string, bool>[]
@@ -985,6 +1146,39 @@ public sealed class ImmutableWalPersistenceProviderTests
 		},
 		PersistenceTestSupport.CreateRegistry(),
 		invariants );
+
+	private static FileSystemPersistenceProvider CreateLogging(
+		IPersistenceStorage storage,
+		List<string> log ) => new(
+		storage,
+		new FileSystemPersistenceOptions( "test-schema" ) { CheckpointEveryCommits = 0, Log = log.Add },
+		PersistenceTestSupport.CreateRegistry() );
+
+	/// <summary>Bytes one commit of the shape the tests use adds to the retained WAL (frame + acknowledgement + commit head).</summary>
+	private static async Task<long> MeasureCommitWalBytesAsync()
+	{
+		var storage = new FaultInjectingStorage();
+		await using var provider = Create( storage );
+		await provider.InitializeAsync();
+		var repository = provider.Repository<TestDocument>( "documents" );
+		await using ( var unit = provider.BeginUnitOfWork() )
+		{
+			unit.Put( repository, "one", new TestDocument( "one", 1 ) );
+			Assert.IsTrue( (await unit.CommitAsync()).Succeeded );
+		}
+		long bytes = 0;
+		foreach ( var path in await storage.ListAsync( Root + "/wal" ) )
+			bytes += (await storage.ReadAsync( path ))!.Value.Length;
+		return bytes;
+	}
+
+	private static async Task<string> ReadReferencedBlobPathAsync( FaultInjectingStorage storage, string completionPath )
+	{
+		using var completion = JsonDocument.Parse( (await storage.ReadAsync( completionPath ))!.Value );
+		var manifestPath = completion.RootElement.GetProperty( "manifestPath" ).GetString()!;
+		using var manifest = JsonDocument.Parse( (await storage.ReadAsync( manifestPath ))!.Value );
+		return manifest.RootElement.GetProperty( "blobPath" ).GetString()!;
+	}
 
 	private static FileSystemPersistenceProvider CreateWithRegistry(
 		IPersistenceStorage storage,

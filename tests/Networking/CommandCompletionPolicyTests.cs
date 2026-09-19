@@ -8,38 +8,26 @@ namespace Hexagon.V2.Tests.Networking;
 public sealed class CommandCompletionPolicyTests
 {
 	[TestMethod]
-	public void SuccessfulExecutionRemainsAuthoritativeAfterLeaseBecomesStale()
+	public void OnlyAStaleLeaseWithoutASuccessfulExecutionIsRejected()
 	{
-		Assert.IsFalse( CommandCompletionPolicy.ShouldRejectAsStale(
-			leaseIsCurrentAtCompletion: false,
-			executionStarted: true,
-			executionSucceeded: true ) );
-	}
+		// (leaseCurrent, executionStarted, executionSucceeded) -> rejectAsStale. A current lease
+		// always preserves the outcome; a stale one is overridden unless execution already
+		// started and returned success, which stays authoritative.
+		var table = new (bool Current, bool Started, bool Succeeded, bool Rejected)[]
+		{
+			(true, false, false, false),
+			(true, true, false, false),
+			(true, true, true, false),
+			(false, false, false, true),
+			(false, false, true, true),
+			(false, true, false, true),
+			(false, true, true, false)
+		};
 
-	[TestMethod]
-	public void StaleLeaseBeforeExecutionIsRejectedEvenIfPresentedWithSuccess()
-	{
-		Assert.IsTrue( CommandCompletionPolicy.ShouldRejectAsStale(
-			leaseIsCurrentAtCompletion: false,
-			executionStarted: false,
-			executionSucceeded: true ) );
-	}
-
-	[TestMethod]
-	public void FailedExecutionUnderStaleLeaseRemainsRejected()
-	{
-		Assert.IsTrue( CommandCompletionPolicy.ShouldRejectAsStale(
-			leaseIsCurrentAtCompletion: false,
-			executionStarted: true,
-			executionSucceeded: false ) );
-	}
-
-	[TestMethod]
-	public void CurrentLeasePreservesOriginalOutcome()
-	{
-		Assert.IsFalse( CommandCompletionPolicy.ShouldRejectAsStale(
-			leaseIsCurrentAtCompletion: true,
-			executionStarted: false,
-			executionSucceeded: false ) );
+		foreach ( var row in table )
+			Assert.AreEqual(
+				row.Rejected,
+				CommandCompletionPolicy.ShouldRejectAsStale( row.Current, row.Started, row.Succeeded ),
+				$"current={row.Current} started={row.Started} succeeded={row.Succeeded}" );
 	}
 }

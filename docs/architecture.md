@@ -8,7 +8,7 @@ Host and client are separate scopes even in a listen-server process. The host ow
 
 ## Layers
 
-Domain and Application do not reference Sandbox. Networking contains closed DTOs and commands, never server aggregates. Runtime and Infrastructure adapt `Rpc.Caller`, `[Rpc.*]`, `[Sync]`, scene tracing, and resources at the edge. The consuming standalone game maps `FileSystem.Data` to its physical storage adapter. Architectural tests enforce these boundaries.
+Domain and Application do not reference Sandbox. Networking contains closed DTOs and commands, never server aggregates. Runtime and Infrastructure adapt `Rpc.Caller`, `[Rpc.*]`, `[Sync]`, scene tracing, and resources at the edge. The consuming game supplies a whitelist-safe `IPersistenceStorage` adapter over the engine's `FileSystem.Data`. Architectural tests enforce these boundaries.
 
 ## Mutation flow
 

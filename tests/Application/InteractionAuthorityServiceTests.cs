@@ -83,6 +83,31 @@ public sealed class InteractionAuthorityServiceTests
 	}
 
 	[TestMethod]
+	public void SessionIsRevokedOnceItsInteractableStopsOfferingThatSessionKind()
+	{
+		var fixture = new InteractionFixture();
+		var inventory = InventoryId.New();
+		fixture.SetGrant( inventory );
+		var session = fixture.BeginSession();
+		Assert.IsTrue( fixture.HasGrant( inventory ) );
+
+		// Still authorized, but only for a weaker session-less interaction.
+		fixture.Interactable.Offer = new InteractionOffer();
+		var continued = fixture.Service.Continue(
+			session.Id, fixture.Actor.ConnectionId, fixture.Actor.AccountId, fixture.Actor.CharacterId, fixture.Target );
+
+		Assert.AreEqual( ErrorCode.PolicyDenied, continued.Error!.Code );
+		Assert.IsFalse( fixture.HasGrant( inventory ) );
+
+		fixture.SetGrant( inventory );
+		fixture.BeginSession();
+		fixture.Interactable.Offer = new InteractionOffer();
+		fixture.Clock.Advance( InteractionAuthorityService.RevalidationInterval );
+		Assert.AreEqual( 1, fixture.Service.RevalidateActiveSessions() );
+		Assert.IsFalse( fixture.HasGrant( inventory ) );
+	}
+
+	[TestMethod]
 	public void NonFiniteGeometryCannotBeConstructedAndHugeFiniteDistanceShortCircuitsAuthorization()
 	{
 		Assert.ThrowsExactly<ArgumentOutOfRangeException>( () => new WorldPoint( float.NaN, 0, 0 ) );
@@ -397,6 +422,31 @@ public sealed class InteractionAuthorityServiceTests
 
 		// The next pass runs cleanly: the offender is gone and nothing escaped the loop.
 		Assert.AreEqual( 0, fixture.Service.RevalidateActiveSessions() );
+	}
+
+	[TestMethod]
+	public void FailedInventoryGrantRevokesTheSessionItWasIssuedFor()
+	{
+		var fixture = new InteractionFixture();
+		var inventoryId = InventoryId.New();
+		fixture.SetGrant( inventoryId );
+		// Closing the connection epoch makes Grant refuse; the session has already been opened
+		// by the time it does.
+		fixture.Access.RevokeConnection( fixture.Actor.ConnectionId );
+
+		var begin = fixture.Service.Begin(
+			fixture.Actor.ConnectionId, fixture.Actor.AccountId, fixture.Actor.CharacterId, fixture.Target );
+
+		Assert.AreEqual( ErrorCode.InternalError, begin.Error!.Code );
+		Assert.IsEmpty( fixture.Sessions.ActiveSessions, "A session whose grants failed must not stay open." );
+		Assert.IsFalse( fixture.HasGrant( inventoryId ) );
+
+		// The same actor can open the interaction once the connection is live again.
+		fixture.Reconnect();
+		var session = fixture.BeginSession();
+		Assert.IsTrue( fixture.HasGrant( inventoryId ) );
+		Assert.HasCount( 1, fixture.Sessions.ActiveSessions );
+		Assert.AreEqual( session.Id, fixture.Sessions.ActiveSessions[0].Id );
 	}
 
 	[TestMethod]

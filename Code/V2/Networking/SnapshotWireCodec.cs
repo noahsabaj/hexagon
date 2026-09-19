@@ -13,7 +13,10 @@ namespace Hexagon.V2.Networking;
 /// <summary>
 /// Versioned JSON-over-bytes transport for immutable presentation snapshots.
 /// Mutable wire objects are private and every decode reconstructs the public
-/// snapshot graph through its validating, defensive-copying constructors.
+/// snapshot graph through its validating, defensive-copying constructors. Encode
+/// serializes host-authored snapshots whose constructors already validated them,
+/// so it enforces only the collection and byte bounds; the fail-closed graph walk
+/// runs on the decode side, where the bytes are untrusted.
 /// </summary>
 public static class SnapshotWireCodec
 {
@@ -41,19 +44,19 @@ public static class SnapshotWireCodec
 	private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
 	public static OperationResult<byte[]> EncodeCharacterList( CharacterListSnapshot snapshot ) =>
-		Encode( CharacterListKind, snapshot, ToWire, FromWire );
+		Encode( CharacterListKind, snapshot, ToWire );
 
 	public static OperationResult<CharacterListSnapshot> DecodeCharacterList( byte[] payload ) =>
 		Decode<CharacterListWire, CharacterListSnapshot>( payload, CharacterListKind, FromWire );
 
 	public static OperationResult<byte[]> EncodeClientState( ClientStateSnapshot snapshot ) =>
-		Encode( ClientStateKind, snapshot, ToWire, FromWire );
+		Encode( ClientStateKind, snapshot, ToWire );
 
 	public static OperationResult<ClientStateSnapshot> DecodeClientState( byte[] payload ) =>
 		Decode<ClientStateWire, ClientStateSnapshot>( payload, ClientStateKind, FromWire );
 
 	public static OperationResult<byte[]> EncodeChat( ChatSnapshot snapshot ) =>
-		Encode( ChatKind, snapshot, ToWire, FromWire );
+		Encode( ChatKind, snapshot, ToWire );
 
 	public static OperationResult<ChatSnapshot> DecodeChat( byte[] payload ) =>
 		Decode<ChatWire, ChatSnapshot>( payload, ChatKind, FromWire );
@@ -61,8 +64,7 @@ public static class SnapshotWireCodec
 	private static OperationResult<byte[]> Encode<TSnapshot, TWire>(
 		string kind,
 		TSnapshot snapshot,
-		Func<TSnapshot, TWire> convert,
-		Func<TWire, TSnapshot> validate )
+		Func<TSnapshot, TWire> convert )
 		where TSnapshot : class
 		where TWire : class
 	{
@@ -71,20 +73,15 @@ public static class SnapshotWireCodec
 
 		try
 		{
-			var wire = convert( snapshot );
-			_ = validate( wire );
 			var envelope = new WireEnvelope<TWire>
 			{
 				Version = CurrentWireVersion,
 				Kind = kind,
-				Payload = wire
+				Payload = convert( snapshot )
 			};
 			var encoded = JsonSerializer.SerializeToUtf8Bytes( envelope, JsonOptions );
 			if ( encoded.Length > MaximumPayloadBytes )
 				return Failure<byte[]>( $"Snapshot wire payload exceeds {MaximumPayloadBytes} bytes." );
-			// Keep encode/decode acceptance symmetric. This also rejects invalid
-			// Unicode and graph limits before bytes can enter an RPC.
-			ValidateJsonGraph( encoded );
 			return OperationResult<byte[]>.Success( encoded );
 		}
 		catch ( Exception exception ) when ( IsCodecFailure( exception ) )
@@ -198,20 +195,8 @@ public static class SnapshotWireCodec
 	{
 		if ( value is null ) throw new JsonException( $"{name} cannot be null." );
 		if ( value.Length > MaximumStringCharacters ) throw new JsonException( $"{name} is too long." );
-		for ( var index = 0; index < value.Length; index++ )
-		{
-			var character = value[index];
-			if ( char.IsHighSurrogate( character ) )
-			{
-				if ( index + 1 >= value.Length || !char.IsLowSurrogate( value[index + 1] ) )
-					throw new JsonException( $"{name} contains invalid Unicode." );
-				index++;
-			}
-			else if ( char.IsLowSurrogate( character ) )
-			{
-				throw new JsonException( $"{name} contains invalid Unicode." );
-			}
-		}
+		if ( !ClientPayloadLimits.HasValidUnicode( value ) )
+			throw new JsonException( $"{name} contains invalid Unicode." );
 		return value;
 	}
 

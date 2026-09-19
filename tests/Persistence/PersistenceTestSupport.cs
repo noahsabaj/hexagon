@@ -58,6 +58,8 @@ internal sealed class FaultInjectingStorage : IPersistenceStorage
 	public Func<string, bool>? FailNextImmutableWrite { get; set; }
 	public Func<string, bool>? FailNextRead { get; set; }
 	public Func<string, bool>? FailNextDelete { get; set; }
+	/// <summary>Unlike <see cref="FailNextDelete"/>, this predicate is not consumed: every matching delete fails until it is cleared.</summary>
+	public Func<string, bool>? FailDelete { get; set; }
 	public bool FailNextLeaseDispose { get; set; }
 
 	public async ValueTask<IPersistenceLease> AcquireExclusiveLeaseAsync(
@@ -163,6 +165,8 @@ internal sealed class FaultInjectingStorage : IPersistenceStorage
 			FailNextDelete = null;
 			throw new InvalidOperationException( "Injected delete failure." );
 		}
+		if ( FailDelete?.Invoke( path ) == true )
+			throw new InvalidOperationException( "Injected persistent delete failure." );
 		return _inner.DeleteAsync( path, cancellationToken );
 	}
 
