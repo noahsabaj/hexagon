@@ -136,8 +136,13 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 		var limit = MathF.Max( controller.RunSpeed, controller.WalkSpeed ) * SpeedTolerance;
 		if ( _open is not null && !HostOpenIsValid() ) HostClose();
 		HostVitalsTick( GameManager.Instance! );
-		if ( _movement.Observe( WorldPosition, Time.Now, limit ) ) return;
 		var claimed = WorldPosition;
+		// The audit knows speeds, not walls. A claim well below where the character was believed to be
+		// must have a clear way down to it, or it passed through a floor.
+		var believedChest = HostPosition + Vector3.Up * 36f;
+		var throughFloor = claimed.z < HostPosition.z - 48f &&
+			Scene.Trace.Ray( believedChest, claimed + Vector3.Up * 36f ).WithoutTags( "player", "item", "corpse", "container", "vendor" ).Run().Hit;
+		if ( !throughFloor && _movement.Observe( claimed, Time.Now, limit ) ) return;
 		HostRecord( "movement.implausible", ok: false, data: ("claimed", $"{claimed.x:0},{claimed.y:0},{claimed.z:0}") );
 		HostTeleport( HostPosition );
 	}

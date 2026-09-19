@@ -160,7 +160,10 @@ public sealed class GameManager : Component, Component.INetworkListener
 
 	public Transform FindSpawn()
 	{
+		// A game's own spawn points are where it wants people. A map's are for when it placed none.
 		var points = Scene.GetAllComponents<SpawnPoint>().ToArray();
+		var placed = points.Where( point => point.GameObject.Components.GetInAncestors<MapInstance>() is null ).ToArray();
+		if ( placed.Length > 0 ) points = placed;
 		return points.Length == 0 ? global::Transform.Zero : Game.Random.FromArray( points )!.WorldTransform;
 	}
 

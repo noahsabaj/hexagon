@@ -33,13 +33,36 @@ public sealed class MovementTests
 	}
 
 	[TestMethod]
-	public void FallingIsFreeAndRisingIsNot()
+	public void SomethingDroppedFromARoofIsBelievedAndSomethingThatPassesThroughItIsNot()
+	{
+		var falling = new MovementAudit();
+		falling.Reset( new Vector3( 0, 0, 400 ), 0, 0 );
+		double now = 0;
+		float height = 400, speed = 0;
+		while ( height > 0 )
+		{
+			now += MovementAudit.Window;
+			speed += MovementAudit.Gravity * (float)MovementAudit.Window;
+			height = System.MathF.Max( 0, height - speed * (float)MovementAudit.Window );
+			Assert.IsTrue( falling.Observe( new Vector3( 0, 0, height ), now, Speed ), $"falling past {height}" );
+		}
+
+		var cheat = new MovementAudit();
+		cheat.Reset( new Vector3( 0, 0, 400 ), 0, 0 );
+		Assert.IsFalse( cheat.Observe( new Vector3( 60, 0, 60 ), MovementAudit.Window, Speed ), "340 units down in a quarter second is not a fall" );
+		Assert.AreEqual( 400f, cheat.Position.Z );
+		// After a refusal the host puts the character back, and a drop is then expected. Whether a floor
+		// is in the way of that drop is something only the engine can see: Player traces for it.
+	}
+
+	[TestMethod]
+	public void SteppingOffALedgeIsBelievedAndFlightIsNot()
 	{
 		var audit = new MovementAudit();
 		audit.Reset( new Vector3( 0, 0, 1000 ), 0, 0 );
 
-		Assert.IsTrue( audit.Observe( new Vector3( 0, 0, 0 ), MovementAudit.Window, Speed ), "gravity is not the player's doing" );
-		Assert.IsFalse( audit.Observe( new Vector3( 0, 0, 1000 ), MovementAudit.Window * 2, Speed ), "flight is" );
+		Assert.IsTrue( audit.Observe( new Vector3( 40, 0, 950 ), MovementAudit.Window, Speed ), "gravity is not the player's doing" );
+		Assert.IsFalse( audit.Observe( new Vector3( 40, 0, 2000 ), MovementAudit.Window * 2, Speed ), "flight is" );
 	}
 
 	[TestMethod]

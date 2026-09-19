@@ -160,6 +160,13 @@ try {
     Start-Sleep -Seconds 2
     Expect 'the host sent the claimant back' (Send 'state') 'pos=(?!2[2-5]\d\.?\d*,-1[2-6]\d)'
     Expect 'and put the claim on record' (Send 'journal') 'movement\.implausible!=[1-9]'
+    # The map has a roof right above the doors. Falling is believed; passing through a floor is not.
+    [void](Send 'console|hexagon_teleport "John Doe" 272 -240 400')
+    Start-Sleep -Seconds 3
+    [void](Send 'goto|240|-150|60')
+    [void](Send 'door|Door 1|use')
+    Expect 'dropping through the roof to the door below did not open it' (Send 'state') 'Door 1:open=False.*too far away'
+    Start-Sleep -Seconds 2
     [void](Send 'console|hexagon_teleport "John Doe" 240 -150 60')
     Start-Sleep -Seconds 1
     [void](Send 'door|Door 1|use')
@@ -326,7 +333,7 @@ try {
     Expect 'every item came from a named source' $journal 'item\.issue=13(\s|$)'
     Expect 'the drink went through a sink' $journal 'item\.destroy=2(\s|$)'
     Expect 'refused locks are on record' $journal 'verb\.door\.lock!=3(\s|$)'
-    Expect 'refused uses are on record' $journal 'verb\.door\.use!=4(\s|$)'
+    Expect 'refused uses are on record' $journal 'verb\.door\.use!=5(\s|$)'
     Expect 'allowed acts are on record' $journal 'verb\.door\.lock=4(\s|$)'
     Expect 'the money supply is what the journal says it is' $journal 'tokens\.destroy=1(\s|$)'
     Expect 'the operator is on record too' $journal 'operator\.whitelist=1(\s|$)'

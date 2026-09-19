@@ -11,18 +11,26 @@ namespace Hexagon.Logic;
 /// last position the host found believable, and every host rule that asks where a character is
 /// reads <see cref="Position"/>, never the claim. A client that reports itself somewhere it could
 /// not have reached gains nothing: the host still has it where it was, and sends it back there.
-/// Falling is not limited, because gravity is not the player's doing. Rising and travelling are.
+/// Travelling and rising are limited by speed. Falling is limited by gravity: a character may drop
+/// as fast as something dropped would, and no faster, or a claim could pass through a floor to
+/// whatever is underneath, which a play test once did from a roof to a door.
 /// </summary>
 public sealed class MovementAudit
 {
 	/// <summary>Claims are judged over windows at least this long, so network jitter averages out.</summary>
 	public const double Window = 0.25;
 
+	/// <summary>Downward acceleration and the speed it stops at, in the engine's units.</summary>
+	public const float Gravity = 850f;
+	public const float TerminalSpeed = 3500f;
+
 	private readonly float _slack;
 	private bool _started;
 	private double _at;
 	private double _settleUntil;
 	private bool _awaitingArrival;
+	/// <summary>How fast the host reckons the character is already falling.</summary>
+	private float _fallSpeed;
 
 	/// <param name="slack">Distance forgiven per window, for jitter and being pushed by physics.</param>
 	public MovementAudit( float slack = 48f ) => _slack = slack;
@@ -42,6 +50,7 @@ public sealed class MovementAudit
 		_at = now;
 		_settleUntil = now + settleSeconds;
 		_awaitingArrival = settleSeconds > 0;
+		_fallSpeed = 0;
 	}
 
 	/// <summary>False when the claim is not believable. The believed position is then unchanged.</summary>
@@ -67,8 +76,12 @@ public sealed class MovementAudit
 		}
 		else
 		{
-			var allowed = maximumSpeed * (float)Math.Min( elapsed, 1.0 ) + _slack;
-			if ( travelled > allowed || delta.Z > allowed ) return false;
+			var seconds = (float)Math.Min( elapsed, 1.0 );
+			var allowed = maximumSpeed * seconds + _slack;
+			var drop = -delta.Z;
+			var fall = _fallSpeed * seconds + 0.5f * Gravity * seconds * seconds + _slack;
+			if ( travelled > allowed || delta.Z > allowed || drop > fall ) return false;
+			_fallSpeed = drop > 1f ? MathF.Min( _fallSpeed + Gravity * seconds, TerminalSpeed ) : 0f;
 		}
 
 		Position = claimed;

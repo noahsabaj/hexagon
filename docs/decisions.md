@@ -59,7 +59,8 @@ distance to the caller's pawn itself. Chat is sent only to the connections in ra
 said. Hexagon does not fight the engine with server-side movement. `MovementAudit` keeps the last
 position the host found believable: travel and rise are limited to one and a half times the
 controller's run speed over quarter-second windows, with slack for jitter and physics; falling is
-free. Reach, chat range, witnesses and the saved position all read `Player.HostPosition`, never the
+limited to what gravity allows, and a drop must not pass through a floor (corrected after a play
+test fell through a roof; see "What the play tests taught"). Reach, chat range, witnesses and the saved position all read `Player.HostPosition`, never the
 claim, so a client that declares itself beside a door or a speaker gains nothing even in the moment
 before it is corrected. An unbelievable claim is journaled and the owner is sent back. When the
 host moves a character itself, claims from the old place are ignored until the owner arrives, but
@@ -257,8 +258,14 @@ off a bare number key, and a journal showed a door bought for 50 tokens by someo
   character; until it has, claims are neither believed nor punished.
 - A body at rest is asleep, and one teleported into the air asleep hung there. A teleport wakes it.
 - The editor test saves pictures of the HUD and the scene, so that "it renders" is looked at.
-- One editor run accepted a claimed teleport to a door with no refusal on record, before failed
-  runs kept their data. It has not recurred in six runs since. If it does, the journal will be there.
+- One editor run accepted a claimed teleport to a door with no refusal on record. It recurred once
+  data was being kept, and the journal explained it: the character had been spawned at one of the
+  map's own spawn points, on a roof directly above the doors, and the audit treated any fall as
+  free, so "I am now 320 units lower, beside the door" was believed, through the roof. Three
+  changes came of it. A game's own spawn points are used before a map's. Falling is limited to
+  what gravity allows. And a claim well below the believed position must have a clear line down to
+  it, which the host traces, because the audit knows speeds and not walls. The editor test now
+  tries exactly this from that roof.
 
 ## What is thin, and known
 
