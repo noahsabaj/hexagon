@@ -93,7 +93,7 @@ public sealed partial class Player
 		var position = character.Position is { Length: 3 } saved
 			? new Vector3( saved[0], saved[1], saved[2] )
 			: game.FindSpawn().Position;
-		using ( Rpc.FilterInclude( caller ) ) ReceiveTeleport( position );
+		HostTeleport( position );
 		SendPrivateState();
 		HostRecord( "city.enter" );
 	}
@@ -164,9 +164,10 @@ public sealed partial class Player
 
 	private Result Judge( Component target, IVerbTarget actable, Verb verb )
 	{
-		// The host measures this itself; a client saying "I am next to it" counts for nothing.
-		var nearest = target.GameObject.GetBounds().ClosestPoint( WorldPosition );
-		if ( nearest.Distance( WorldPosition ) > actable.Reach ) return Result.Fail( ErrorCode.Denied, "You are too far away." );
+		// The host measures this itself, from where it believes the character is; a client saying
+		// "I am next to it" counts for nothing.
+		var nearest = target.GameObject.GetBounds().ClosestPoint( HostPosition );
+		if ( nearest.Distance( HostPosition ) > actable.Reach ) return Result.Fail( ErrorCode.Denied, "You are too far away." );
 		if ( verb.Requires is { } capability && !HostCan( capability ) )
 			return Result.Fail( ErrorCode.Denied, "You have nothing that lets you do that." );
 		return Result.Success();

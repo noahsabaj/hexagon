@@ -52,13 +52,19 @@ within a request budget. Character ownership is checked against the caller's Ste
 yours" gets the same answer as "does not exist" so ids cannot be probed. A door measures the
 distance to the caller's pawn itself. Chat is sent only to the connections in range.
 
-## 2026-09-18: Position is owner-simulated and not yet validated
+## 2026-09-19: A reported position is a claim, and host rules read the believed one
 
-`PlayerController` runs on the owning client, so the host reads a position the client reported. A
-modified client could stand next to a door it is far from. The old code had a windowed movement
-audit for this, and it is the right next piece of host authority to bring over. It is left out of
-the first milestone because nothing here is worth cheating for yet, and it is recorded so nobody
-mistakes the reach check for proof.
+`PlayerController` runs on the owning client, so `WorldPosition` on the host is whatever the client
+said. Hexagon does not fight the engine with server-side movement. `MovementAudit` keeps the last
+position the host found believable: travel and rise are limited to one and a half times the
+controller's run speed over quarter-second windows, with slack for jitter and physics; falling is
+free. Reach, chat range, witnesses and the saved position all read `Player.HostPosition`, never the
+claim, so a client that declares itself beside a door or a speaker gains nothing even in the moment
+before it is corrected. An unbelievable claim is journaled and the owner is sent back. When the
+host moves a character itself, claims from the old place are ignored until the owner arrives, but
+never accepted, so a host teleport is not a free one. The cost is that a client which stalls for
+over a second and then catches up is pulled back. The play tests use `goto`, which is exactly what
+a cheat does, to prove it fails, and the operator's `hexagon_teleport` to move characters honestly.
 
 ## 2026-09-18: Test by playing
 
@@ -156,7 +162,7 @@ engine allows, so they share a character list; that also tests entering a charac
 
 1. Done: journal, transfers, capabilities, the verb checkpoint, owner-only names.
 2. Done: two-client play test against a dedicated server.
-3. Movement plausibility, with violations journaled. Every reach and range rule rests on it.
+3. Done: movement plausibility. Host rules read the believed position; implausible claims are journaled and corrected.
 4. World items, item verbs and storage, all as holders.
 5. Recognition, which also closes the spoken-name leak.
 6. Downed state and combat.

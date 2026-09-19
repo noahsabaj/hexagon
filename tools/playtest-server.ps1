@@ -97,8 +97,8 @@ try {
     [void](Send 2 'enter|John Doe')
     Expect 'a character already in the city cannot be entered twice' (Send 2 'state') 'has=False .*already in the city'
     [void](Send 2 'enter|Jane Roe')
-    [void](Send 1 'goto|240|-150|60')
-    [void](Send 2 'goto|300|-150|60')
+    [void](Send 0 'console|hexagon_teleport "John Doe" 240 -150 60')
+    [void](Send 0 'console|hexagon_teleport "Jane Roe" 300 -150 60')
     Start-Sleep -Seconds 2
 
     Write-Host '==> Perception' -ForegroundColor Cyan
@@ -112,7 +112,7 @@ try {
     [void](Send 1 'say|Morning')
     Expect 'speech reached a listener 60 units away' (Send 2 'state') 'John Doe says "Morning"'
     Expect 'the journal names who heard it' (Send 0 'journal|chat.say') "actor='John Doe' witnesses=1"
-    [void](Send 2 'goto|440|-150|60')
+    [void](Send 0 'console|hexagon_teleport "Jane Roe" 440 -150 60')
     Start-Sleep -Seconds 2
     [void](Send 1 'say|/w keep this quiet')
     [void](Send 1 'say|Still here')
@@ -120,13 +120,23 @@ try {
     Expect 'a whisper did not reach a listener 200 units away' $heard 'keep this quiet' -Not
     Expect 'ordinary speech still did' $heard 'Still here'
     Expect 'the journal shows the whisper had no witnesses' (Send 0 'journal|chat.whisper') 'witnesses=0'
-    [void](Send 2 'goto|1500|-150|60')
+    [void](Send 0 'console|hexagon_teleport "Jane Roe" 1500 -150 60')
     Start-Sleep -Seconds 2
     [void](Send 1 'say|/y can anyone hear me')
     [void](Send 1 'say|//back in five')
     $heard = Send 2 'state'
     Expect 'a yell did not carry 1260 units' $heard 'can anyone hear me' -Not
     Expect 'out-of-character chat reached everyone' $heard '\[OOC\] John Doe: back in five'
+
+    Write-Host '==> A claimed position buys nothing' -ForegroundColor Cyan
+    # goto is what a cheat does: the client simply declares itself somewhere else.
+    [void](Send 2 'goto|250|-150|60')
+    [void](Send 1 'say|Nobody is near me')
+    Expect 'claiming to stand beside a speaker did not let her listen in' (Send 2 'state') 'Nobody is near me' -Not
+    Expect 'the journal agrees nobody heard' (Send 0 'journal|chat.say') 'witnesses=0'
+    Start-Sleep -Seconds 2
+    Expect 'the host sent her back' (Send 2 'state') 'pos=1[45]\d\d'
+    Expect 'and put the claim on record' (Send 0 'journal') 'movement\.implausible!=[1-9]'
 
     Write-Host '==> The world is shared' -ForegroundColor Cyan
     [void](Send 1 'door|Door 1|use')

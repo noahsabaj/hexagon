@@ -92,6 +92,7 @@ Typed in the host's console.
 | --- | --- |
 | `hexagon_whitelist <steamid64> <faction>` | Allow an account to create characters in a whitelisted faction |
 | `hexagon_unwhitelist <steamid64> <faction>` | Remove that permission |
+| `hexagon_teleport "<character name>" <x> <y> <z>` | Move a character who is in the city |
 | `hexagon_give "<character name>" <item>` | Issue an item, from the `operator` source, to a character who is in the city |
 
 The journal is `journal/<date>.jsonl` under the data folder, one JSON object per line.

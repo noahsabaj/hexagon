@@ -137,10 +137,16 @@ try {
     Expect 'speech, emote and out-of-character lines were delivered' $state 'says "Hello there" / \*\* John Doe waves / \[OOC\] John Doe: brb'
 
     Write-Host '==> Doors' -ForegroundColor Cyan
-    [void](Send 'goto|240|-150|900')
     [void](Send 'door|Door 1|use')
     Expect 'a door out of reach was refused' (Send 'state') 'Door 1:open=False.*too far away'
+    # goto is what a cheat does: the client simply declares itself somewhere else.
     [void](Send 'goto|240|-150|60')
+    [void](Send 'door|Door 1|use')
+    Expect 'claiming to stand at the door did not open it' (Send 'state') 'Door 1:open=False.*too far away'
+    Start-Sleep -Seconds 2
+    Expect 'the host sent the claimant back' (Send 'state') 'pos=(?!2[2-5]\d\.?\d*,-1[2-6]\d)'
+    Expect 'and put the claim on record' (Send 'journal') 'movement\.implausible!=[1-9]'
+    [void](Send 'console|hexagon_teleport "John Doe" 240 -150 60')
     Start-Sleep -Seconds 1
     [void](Send 'door|Door 1|use')
     [void](Send 'door|Door 2|use')
@@ -169,7 +175,7 @@ try {
     [void](Send "console|hexagon_whitelist $steamId civil_protection")
     [void](Send "create|Officer Kane|$description|civil_protection")
     [void](Send 'enter|Officer Kane')
-    [void](Send 'goto|240|-150|60')
+    [void](Send 'console|hexagon_teleport "Officer Kane" 240 -150 60')
     Start-Sleep -Seconds 1
     [void](Send 'door|Door 1|lock')
     $state = Send 'state'
@@ -197,7 +203,7 @@ try {
     Expect 'every item came from a named source' $journal 'item\.issue=5(\s|$)'
     Expect 'the discard went through a sink' $journal 'item\.destroy=1(\s|$)'
     Expect 'refused locks are on record' $journal 'verb\.door\.lock!=2(\s|$)'
-    Expect 'refused uses are on record' $journal 'verb\.door\.use!=2(\s|$)'
+    Expect 'refused uses are on record' $journal 'verb\.door\.use!=3(\s|$)'
     Expect 'allowed acts are on record' $journal 'verb\.door\.lock=3(\s|$)'
     Expect 'the operator is on record too' $journal 'operator\.whitelist=1(\s|$)'
     Expect 'speech is on record' $journal 'chat\.say=1 .*chat\.me=1 .*chat\.ooc=1'

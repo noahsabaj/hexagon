@@ -1,0 +1,62 @@
+using System.Numerics;
+using Hexagon.Logic;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace Hexagon.Tests;
+
+[TestClass]
+public sealed class MovementTests
+{
+	private const float Speed = 480f;
+
+	[TestMethod]
+	public void RunningIsBelievedAndATeleportIsNot()
+	{
+		var audit = new MovementAudit();
+		var now = 0.0;
+		var position = new Vector3( 0, 0, 0 );
+		Assert.IsTrue( audit.Observe( position, now, Speed ) );
+
+		for ( var step = 0; step < 40; step++ )
+		{
+			now += MovementAudit.Window;
+			position.X += Speed * (float)MovementAudit.Window;
+			Assert.IsTrue( audit.Observe( position, now, Speed ), $"step {step}" );
+		}
+		Assert.AreEqual( position, audit.Position );
+
+		now += MovementAudit.Window;
+		Assert.IsFalse( audit.Observe( position + new Vector3( 0, 2000, 0 ), now, Speed ), "across the map in a quarter second" );
+		Assert.AreEqual( position, audit.Position, "the host still has the character where it was" );
+	}
+
+	[TestMethod]
+	public void FallingIsFreeAndRisingIsNot()
+	{
+		var audit = new MovementAudit();
+		audit.Observe( new Vector3( 0, 0, 1000 ), 0, Speed );
+
+		Assert.IsTrue( audit.Observe( new Vector3( 0, 0, 0 ), MovementAudit.Window, Speed ), "gravity is not the player's doing" );
+		Assert.IsFalse( audit.Observe( new Vector3( 0, 0, 1000 ), MovementAudit.Window * 2, Speed ), "flight is" );
+	}
+
+	[TestMethod]
+	public void AHostTeleportIsNotAFreeOneForTheClient()
+	{
+		var audit = new MovementAudit();
+		audit.Observe( new Vector3( 0, 0, 0 ), 0, Speed );
+		audit.Reset( new Vector3( 5000, 0, 0 ), 1.0 );
+
+		Assert.IsTrue( audit.Observe( new Vector3( 10, 0, 0 ), 1.5, Speed ), "a claim from the old place, before the owner applied it, is ignored" );
+		Assert.AreEqual( new Vector3( 5000, 0, 0 ), audit.Position, "ignored, not accepted" );
+		Assert.IsTrue( audit.Observe( new Vector3( -9000, 0, 0 ), 1.8, Speed ), "so is a claim from anywhere else" );
+		Assert.AreEqual( new Vector3( 5000, 0, 0 ), audit.Position );
+
+		Assert.IsTrue( audit.Observe( new Vector3( 5010, 0, 0 ), 2.1, Speed ), "the owner arrived" );
+		Assert.AreEqual( new Vector3( 5010, 0, 0 ), audit.Position );
+		Assert.IsFalse( audit.Observe( new Vector3( 10, 0, 0 ), 2.4, Speed ), "and arriving ends the grace" );
+
+		audit.Reset( new Vector3( 0, 0, 0 ), 3.0 );
+		Assert.IsFalse( audit.Observe( new Vector3( 5000, 0, 0 ), 5.5, Speed ), "an owner who never arrives is judged once the grace runs out" );
+	}
+}

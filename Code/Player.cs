@@ -43,6 +43,16 @@ public sealed partial class Player : Component
 	// Host-side.
 	private CharacterData? _character;
 	private readonly RateLimiter _requests = new( capacity: 12, refillPerSecond: 4 );
+	private readonly MovementAudit _movement = new();
+
+	/// <summary>
+	/// Host: where the host believes this character is. The owner simulates movement, so
+	/// <c>WorldPosition</c> is only its claim; every host rule about distance reads this.
+	/// </summary>
+	public Vector3 HostPosition => _movement.Position;
+
+	/// <summary>How much faster than a run a claim may be before it is disbelieved.</summary>
+	public const float SpeedTolerance = 1.5f;
 
 	/// <summary>Builds the pawn on the host, before it is network-spawned, so clients receive it whole.</summary>
 	public static void Compose( GameObject pawn )
@@ -90,6 +100,24 @@ public sealed partial class Player : Component
 			RequestAct( target, second.Id );
 	}
 
+	protected override void OnFixedUpdate()
+	{
+		if ( !Networking.IsHost || _character is null || Controller is not { } controller ) return;
+		var limit = MathF.Max( controller.RunSpeed, controller.WalkSpeed ) * SpeedTolerance;
+		if ( _movement.Observe( WorldPosition, Time.Now, limit ) ) return;
+		var claimed = WorldPosition;
+		HostRecord( "movement.implausible", ok: false, data: ("claimed", $"{claimed.x:0},{claimed.y:0},{claimed.z:0}") );
+		HostTeleport( HostPosition );
+	}
+
+	/// <summary>Host: puts the character somewhere. The owner simulates movement, so it is told to move itself.</summary>
+	public void HostTeleport( Vector3 position )
+	{
+		if ( !Networking.IsHost || Network.Owner is not { } owner ) return;
+		_movement.Reset( position, Time.Now );
+		using ( Rpc.FilterInclude( owner ) ) ReceiveTeleport( position );
+	}
+
 	private PlayerController? Controller => GetComponent<PlayerController>( true );
 
 	/// <summary>A connection without a character is in the menu: no body in the world, no movement.</summary>
@@ -123,7 +151,8 @@ public sealed partial class Player : Component
 	public void HostSave()
 	{
 		if ( !Networking.IsHost || _character is null || GameManager.Instance?.Roster is not { } roster ) return;
-		_character.Position = new[] { WorldPosition.x, WorldPosition.y, WorldPosition.z };
+		var at = HostPosition;
+		_character.Position = new[] { at.x, at.y, at.z };
 		roster.Save( _character );
 	}
 
@@ -159,9 +188,10 @@ public sealed partial class Player : Component
 		var witnesses = _character is null
 			? Array.Empty<Guid>()
 			: Scene.GetAllComponents<Player>()
-				.Where( other => other != this && other._character is not null && other.WorldPosition.Distance( WorldPosition ) <= WitnessRange )
+				.Where( other => other != this && other._character is not null && other.HostPosition.Distance( HostPosition ) <= WitnessRange )
 				.Select( other => other._character!.Id ).ToArray();
-		journal.Record( kind, by, subject, ok, new[] { WorldPosition.x, WorldPosition.y, WorldPosition.z }, witnesses, data );
+		var at = HostPosition;
+		journal.Record( kind, by, subject, ok, new[] { at.x, at.y, at.z }, witnesses, data );
 	}
 
 	/// <summary>How near a character must be to count as having seen an act: the range of ordinary speech.</summary>

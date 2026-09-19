@@ -36,11 +36,11 @@ public static class Chat
 	{
 		if ( !Networking.IsHost || speaker.HostCharacter is not { } character ) return;
 		var range = ChatRules.Range( message.Channel );
-		var origin = speaker.WorldPosition;
+		var origin = speaker.HostPosition;
 		var listeners = Game.ActiveScene.GetAllComponents<Player>()
 			.Where( listener => listener.Network.Owner is not null )
 			.Where( listener => range is null ||
-				(listener.HasCharacter && listener.WorldPosition.Distance( origin ) <= range.Value) )
+				(listener.HasCharacter && listener.HostPosition.Distance( origin ) <= range.Value) )
 			.ToArray();
 		// Speech is journaled with exactly who received it, which is what a dispute will ask.
 		GameManager.Instance?.Journal?.Record( $"chat.{message.Channel.ToString().ToLowerInvariant()}", Actor.Of( character ),

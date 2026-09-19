@@ -61,6 +61,22 @@ public static class Operators
 		Log.Info( given.Ok ? $"Gave {definition.Title} to {target.HostCharacter!.Name}." : given.Message );
 	}
 
+	[ConCmd( "hexagon_teleport" )]
+	public static void Teleport( string characterName, float x, float y, float z )
+	{
+		if ( !TryHost( out var game ) ) return;
+		var target = game.Scene.GetAllComponents<Player>()
+			.FirstOrDefault( value => value.HostCharacter?.Name.Equals( characterName, StringComparison.OrdinalIgnoreCase ) == true );
+		if ( target is null )
+		{
+			Log.Warning( "Usage: hexagon_teleport \"<character name>\" <x> <y> <z>. The character must be in the city." );
+			return;
+		}
+		target.HostTeleport( new Vector3( x, y, z ) );
+		game.Journal!.Record( "operator.teleport", Actor.Console, target.HostCharacter!.HolderLabel, data: ("to", $"{x:0},{y:0},{z:0}") );
+		Log.Info( $"Moved {target.HostCharacter.Name}." );
+	}
+
 	private static bool TryHost( out GameManager game )
 	{
 		game = GameManager.Instance!;
