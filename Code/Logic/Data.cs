@@ -66,4 +66,6 @@ public sealed class DoorData
 {
 	public bool IsOpen { get; set; }
 	public bool IsLocked { get; set; }
+	/// <summary>The character who bought it, who may lock it without any other authority.</summary>
+	public Guid? Owner { get; set; }
 }

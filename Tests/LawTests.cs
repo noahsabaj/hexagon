@@ -138,6 +138,30 @@ public sealed class LawTests
 	}
 
 	[TestMethod]
+	public void ASaleMovesTheItemAndTheTokensTogetherOrNeither()
+	{
+		var journal = new Journal( new MemoryFiles(), () => Now );
+		var transfers = new Transfers( journal );
+		var shop = new HolderData { Id = Guid.NewGuid(), Kind = HolderKinds.Vendor, Inventory = new InventoryData { Width = 4, Height = 4 } };
+		var alice = Holder( 1, 1 );
+		transfers.IssueTokens( Sources.CharacterStart, alice, 15, Actor.Of( alice ) );
+		var ration = transfers.Issue( "vendor.restock", shop, "items/ration.item", 1, 1, Actor.Console ).Value;
+		var second = transfers.Issue( "vendor.restock", shop, "items/ration.item", 1, 1, Actor.Console ).Value;
+
+		Assert.AreEqual( 10, Trade.Price( 10, 1f ) );
+		Assert.AreEqual( 5, Trade.Price( 9, 0.5f ), "prices round up, never to nothing" );
+		Assert.AreEqual( ErrorCode.Conflict, Trade.Sell( transfers, shop, alice, ration.Id, 20, Actor.Of( alice ) ).Code, "she cannot afford it" );
+		Assert.AreEqual( 15, alice.Tokens );
+		Assert.IsTrue( Trade.Sell( transfers, shop, alice, ration.Id, 10, Actor.Of( alice ) ).Ok );
+		Assert.AreEqual( (5L, 10L), (alice.Tokens, shop.Tokens) );
+		Assert.AreEqual( ErrorCode.Conflict, Trade.Sell( transfers, shop, alice, second.Id, 5, Actor.Of( alice ) ).Code, "no room" );
+		Assert.AreEqual( (5L, 10L), (alice.Tokens, shop.Tokens), "and so no payment" );
+		Assert.AreEqual( ErrorCode.Conflict, Trade.Sell( transfers, alice, shop, ration.Id, 11, Actor.Of( alice ) ).Code, "the till cannot pay what it does not hold" );
+		Assert.IsTrue( Trade.Sell( transfers, alice, shop, ration.Id, 5, Actor.Of( alice ) ).Ok );
+		Assert.AreEqual( 15, alice.Tokens + shop.Tokens, "a sale creates no tokens" );
+	}
+
+	[TestMethod]
 	public void CapabilitiesAreGrantedByNameOrPrefixAndDenialWins()
 	{
 		Assert.IsTrue( Capabilities.Can( Capability.DoorLock, new[] { "door.lock" } ) );

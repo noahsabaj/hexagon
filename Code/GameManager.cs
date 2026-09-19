@@ -28,6 +28,8 @@ public sealed class GameManager : Component, Component.INetworkListener
 	public WorldData World { get; private set; } = new();
 
 	[Property] public float AutosaveSeconds { get; set; } = 60f;
+	/// <summary>How often factions pay their wage. Zero means never.</summary>
+	[Property] public float WageSeconds { get; set; } = 900f;
 
 	/// <summary>What death means in this game. Hexagon supplies the pipeline; this is the policy.</summary>
 	[Property, Group( "Death" )] public DeathPolicy Death { get; set; } = DeathPolicy.Respawn;
@@ -48,6 +50,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 	private readonly Dictionary<long, AccountData> _accounts = new();
 	private RealTimeSince _sinceAutosave;
 	private bool _worldRestored;
+	private RealTimeSince _sinceWages;
 
 	protected override void OnAwake() => Instance = this;
 
@@ -87,6 +90,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 			foreach ( var ground in Holders.OfKind( HolderKinds.Ground ) ) WorldItem.Spawn( ground );
 			foreach ( var body in Holders.OfKind( HolderKinds.Corpse ) ) Corpse.Spawn( body );
 		}
+		if ( Networking.IsHost && Roster is not null && WageSeconds > 0 && _sinceWages > WageSeconds ) PayWages( Actor.Console );
 		if ( !Networking.IsHost || Roster is null || _sinceAutosave < AutosaveSeconds ) return;
 		_sinceAutosave = 0;
 		foreach ( var player in Scene.GetAllComponents<Player>() ) player.HostSave();
@@ -131,6 +135,27 @@ public sealed class GameManager : Component, Component.INetworkListener
 		// A new host has none of the saved state, so it would run an empty city. Stop instead.
 		Log.Warning( "Hexagon does not support host migration; leaving the session." );
 		Networking.Disconnect();
+	}
+
+	/// <summary>
+	/// Host: a wage is a declared faucet. It pays only characters who are in the city and able to work,
+	/// so money enters the world at a rate the journal can show, not for being logged in somewhere.
+	/// </summary>
+	public int PayWages( Actor by )
+	{
+		_sinceWages = 0;
+		var paid = 0;
+		foreach ( var player in Scene.GetAllComponents<Player>() )
+		{
+			if ( player.HostCharacter is not { } character || player.IsIncapable ) continue;
+			if ( FactionDefinition.Find( character.Faction ) is not { Wage: > 0 } faction ) continue;
+			if ( !Transfers!.IssueTokens( Sources.Wage, character, faction.Wage, by ).Ok ) continue;
+			Roster!.Save( character );
+			Player.HostRefresh( character );
+			if ( player.Network.Owner is { } owner ) Chat.Tell( owner, $"You are paid {faction.Wage} tokens." );
+			paid++;
+		}
+		return paid;
 	}
 
 	public Transform FindSpawn()

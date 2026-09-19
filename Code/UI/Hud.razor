@@ -111,17 +111,21 @@
 									style="left: @(item.X * 68)px; top: @(item.Y * 68)px; width: @(item.Width * 68 - 4)px; height: @(item.Height * 68 - 4)px;"
 									onclick=@(() => player.RequestTake( item.Id ))>
 									@(ItemDefinition.Find( item.Definition )?.Title ?? "Unknown item")
+									@if ( player.OpenTarget is Vendor shop )
+									{
+										<div class="muted">@shop.SellPrice( ItemDefinition.Find( item.Definition ) ) tokens</div>
+									}
 								</div>
 							}
 						</div>
 						<div class="actions">
-							@if ( player.OpenTokens > 0 )
+							@if ( player.OpenTokens > 0 && player.OpenTarget is not Vendor )
 							{
 								<button class="primary" onclick=@(() => player.RequestTakeTokens())>Take @player.OpenTokens.ToString( "N0" ) tokens</button>
 							}
 							<button onclick=@(() => player.RequestCloseHolder())>Close</button>
 						</div>
-						<div class="muted">Click an item to take it.</div>
+						<div class="muted">@(player.OpenTarget is Vendor ? "Click an item to buy it." : "Click an item to take it.")</div>
 					</div>
 				}
 				<div class="card">
@@ -150,7 +154,9 @@
 					<div class="actions">
 						@if ( player.OpenInventory is not null )
 						{
-							<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "put" ))>Put in</button>
+							<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "put" ))>
+								@(player.OpenTarget is Vendor buyer ? (buyer.BuyPrice( SelectedDefinition ) is { } offer ? $"Sell for {offer}" : "Not wanted") : "Put in")
+							</button>
 						}
 						@if ( SelectedDefinition is { Consumable: true } usable )
 						{
@@ -219,7 +225,14 @@
 	{
 		var text = ChatDraft;
 		CloseChat();
-		if ( !string.IsNullOrWhiteSpace( text ) ) Player.Local?.RequestSay( text );
+		if ( string.IsNullOrWhiteSpace( text ) || Player.Local is not { } player ) return;
+		// "/pay 20" hands tokens to whoever is being looked at. It is an act, not speech.
+		if ( text.StartsWith( "/pay ", StringComparison.OrdinalIgnoreCase ) )
+		{
+			if ( long.TryParse( text[5..].Trim(), out var amount ) && player.HoveredTarget is Player payee ) player.RequestPay( payee, amount );
+			return;
+		}
+		player.RequestSay( text );
 	}
 
 	private void CloseChat()

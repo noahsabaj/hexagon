@@ -180,7 +180,7 @@ public static class DevCommands
 				case "door":
 					var door = Game.ActiveScene.GetAllComponents<Door>().FirstOrDefault( value => value.GameObject.Name == args[1] );
 					if ( door is null ) return "no such door";
-					player.RequestAct( door, args[2] == "lock" ? "door.lock" : "door.use" );
+					player.RequestAct( door, $"door.{args[2]}" );
 					return $"sent door {args[2]}";
 				case "drop":
 				case "use":
@@ -194,9 +194,10 @@ public static class DevCommands
 					player.RequestAct( lying, "item.take" );
 					return "sent pickup";
 				case "open":
-					var container = Game.ActiveScene.GetAllComponents<Container>().FirstOrDefault( value => value.GameObject.Name == args[1] );
-					if ( container is null ) return "no such container";
-					player.RequestAct( container, "container.open" );
+					Component? container = Game.ActiveScene.GetAllComponents<Container>().FirstOrDefault( value => value.GameObject.Name == args[1] );
+					container ??= Game.ActiveScene.GetAllComponents<Vendor>().FirstOrDefault( value => value.GameObject.Name == args[1] );
+					if ( container is null ) return "no such container or vendor";
+					player.RequestAct( container, ((IVerbTarget)container).Verbs[0].Id );
 					return "sent open";
 				case "take":
 					var wanted = player.OpenInventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
@@ -230,6 +231,12 @@ public static class DevCommands
 					if ( inHand is null ) return "no such item";
 					player.RequestItemAct( inHand.Id, "item.equip" );
 					return "sent equip";
+				case "pay":
+					var payee = Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy && value.HasCharacter )
+						.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();
+					if ( payee is null ) return "nobody there";
+					player.RequestPay( payee, long.Parse( args[1] ) );
+					return "sent pay";
 				case "taketokens":
 					player.RequestTakeTokens();
 					return "sent taketokens";
@@ -255,7 +262,7 @@ public static class DevCommands
 					return $"has={player.HasCharacter} name='{player.CharacterName}' faction='{player.Faction?.Title}' tokens={player.Tokens} " +
 						$"characters=[{string.Join( ", ", player.Characters.Select( value => value.Name ) )}] " +
 						$"items=[{string.Join( ", ", player.Inventory?.Items.Select( value => $"{ItemDefinition.Find( value.Definition )?.Title}@{value.X},{value.Y}" ) ?? Array.Empty<string>() )}] " +
-						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked}" ) )}] " +
+						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked}{(value.IsOwned ? ",owned" : "")}" ) )}] " +
 						$"health={player.Health} down={player.IsDown} restrained={player.IsRestrained} held='{ItemDefinition.Find( player.HeldItemPath )?.Title}' bodies={Game.ActiveScene.GetAllComponents<Corpse>().Count()} opentokens={player.OpenTokens} " +
 						$"known=[{string.Join( ", ", player.Known.Values.OrderBy( value => value ) )}] " +
 						$"open=[{player.OpenTitle}: {string.Join( ", ", player.OpenInventory?.Items.Select( value => ItemDefinition.Find( value.Definition )?.Title ) ?? Array.Empty<string?>() )}] " +

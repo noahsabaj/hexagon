@@ -57,6 +57,10 @@ public sealed class MovementTests
 		Assert.IsFalse( audit.Observe( new Vector3( 10, 0, 0 ), 2.4, Speed ), "and arriving ends the grace" );
 
 		audit.Reset( new Vector3( 0, 0, 0 ), 3.0 );
+		Assert.IsTrue( audit.Observe( new Vector3( 300, 0, 0 ), 3.5, Speed ), "ignored while settling" );
+		Assert.IsFalse( audit.Observe( new Vector3( 300, 0, 0 ), 5.2, Speed ), "a long wait does not turn a short teleport into a walk" );
+		Assert.AreEqual( new Vector3( 0, 0, 0 ), audit.Position );
+
 		Assert.IsFalse( audit.Observe( new Vector3( 5000, 0, 0 ), 5.5, Speed ), "an owner who never arrives is judged once the grace runs out" );
 	}
 }

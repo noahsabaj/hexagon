@@ -16,6 +16,8 @@ public sealed partial class Player
 	public string OpenTitle { get; private set; } = string.Empty;
 	public InventoryData? OpenInventory { get; private set; }
 	public long OpenTokens { get; private set; }
+	/// <summary>What was opened: a crate, a vendor, a person, a body.</summary>
+	public Component? OpenTarget { get; private set; }
 
 	// Host-side.
 	private IHolder? _open;
@@ -31,7 +33,7 @@ public sealed partial class Player
 		_openTarget = target;
 		_openTitle = title;
 		_openWhile = onlyWhile;
-		using ( Rpc.FilterInclude( owner ) ) ReceiveOpenHolder( title, JsonSerializer.Serialize( holder.Inventory ), holder.Tokens );
+		using ( Rpc.FilterInclude( owner ) ) ReceiveOpenHolder( target, title, JsonSerializer.Serialize( holder.Inventory ), holder.Tokens );
 	}
 
 	public void HostClose()
@@ -41,7 +43,7 @@ public sealed partial class Player
 		_openTarget = null;
 		_openWhile = null;
 		if ( Network.Owner is not { } owner ) return;
-		using ( Rpc.FilterInclude( owner ) ) ReceiveOpenHolder( string.Empty, string.Empty, 0 );
+		using ( Rpc.FilterInclude( owner ) ) ReceiveOpenHolder( null, string.Empty, string.Empty, 0 );
 	}
 
 	/// <summary>Host: whether the open holder may still be used. Walking away, or the reason it was open ending, closes it.</summary>
@@ -60,7 +62,7 @@ public sealed partial class Player
 		{
 			if ( ReferenceEquals( player._character, holder ) ) player.SendPrivateState();
 			if ( !ReferenceEquals( player._open, holder ) || player.Network.Owner is not { } owner ) continue;
-			using ( Rpc.FilterInclude( owner ) ) player.ReceiveOpenHolder( player._openTitle, JsonSerializer.Serialize( holder.Inventory ), holder.Tokens );
+			using ( Rpc.FilterInclude( owner ) ) player.ReceiveOpenHolder( player._openTarget, player._openTitle, JsonSerializer.Serialize( holder.Inventory ), holder.Tokens );
 		}
 	}
 
@@ -89,8 +91,9 @@ public sealed partial class Player
 		_character is null ? Result.Fail( ErrorCode.Denied, "You have no character." ) : HostMove( holder, _character, itemId );
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
-	private void ReceiveOpenHolder( string title, string inventoryJson, long tokens )
+	private void ReceiveOpenHolder( Component? target, string title, string inventoryJson, long tokens )
 	{
+		OpenTarget = target;
 		OpenTitle = title;
 		OpenTokens = tokens;
 		OpenInventory = inventoryJson.Length == 0 ? null : JsonSerializer.Deserialize<InventoryData>( inventoryJson );
@@ -112,9 +115,54 @@ public sealed partial class Player
 			return;
 		}
 		var open = _open!;
-		var moved = taking ? HostMove( open, _character, itemId ) : HostMove( _character, open, itemId );
+		var moved = _openTarget is Vendor vendor
+			? HostTrade( vendor, open, itemId, buying: taking )
+			: taking ? HostMove( open, _character, itemId ) : HostMove( _character, open, itemId );
 		if ( !moved.Ok ) Chat.Tell( caller, moved.Message );
 		Corpse.RemoveIfEmpty( open );
+	}
+
+	/// <summary>Host: with a vendor, taking is buying and putting is selling. The price is the vendor's, never the client's.</summary>
+	private Result HostTrade( Vendor vendor, IHolder till, Guid itemId, bool buying )
+	{
+		var transfers = GameManager.Instance!.Transfers!;
+		var from = buying ? till : _character!;
+		var definition = ItemDefinition.Find( from.Inventory.Items.FirstOrDefault( value => value.Id == itemId )?.Definition ?? string.Empty );
+		Result sold;
+		if ( buying ) sold = Trade.Sell( transfers, till, _character!, itemId, vendor.SellPrice( definition ), Actor.Of( _character! ) );
+		else if ( vendor.BuyPrice( definition ) is { } offer ) sold = Trade.Sell( transfers, _character!, till, itemId, offer, Actor.Of( _character! ) );
+		else sold = Result.Fail( ErrorCode.Denied, "They do not deal in that." );
+		if ( !sold.Ok ) return sold;
+		HostSaveHolder( from );
+		HostSaveHolder( buying ? _character! : till );
+		HostRefresh( till );
+		HostRefresh( _character! );
+		return sold;
+	}
+
+	/// <summary>Hands tokens to someone within reach. The only way tokens pass between characters.</summary>
+	[Rpc.Host]
+	public void RequestPay( Player recipient, long amount )
+	{
+		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
+		Result paid;
+		if ( IsIncapable ) paid = Result.Fail( ErrorCode.Denied, "You cannot do that now." );
+		else if ( !recipient.IsValid() || recipient == this || recipient._character is not { } other ) paid = Result.Fail( ErrorCode.NotFound, "There is nobody there." );
+		else if ( recipient.HostPosition.Distance( HostPosition ) > 120f ) paid = Result.Fail( ErrorCode.Denied, "You are too far away." );
+		else
+		{
+			paid = game.Transfers!.MoveTokens( _character, other, amount, Actor.Of( _character ) );
+			if ( paid.Ok )
+			{
+				HostSaveHolder( _character );
+				HostSaveHolder( other );
+				HostRefresh( _character );
+				HostRefresh( other );
+				if ( recipient.Network.Owner is { } owner ) Chat.Tell( owner, $"{Recognition.Label( other, _character )} hands you {amount} tokens." );
+			}
+		}
+		HostRecord( "verb.person.pay", recipient.IsValid() ? recipient._character?.HolderLabel : null, paid.Ok, ("amount", amount.ToString()) );
+		if ( !paid.Ok ) Chat.Tell( caller, paid.Message );
 	}
 
 	/// <summary>Takes every token the open holder has: a body's, a searched person's.</summary>
@@ -128,6 +176,11 @@ public sealed partial class Player
 			return;
 		}
 		var open = _open!;
+		if ( _openTarget is Vendor )
+		{
+			Chat.Tell( caller, "The till is not yours." );
+			return;
+		}
 		var taken = game.Transfers!.MoveTokens( open, _character, open.Tokens, Actor.Of( _character ) );
 		if ( !taken.Ok )
 		{

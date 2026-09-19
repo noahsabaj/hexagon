@@ -77,6 +77,12 @@ public static class Operators
 		Log.Info( $"Moved {target.HostCharacter.Name}." );
 	}
 
+	[ConCmd( "hexagon_payday" )]
+	public static void Payday()
+	{
+		if ( TryHost( out var game ) ) Log.Info( $"Paid {game.PayWages( Actor.Console )} characters." );
+	}
+
 	[ConCmd( "hexagon_revive" )]
 	public static void Revive( string characterName )
 	{

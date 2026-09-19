@@ -20,6 +20,7 @@ public static class Sources
 {
 	public const string CharacterStart = "character.start";
 	public const string Operator = "operator";
+	public const string Wage = "wage";
 }
 
 /// <summary>Where items and tokens may leave the world.</summary>
@@ -29,6 +30,8 @@ public static class Sinks
 	/// <summary>Eaten, drunk, fired, used up.</summary>
 	public const string Consumed = "consumed";
 	public const string CharacterDeleted = "character.deleted";
+	/// <summary>Paid to the city for property, not to anyone in it.</summary>
+	public const string Property = "property";
 }
 
 /// <summary>

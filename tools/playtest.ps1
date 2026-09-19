@@ -202,6 +202,21 @@ try {
     [void](Send 'console|hexagon_revive "John Doe"')
     Expect 'helped up, barely' (Send 'state') 'health=25 down=False'
 
+    Write-Host '==> Commerce: tokens and goods only move' -ForegroundColor Cyan
+    [void](Send 'door|Door 2|buy')
+    [void](Send 'door|Door 2|lock')
+    $state = Send 'state'
+    Expect 'buying a door paid its price into a sink' $state 'tokens=50 .*Door 2:open=False,locked=False,owned'
+    [void](Send 'open|Ration Vendor')
+    Expect 'the vendor stocked its shelves from its declared source, and has a float' (Send 'state') 'opentokens=200 .*open=\[Ration Vendor: Ration, Ration, Ration, Water, Water, Water, Bandage, Bandage, Bandage\]'
+    [void](Send 'take|0')
+    Expect 'taking from a vendor is buying' (Send 'state') 'tokens=40 .*Ration@.*Ration@.*opentokens=210'
+    [void](Send 'put|1')
+    Expect 'putting is selling, at the vendor''s price' (Send 'state') 'tokens=45 .*opentokens=205'
+    [void](Send 'taketokens')
+    Expect 'the till is not a body to be looted' (Send 'state') 'tokens=45 .*The till is not yours'
+    [void](Send 'close')
+
     Write-Host '==> Faction gate' -ForegroundColor Cyan
     $steamId = Send 'steamid'
     [void](Send 'leave')
@@ -212,6 +227,8 @@ try {
     Start-Sleep -Seconds 1
     [void](Send 'door|Door 1|lock')
     $state = Send 'state'
+    [void](Send 'console|hexagon_payday')
+    Expect 'a wage is a declared faucet, paid to those at work' (Send 'state') 'tokens=120 .*You are paid 20 tokens'
     Expect 'the console whitelist unlocked the faction' $state "name='Officer Kane' faction='Civil Protection'"
     Expect 'Civil Protection locked the door, which also shut it' $state 'Door 1:open=False,locked=True'
 
@@ -234,14 +251,15 @@ try {
 
     Write-Host '==> The journal' -ForegroundColor Cyan
     $journal = Send 'journal'
-    Expect 'starting tokens were issued once per character' $journal 'tokens\.issue=2(\s|$)'
-    Expect 'every item came from a named source' $journal 'item\.issue=6(\s|$)'
+    Expect 'tokens entered the world four times: two characters, a float, a wage' $journal 'tokens\.issue=4(\s|$)'
+    Expect 'every item came from a named source' $journal 'item\.issue=15(\s|$)'
     Expect 'the drink went through a sink' $journal 'item\.destroy=2(\s|$)'
     Expect 'refused locks are on record' $journal 'verb\.door\.lock!=3(\s|$)'
     Expect 'refused uses are on record' $journal 'verb\.door\.use!=4(\s|$)'
-    Expect 'allowed acts are on record' $journal 'verb\.door\.lock=3(\s|$)'
+    Expect 'allowed acts are on record' $journal 'verb\.door\.lock=4(\s|$)'
+    Expect 'the money supply is what the journal says it is' $journal 'tokens\.destroy=1(\s|$)'
     Expect 'the operator is on record too' $journal 'operator\.whitelist=1(\s|$)'
-    Expect 'speech is on record' $journal 'chat\.say=1 .*chat\.me=3 .*chat\.ooc=1.*item\.move=3'
+    Expect 'speech is on record' $journal 'chat\.say=1 .*chat\.me=3 .*chat\.ooc=1.*item\.move=5'
     Expect 'this client was told no other name' (Send 'proxies') '^[^A-Za-z]*$'
 
     # The editor sometimes looks the driver's type up while the assembly is still loading. That is

@@ -22,6 +22,7 @@ public sealed class MovementAudit
 	private bool _started;
 	private double _at;
 	private double _settleUntil;
+	private bool _awaitingArrival;
 
 	/// <param name="slack">Distance forgiven per window, for jitter and being pushed by physics.</param>
 	public MovementAudit( float slack = 48f ) => _slack = slack;
@@ -40,6 +41,7 @@ public sealed class MovementAudit
 		_started = true;
 		_at = now;
 		_settleUntil = now + settleSeconds;
+		_awaitingArrival = settleSeconds > 0;
 	}
 
 	/// <summary>False when the claim is not believable. The believed position is then unchanged.</summary>
@@ -53,17 +55,26 @@ public sealed class MovementAudit
 		var elapsed = now - _at;
 		if ( elapsed < Window ) return true;
 
-		var settling = now < _settleUntil;
-		// While settling, only the time since the teleport landed counts, however long the wait was.
-		var allowed = maximumSpeed * (float)(settling ? Window : Math.Min( elapsed, 1.0 )) + _slack;
 		var delta = claimed - Position;
 		var travelled = MathF.Sqrt( delta.X * delta.X + delta.Y * delta.Y );
-		var believable = travelled <= allowed && delta.Z <= allowed;
-		if ( !believable ) return settling;
+
+		if ( _awaitingArrival )
+		{
+			// The owner has not yet shown up where the host put it. Only showing up counts: anything
+			// else is ignored while there is still time, and refused once there is not. It is never
+			// accepted, however long the wait has made the window.
+			var arrival = maximumSpeed * (float)Window + _slack;
+			if ( travelled > arrival || MathF.Abs( delta.Z ) > arrival + 256f ) return now < _settleUntil;
+			_awaitingArrival = false;
+		}
+		else
+		{
+			var allowed = maximumSpeed * (float)Math.Min( elapsed, 1.0 ) + _slack;
+			if ( travelled > allowed || delta.Z > allowed ) return false;
+		}
 
 		Position = claimed;
 		_at = now;
-		_settleUntil = 0;
 		return true;
 	}
 }

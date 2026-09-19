@@ -22,6 +22,9 @@ public sealed class FactionDefinition : GameResource
 	/// <summary>Tokens a new character is issued.</summary>
 	[Property] public long StartingTokens { get; set; } = 100;
 
+	/// <summary>Tokens paid to each member in the city every wage period, from the wage source.</summary>
+	[Property] public long Wage { get; set; }
+
 	[Property] public List<ItemDefinition> StartingItems { get; set; } = new();
 
 	public static FactionDefinition? Find( string path ) =>

@@ -15,6 +15,9 @@ public sealed class ItemDefinition : GameResource
 	[Property, Range( 1, 4 )] public int Height { get; set; } = 1;
 	[Property] public Color Tint { get; set; } = Color.White;
 
+	/// <summary>What it is worth in tokens. Vendors price from this.</summary>
+	[Property] public long Value { get; set; }
+
 	/// <summary>Using it uses it up: food, drink, a bandage.</summary>
 	[Property] public bool Consumable { get; set; }
 	/// <summary>The button for using it, such as "Eat".</summary>
