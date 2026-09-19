@@ -21,18 +21,26 @@ public sealed record CharacterSummary( Guid Id, string Name, string Faction );
 /// host decides.
 /// </summary>
 [Title( "Hexagon Player" ), Category( "Hexagon" ), Icon( "person" )]
-public sealed partial class Player : Component
+public sealed partial class Player : Component, Component.IPressable, IVerbTarget
 {
 	/// <summary>The pawn this client controls, or null before it has spawned.</summary>
 	public static Player? Local { get; private set; }
 
 	[Sync( SyncFlags.FromHost )] public bool HasCharacter { get; set; }
 	[Sync( SyncFlags.FromHost )] public string CharacterDescription { get; set; } = string.Empty;
+	/// <summary>A face: the same person is the same id tomorrow. It says nothing about who they are.</summary>
+	[Sync( SyncFlags.FromHost )] public Guid CharacterId { get; set; }
 
 	// Owner-side copies of private state. Empty on every other client.
 	public string CharacterName { get; private set; } = string.Empty;
 	public string FactionPath { get; private set; } = string.Empty;
 	public FactionDefinition? Faction => FactionDefinition.Find( FactionPath );
+	/// <summary>The names this character has been told, by face.</summary>
+	public IReadOnlyDictionary<Guid, string> Known { get; private set; } = new Dictionary<Guid, string>();
+
+	/// <summary>Owner: how this client's character would refer to someone it can see.</summary>
+	public string LabelFor( Player other ) =>
+		other == this ? CharacterName : Known.TryGetValue( other.CharacterId, out var name ) ? name : Recognition.Stranger( other.CharacterDescription );
 	public IReadOnlyList<CharacterSummary> Characters { get; private set; } = Array.Empty<CharacterSummary>();
 	public InventoryData? Inventory { get; private set; }
 	public long Tokens { get; private set; }
@@ -95,16 +103,30 @@ public sealed partial class Player : Component
 		ApplyPresence();
 		if ( IsProxy || !HasCharacter ) return;
 		// "Use" reaches a target's first verb through IPressable. "Reload" is its second.
-		if ( Input.Pressed( "Reload" ) && Controller?.Hovered?.GetComponent<IVerbTarget>() is Component target &&
-			((IVerbTarget)target).Verbs.ElementAtOrDefault( 1 ) is { } second )
-			RequestAct( target, second.Id );
+		if ( UiBusy ) return;
+		if ( HoveredTarget is { } target )
+		{
+			var verbs = ((IVerbTarget)target).Verbs;
+			if ( Input.Pressed( "Reload" ) && verbs.ElementAtOrDefault( 1 ) is { } second ) RequestAct( target, second.Id );
+			// Every verb also answers to its number, which is how a third and later one is reached.
+			for ( var index = 0; index < verbs.Count && index < 9; index++ )
+				if ( Input.Pressed( $"Slot{index + 1}" ) ) RequestAct( target, verbs[index].Id );
+		}
+		if ( Input.Pressed( "Attack1" ) && Controller is { } controller ) RequestAttack( controller.EyeAngles.Forward );
 	}
+
+	/// <summary>Owner: set by the HUD while a panel has the cursor, so a click in a menu is not a punch.</summary>
+	public static bool UiBusy { get; set; }
+
+	/// <summary>Owner: the thing being looked at, if characters can act on it.</summary>
+	public Component? HoveredTarget => Controller?.Hovered?.GetComponent<IVerbTarget>() as Component;
 
 	protected override void OnFixedUpdate()
 	{
 		if ( !Networking.IsHost || _character is null || Controller is not { } controller ) return;
 		var limit = MathF.Max( controller.RunSpeed, controller.WalkSpeed ) * SpeedTolerance;
 		if ( _open is not null && !HostOpenIsValid() ) HostClose();
+		HostVitalsTick( GameManager.Instance! );
 		if ( _movement.Observe( WorldPosition, Time.Now, limit ) ) return;
 		var claimed = WorldPosition;
 		HostRecord( "movement.implausible", ok: false, data: ("claimed", $"{claimed.x:0},{claimed.y:0},{claimed.z:0}") );
@@ -119,18 +141,20 @@ public sealed partial class Player : Component
 		using ( Rpc.FilterInclude( owner ) ) ReceiveTeleport( position );
 	}
 
-	/// <summary>Unable to act on the world. States such as being downed or restrained feed this.</summary>
-	public bool IsIncapable => false;
-
 	private PlayerController? Controller => GetComponent<PlayerController>( true );
 
 	/// <summary>A connection without a character is in the menu: no body in the world, no movement.</summary>
 	private void ApplyPresence()
 	{
 		if ( Controller is not { } controller ) return;
-		if ( controller.Renderer.IsValid() ) controller.Renderer.GameObject.Enabled = HasCharacter;
+		if ( controller.Renderer.IsValid() )
+		{
+			controller.Renderer.GameObject.Enabled = HasCharacter;
+			// Someone who is down lies down. It is crude, and it is visible from across the street.
+			controller.Renderer.GameObject.LocalRotation = IsDown ? Rotation.From( -90, 0, 0 ) : Rotation.Identity;
+		}
 		if ( IsProxy ) return;
-		controller.UseInputControls = HasCharacter;
+		controller.UseInputControls = HasCharacter && !IsDown;
 		controller.UseLookControls = HasCharacter;
 		controller.UseCameraControls = HasCharacter;
 	}
@@ -212,8 +236,10 @@ public sealed partial class Player : Component
 	private void SendPrivateState()
 	{
 		if ( _character is null || Network.Owner is not { } owner ) return;
+		// Private state changes whenever the inventory does, which is also when what is in hand may have left it.
+		HostSyncVitals();
 		using ( Rpc.FilterInclude( owner ) )
-			ReceivePrivateState( _character.Name, _character.Faction, JsonSerializer.Serialize( _character.Inventory ), _character.Tokens );
+			ReceivePrivateState( _character.Name, _character.Faction, JsonSerializer.Serialize( _character.Inventory ), _character.Tokens, JsonSerializer.Serialize( _character.Known ), _character.Health );
 	}
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
@@ -223,14 +249,17 @@ public sealed partial class Player : Component
 		// The list is only ever sent to a player in the menu, so whatever character they had is gone.
 		CharacterName = string.Empty;
 		FactionPath = string.Empty;
+		Known = new Dictionary<Guid, string>();
 		Inventory = null;
 		Tokens = 0;
 		PrivateVersion++;
 	}
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
-	private void ReceivePrivateState( string name, string factionPath, string inventoryJson, long tokens )
+	private void ReceivePrivateState( string name, string factionPath, string inventoryJson, long tokens, string knownJson, int health )
 	{
+		Health = health;
+		Known = JsonSerializer.Deserialize<Dictionary<Guid, string>>( knownJson ) ?? new Dictionary<Guid, string>();
 		CharacterName = name;
 		FactionPath = factionPath;
 		Inventory = JsonSerializer.Deserialize<InventoryData>( inventoryJson );

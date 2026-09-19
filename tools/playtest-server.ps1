@@ -110,10 +110,18 @@ try {
 
     Write-Host '==> Speech reaches who is in range, and nobody else' -ForegroundColor Cyan
     [void](Send 1 'say|Morning')
-    Expect 'speech reached a listener 60 units away' (Send 2 'state') 'John Doe says "Morning"'
+    $heard = Send 2 'state'
+    Expect 'speech reached a listener 60 units away, from a stranger' $heard '\[A tired resident of the city\.\] says "Morning"'
+    Expect 'and did not carry his name' $heard 'chat=\[.*John Doe' -Not
+    [void](Send 1 'introduce')
+    [void](Send 1 'say|I am John')
+    $heard = Send 2 'state'
+    Expect 'once he introduced himself, she knows him' $heard 'known=\[John Doe\].*John Doe says "I am John"'
+    Expect 'telling is one way: he still sees a stranger' (Send 1 'proxies') "label='\[A woman in a grey coat"
     Expect 'the journal names who heard it' (Send 0 'journal|chat.say') "actor='John Doe' witnesses=1"
     [void](Send 0 'console|hexagon_teleport "Jane Roe" 440 -150 60')
     Start-Sleep -Seconds 2
+    Write-Host "       $(Send 0 'who')" -ForegroundColor DarkGray
     [void](Send 1 'say|/w keep this quiet')
     [void](Send 1 'say|Still here')
     $heard = Send 2 'state'
@@ -126,7 +134,7 @@ try {
     [void](Send 1 'say|//back in five')
     $heard = Send 2 'state'
     Expect 'a yell did not carry 1260 units' $heard 'can anyone hear me' -Not
-    Expect 'out-of-character chat reached everyone' $heard '\[OOC\] John Doe: back in five'
+    Expect 'out-of-character chat reached everyone' $heard '\[OOC\] [^:/]+: back in five'
 
     Write-Host '==> A claimed position buys nothing' -ForegroundColor Cyan
     # goto is what a cheat does: the client simply declares itself somewhere else.
@@ -144,6 +152,56 @@ try {
     Expect 'a door one player opened is open for the other' (Send 2 'state') 'Door 1:open=True'
     [void](Send 2 'door|Door 1|use')
     Expect 'and out of reach for a player far away' (Send 2 'state') 'Door 1:open=True.*too far away'
+
+    Write-Host '==> Violence is slow, visible and on the record' -ForegroundColor Cyan
+    [void](Send 0 'console|hexagon_teleport "Jane Roe" 300 -150 60')
+    foreach ($gift in 'pistol', 'pistol_round', 'pistol_round', 'pistol_round', 'pistol_round', 'zip_tie') { [void](Send 0 "console|hexagon_give `"John Doe`" $gift") }
+    Start-Sleep -Seconds 2
+    [void](Send 1 'equip|2')
+    Expect 'a drawn pistol is something anyone can see' (Send 2 'proxies') "held='Pistol'"
+    foreach ($shot in 1..3) { [void](Send 1 'attack'); Start-Sleep -Milliseconds 300 }
+    $state = Send 2 'state'
+    Expect 'three shots put her down, not out' $state 'has=True .*health=0 down=True'
+    Expect 'he sees her fall but not her health' (Send 1 'proxies') 'down=True .*health=0 has=True'
+    $journal = Send 0 'journal'
+    Expect 'each shot, and the fall, are on record' $journal 'combat\.attack=3 .*character\.downed=1'
+    Expect 'each shot used up a round' "rounds=$([regex]::Matches((Send 1 'state'), 'Pistol round@').Count)" '^rounds=1$'
+    [void](Send 2 'leave')
+    Expect 'she cannot leave the scene' (Send 2 'state') 'has=True .*cannot leave the city like this'
+
+    Write-Host '==> Searching is opening a holder' -ForegroundColor Cyan
+    [void](Send 1 'act|person.search')
+    Expect 'he sees what she carries' (Send 1 'state') 'open=\[Belongings: Ration, Water\]'
+    Expect 'and she is told' (Send 2 'state') 'going through your belongings'
+    [void](Send 1 'take|0')
+    Expect 'what he took left her inventory' (Send 2 'state') 'items=\[Water@'
+    [void](Send 1 'act|person.revive')
+    Expect 'helped up, she is no longer searchable' "$(Send 2 'state') $(Send 1 'state')" 'health=25 down=False .*open=\[: \]'
+
+    Write-Host '==> Restraints' -ForegroundColor Cyan
+    [void](Send 2 'act|person.restrain')
+    Expect 'she has nothing to bind him with' (Send 2 'state') 'nothing that lets you do that'
+    [void](Send 1 'act|person.restrain')
+    Expect 'his zip tie bound her, and was used up' "$(Send 2 'state') $(Send 1 'state')" 'restrained=True .*Your hands are bound.*items=\[(?!.*Zip tie)'
+    [void](Send 2 'drop|0')
+    Expect 'bound hands do nothing' (Send 2 'state') 'items=\[Water@.*cannot do that now'
+    [void](Send 1 'act|person.release')
+    Expect 'released' (Send 2 'state') 'restrained=False'
+
+    Write-Host '==> Death is a deliberate act, and leaves a body' -ForegroundColor Cyan
+    [void](Send 1 'act|person.finish')
+    Expect 'someone standing cannot be finished: the verb is not even offered' (Send 0 'journal') 'character\.death|verb\.person\.finish' -Not
+    [void](Send 1 'attack')
+    Start-Sleep -Milliseconds 500
+    [void](Send 1 'act|person.finish')
+    Start-Sleep -Seconds 2
+    Expect 'she woke elsewhere, whole, with nothing' (Send 2 'state') 'tokens=0 .*items=\[\] .*health=100 down=False'
+    Expect 'the death is on record' (Send 0 'journal') 'character\.death=1'
+    [void](Send 1 'act|corpse.search')
+    Expect 'what she carried is on the body' (Send 1 'state') 'bodies=1 opentokens=100 .*open=\[Body: Water\]'
+    [void](Send 1 'taketokens')
+    [void](Send 1 'take|0')
+    Expect 'emptied, the body is gone, and nothing was created or lost' (Send 1 'state') 'tokens=200 .*bodies=0'
 
     Write-Host '==> Leaving' -ForegroundColor Cyan
     Stop-Process -Id $clients[1].Id -Force

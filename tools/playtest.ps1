@@ -134,7 +134,7 @@ try {
     Expect 'the owner was told its own name and faction' $state "has=True name='John Doe' faction='Citizen' tokens=100"
     Expect 'the faction asset granted starting items' $state 'Water@'
     Expect 'an item moved to the requested cell' $state 'Ration@4,3'
-    Expect 'speech, emote and out-of-character lines were delivered' $state 'says "Hello there" / \*\* John Doe waves / \[OOC\] John Doe: brb'
+    Expect 'speech, emote and out-of-character lines were delivered' $state 'John Doe says "Hello there" / \*\* John Doe waves / \[OOC\] [^:/]+: brb'
 
     Write-Host '==> Doors' -ForegroundColor Cyan
     [void](Send 'door|Door 1|use')
@@ -186,6 +186,22 @@ try {
     [void](Send 'close')
     Expect 'the crate closed' (Send 'state') 'open=\[: \]'
 
+    Write-Host '==> Harm, and being down' -ForegroundColor Cyan
+    [void](Send 'console|hexagon_hurt "John Doe" 40')
+    [void](Send 'console|hexagon_give "John Doe" bandage')
+    Expect 'harm lowered health' (Send 'state') 'health=60 down=False'
+    [void](Send 'use|1')
+    Expect 'a bandage treated it and was used up' (Send 'state') 'health=90 .*binds a wound'
+    [void](Send 'console|hexagon_hurt "John Doe" 500')
+    [void](Send 'door|Door 1|use')
+    [void](Send 'leave')
+    $state = Send 'state'
+    Expect 'at no health the character is down, not dead' $state 'has=True .*health=0 down=True'
+    Expect 'someone who is down cannot leave the city' $state 'cannot leave the city like this'
+    Expect 'or act on the world' (Send 'journal|verb.door.use') 'ok=False'
+    [void](Send 'console|hexagon_revive "John Doe"')
+    Expect 'helped up, barely' (Send 'state') 'health=25 down=False'
+
     Write-Host '==> Faction gate' -ForegroundColor Cyan
     $steamId = Send 'steamid'
     [void](Send 'leave')
@@ -219,13 +235,13 @@ try {
     Write-Host '==> The journal' -ForegroundColor Cyan
     $journal = Send 'journal'
     Expect 'starting tokens were issued once per character' $journal 'tokens\.issue=2(\s|$)'
-    Expect 'every item came from a named source' $journal 'item\.issue=5(\s|$)'
-    Expect 'the drink went through a sink' $journal 'item\.destroy=1(\s|$)'
+    Expect 'every item came from a named source' $journal 'item\.issue=6(\s|$)'
+    Expect 'the drink went through a sink' $journal 'item\.destroy=2(\s|$)'
     Expect 'refused locks are on record' $journal 'verb\.door\.lock!=3(\s|$)'
-    Expect 'refused uses are on record' $journal 'verb\.door\.use!=3(\s|$)'
+    Expect 'refused uses are on record' $journal 'verb\.door\.use!=4(\s|$)'
     Expect 'allowed acts are on record' $journal 'verb\.door\.lock=3(\s|$)'
     Expect 'the operator is on record too' $journal 'operator\.whitelist=1(\s|$)'
-    Expect 'speech is on record' $journal 'chat\.say=1 .*chat\.me=1 .*chat\.ooc=1'
+    Expect 'speech is on record' $journal 'chat\.say=1 .*chat\.me=3 .*chat\.ooc=1.*item\.move=3'
     Expect 'this client was told no other name' (Send 'proxies') '^[^A-Za-z]*$'
 
     # The editor sometimes looks the driver's type up while the assembly is still loading. That is

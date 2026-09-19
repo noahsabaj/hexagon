@@ -124,7 +124,7 @@ public static class DevCommands
 		if ( args[0] == "who" )
 			return $"local={Player.Local is not null} connection={Connection.Local?.DisplayName} host={Networking.IsHost} active={Networking.IsActive} scene={Game.ActiveScene?.Name} pawns=[" +
 				string.Join( ", ", Game.ActiveScene?.GetAllComponents<Player>().Select( value =>
-					$"{value.GameObject.Name}: proxy={value.IsProxy} owner={value.Network.Owner?.DisplayName} netactive={value.Network.Active}" ) ?? Array.Empty<string>() ) + "]";
+					$"{value.GameObject.Name}: proxy={value.IsProxy} owner={value.Network.Owner?.DisplayName} netactive={value.Network.Active} claimed={value.WorldPosition} believed={value.HostPosition}" ) ?? Array.Empty<string>() ) + "]";
 		if ( args[0] == "journal" )
 		{
 			// Today's journal as kind=count, refusals marked, so a test can assert what was remembered.
@@ -211,10 +211,37 @@ public static class DevCommands
 				case "close":
 					player.RequestCloseHolder();
 					return "sent close";
+				case "act":
+					// A verb on the nearest other character, or on a body.
+					Component? subject = args[1].StartsWith( "corpse." )
+						? Game.ActiveScene.GetAllComponents<Corpse>().FirstOrDefault()
+						: Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy && value.HasCharacter )
+							.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();
+					if ( subject is null ) return "nobody there";
+					player.RequestAct( subject, args[1] );
+					return $"sent {args[1]}";
+				case "attack":
+					var foe = Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy && value.HasCharacter )
+						.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();
+					player.RequestAttack( foe is null ? Vector3.Forward : foe.WorldPosition - player.WorldPosition );
+					return "sent attack";
+				case "equip":
+					var inHand = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					if ( inHand is null ) return "no such item";
+					player.RequestItemAct( inHand.Id, "item.equip" );
+					return "sent equip";
+				case "taketokens":
+					player.RequestTakeTokens();
+					return "sent taketokens";
+				case "introduce":
+					var stranger = Game.ActiveScene.GetAllComponents<Player>().FirstOrDefault( value => value.IsProxy && value.HasCharacter );
+					if ( stranger is null ) return "nobody to meet";
+					player.RequestAct( stranger, "person.introduce" );
+					return "sent introduce";
 				case "proxies":
 					// What this client was told about everyone else. Names and factions must be empty.
 					return string.Join( " ; ", Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy )
-						.Select( value => $"has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}' seen='{value.CharacterDescription}'" ) );
+						.Select( value => $"down={value.IsDown} restrained={value.IsRestrained} held='{ItemDefinition.Find( value.HeldItemPath )?.Title}' health={value.Health} has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}' seen='{value.CharacterDescription}' label='{player.LabelFor( value )}'" ) );
 				case "steamid":
 					return Connection.Local.SteamId.ValueUnsigned.ToString();
 				case "net":
@@ -229,6 +256,8 @@ public static class DevCommands
 						$"characters=[{string.Join( ", ", player.Characters.Select( value => value.Name ) )}] " +
 						$"items=[{string.Join( ", ", player.Inventory?.Items.Select( value => $"{ItemDefinition.Find( value.Definition )?.Title}@{value.X},{value.Y}" ) ?? Array.Empty<string>() )}] " +
 						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked}" ) )}] " +
+						$"health={player.Health} down={player.IsDown} restrained={player.IsRestrained} held='{ItemDefinition.Find( player.HeldItemPath )?.Title}' bodies={Game.ActiveScene.GetAllComponents<Corpse>().Count()} opentokens={player.OpenTokens} " +
+						$"known=[{string.Join( ", ", player.Known.Values.OrderBy( value => value ) )}] " +
 						$"open=[{player.OpenTitle}: {string.Join( ", ", player.OpenInventory?.Items.Select( value => ItemDefinition.Find( value.Definition )?.Title ) ?? Array.Empty<string?>() )}] " +
 						$"ground=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<WorldItem>().Select( value => value.Definition?.Title ).OrderBy( value => value ) )}] " +
 						$"pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";

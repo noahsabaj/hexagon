@@ -29,6 +29,17 @@ public sealed class GameManager : Component, Component.INetworkListener
 
 	[Property] public float AutosaveSeconds { get; set; } = 60f;
 
+	/// <summary>What death means in this game. Hexagon supplies the pipeline; this is the policy.</summary>
+	[Property, Group( "Death" )] public DeathPolicy Death { get; set; } = DeathPolicy.Respawn;
+	/// <summary>Whether a dying character leaves a body holding what it carried.</summary>
+	[Property, Group( "Death" )] public bool DeathDropsBelongings { get; set; } = true;
+	/// <summary>How long a character stays down before it bleeds out. Zero means until someone acts.</summary>
+	[Property, Group( "Death" )] public float DownedSeconds { get; set; } = 180f;
+	/// <summary>Whether bleeding out is death. Otherwise the character gets back up, barely.</summary>
+	[Property, Group( "Death" )] public bool BleedOutKills { get; set; }
+	/// <summary>A capability needed to finish someone who is down, or empty for anyone.</summary>
+	[Property, Group( "Death" )] public string FinishRequires { get; set; } = string.Empty;
+
 	/// <summary>Host: every connection that is not the host itself, in the order they joined.</summary>
 	public IReadOnlyList<Connection> Clients =>
 		_clients.Select( id => Connection.All.FirstOrDefault( value => value.Id == id ) ).Where( value => value is not null ).ToArray()!;
@@ -74,6 +85,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 			// What was lying on the ground when the server stopped is still lying there.
 			_worldRestored = true;
 			foreach ( var ground in Holders.OfKind( HolderKinds.Ground ) ) WorldItem.Spawn( ground );
+			foreach ( var body in Holders.OfKind( HolderKinds.Corpse ) ) Corpse.Spawn( body );
 		}
 		if ( !Networking.IsHost || Roster is null || _sinceAutosave < AutosaveSeconds ) return;
 		_sinceAutosave = 0;

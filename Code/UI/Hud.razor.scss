@@ -166,3 +166,15 @@ Hud {
 		}
 	}
 }
+
+.verbs {
+	position: absolute;
+	left: 52%;
+	top: 52%;
+	flex-direction: column;
+	padding: 8px 12px;
+	background-color: rgba( 10, 14, 18, 0.7 );
+	border-radius: 6px;
+	font-size: 16px;
+	color: #d8e2ea;
+}

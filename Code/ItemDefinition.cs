@@ -22,6 +22,17 @@ public sealed class ItemDefinition : GameResource
 	/// <summary>What those nearby see when it is used, such as "eats a ration".</summary>
 	[Property] public string UseEmote { get; set; } = string.Empty;
 
+	/// <summary>Health restored by using it. Only consumables heal.</summary>
+	[Property] public int Heals { get; set; }
+
+	/// <summary>Harm done per attack while it is in hand. Zero means it is not a weapon.</summary>
+	[Property] public int Damage { get; set; }
+	[Property] public float Range { get; set; } = 1500f;
+	/// <summary>Seconds between attacks.</summary>
+	[Property] public float Cooldown { get; set; } = 0.5f;
+	/// <summary>The item each attack uses up, or none for a weapon that needs no ammunition.</summary>
+	[Property] public ItemDefinition? Ammo { get; set; }
+
 	/// <summary>What holding this lets a character do. A key is an item that grants <c>door.lock</c>.</summary>
 	[Property] public List<string> Grants { get; set; } = new();
 

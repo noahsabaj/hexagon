@@ -121,6 +121,23 @@ public sealed class LawTests
 	}
 
 	[TestMethod]
+	public void AStrangerIsWhatTheyLookLikeUntilTheyIntroduceThemselves()
+	{
+		var john = new CharacterData { Id = Guid.NewGuid(), Name = "John Doe", Description = "A tired resident of the city." };
+		var jane = new CharacterData { Id = Guid.NewGuid(), Name = "Jane Roe", Description = "A woman in a grey coat, watching the street from a doorway." };
+
+		Assert.AreEqual( "John Doe", Recognition.Label( john, john ), "everyone knows their own name" );
+		Assert.AreEqual( "[A tired resident of the city.]", Recognition.Label( jane, john ) );
+		Assert.AreEqual( "[A woman in a grey coat, watching the str...]", Recognition.Label( john, jane ) );
+
+		Assert.IsTrue( Recognition.Introduce( john, jane ).Ok );
+		Assert.AreEqual( "John Doe", Recognition.Label( jane, john ) );
+		Assert.AreEqual( "[A woman in a grey coat, watching the str...]", Recognition.Label( john, jane ), "telling is one way" );
+		Assert.AreEqual( ErrorCode.Conflict, Recognition.Introduce( john, jane ).Code );
+		Assert.AreEqual( ErrorCode.Invalid, Recognition.Introduce( john, john ).Code );
+	}
+
+	[TestMethod]
 	public void CapabilitiesAreGrantedByNameOrPrefixAndDenialWins()
 	{
 		Assert.IsTrue( Capabilities.Can( Capability.DoorLock, new[] { "door.lock" } ) );

@@ -64,6 +64,64 @@ public sealed class Container : Component, Component.IPressable, IVerbTarget
 }
 
 /// <summary>
+/// What a character carried, left where it fell. It is a holder like a crate, put into the world at
+/// run time like a dropped item, and it goes once it has been emptied.
+/// </summary>
+[Title( "Hexagon Corpse" ), Category( "Hexagon" ), Icon( "airline_seat_flat" )]
+public sealed class Corpse : Component, Component.IPressable, IVerbTarget
+{
+	private static readonly Verb Search = new( "corpse.search", "Search" );
+
+	public Guid HolderId { get; private set; }
+	public IReadOnlyList<Verb> Verbs { get; } = new[] { Search };
+
+	public static Corpse? Spawn( HolderData holder )
+	{
+		if ( holder.Position is not { Length: 3 } at ) return null;
+		var body = new GameObject( true, "Body" );
+		body.WorldPosition = new Vector3( at[0], at[1], at[2] + 8f );
+		body.WorldScale = new Vector3( 1.4f, 0.5f, 0.3f );
+		body.Tags.Add( "corpse" );
+		var renderer = body.AddComponent<ModelRenderer>();
+		renderer.Model = Model.Load( "models/dev/box.vmdl" );
+		renderer.Tint = new Color( 0.35f, 0.3f, 0.3f );
+		var collider = body.AddComponent<BoxCollider>();
+		collider.Scale = new Vector3( 50, 50, 50 );
+		collider.Static = true;
+		var corpse = body.AddComponent<Corpse>();
+		corpse.HolderId = holder.Id;
+		body.NetworkSpawn();
+		return corpse;
+	}
+
+	/// <summary>Host: an emptied body is removed, along with its holder.</summary>
+	public static void RemoveIfEmpty( IHolder holder )
+	{
+		if ( holder is not HolderData { Kind: HolderKinds.Corpse } data || GameManager.Instance?.Holders is not { } holders ) return;
+		if ( !holders.Delete( data.Id ).Ok ) return;
+		foreach ( var corpse in Game.ActiveScene.GetAllComponents<Corpse>().Where( value => value.HolderId == data.Id ).ToArray() )
+			corpse.GameObject.Destroy();
+	}
+
+	bool IPressable.CanPress( IPressable.Event e ) => true;
+
+	bool IPressable.Press( IPressable.Event e )
+	{
+		Player.Local?.RequestAct( this, Search.Id );
+		return true;
+	}
+
+	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) => new IPressable.Tooltip( "Search the body", "airline_seat_flat", string.Empty );
+
+	Result IVerbTarget.Perform( Player actor, Verb verb )
+	{
+		if ( GameManager.Instance!.Holders!.Find( HolderId ) is not { } holder ) return Result.Fail( ErrorCode.NotFound, "There is nothing left." );
+		actor.HostOpen( this, holder, holder.Title );
+		return Result.Success();
+	}
+}
+
+/// <summary>
 /// An item lying in the world. It is a holder with one thing in it, so dropping and picking up are
 /// ordinary transfers and the item is the same object, with the same id, before and after. Anyone
 /// can see what it is; that is appearance.

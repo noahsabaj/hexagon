@@ -15,6 +15,7 @@ public sealed partial class Player
 	// Owner-side. Null when nothing is open.
 	public string OpenTitle { get; private set; } = string.Empty;
 	public InventoryData? OpenInventory { get; private set; }
+	public long OpenTokens { get; private set; }
 
 	// Host-side.
 	private IHolder? _open;
@@ -30,7 +31,7 @@ public sealed partial class Player
 		_openTarget = target;
 		_openTitle = title;
 		_openWhile = onlyWhile;
-		using ( Rpc.FilterInclude( owner ) ) ReceiveOpenHolder( title, JsonSerializer.Serialize( holder.Inventory ) );
+		using ( Rpc.FilterInclude( owner ) ) ReceiveOpenHolder( title, JsonSerializer.Serialize( holder.Inventory ), holder.Tokens );
 	}
 
 	public void HostClose()
@@ -40,7 +41,7 @@ public sealed partial class Player
 		_openTarget = null;
 		_openWhile = null;
 		if ( Network.Owner is not { } owner ) return;
-		using ( Rpc.FilterInclude( owner ) ) ReceiveOpenHolder( string.Empty, string.Empty );
+		using ( Rpc.FilterInclude( owner ) ) ReceiveOpenHolder( string.Empty, string.Empty, 0 );
 	}
 
 	/// <summary>Host: whether the open holder may still be used. Walking away, or the reason it was open ending, closes it.</summary>
@@ -59,7 +60,7 @@ public sealed partial class Player
 		{
 			if ( ReferenceEquals( player._character, holder ) ) player.SendPrivateState();
 			if ( !ReferenceEquals( player._open, holder ) || player.Network.Owner is not { } owner ) continue;
-			using ( Rpc.FilterInclude( owner ) ) player.ReceiveOpenHolder( player._openTitle, JsonSerializer.Serialize( holder.Inventory ) );
+			using ( Rpc.FilterInclude( owner ) ) player.ReceiveOpenHolder( player._openTitle, JsonSerializer.Serialize( holder.Inventory ), holder.Tokens );
 		}
 	}
 
@@ -88,9 +89,10 @@ public sealed partial class Player
 		_character is null ? Result.Fail( ErrorCode.Denied, "You have no character." ) : HostMove( holder, _character, itemId );
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
-	private void ReceiveOpenHolder( string title, string inventoryJson )
+	private void ReceiveOpenHolder( string title, string inventoryJson, long tokens )
 	{
 		OpenTitle = title;
+		OpenTokens = tokens;
 		OpenInventory = inventoryJson.Length == 0 ? null : JsonSerializer.Deserialize<InventoryData>( inventoryJson );
 		PrivateVersion++;
 	}
@@ -109,8 +111,34 @@ public sealed partial class Player
 			HostClose();
 			return;
 		}
-		var moved = taking ? HostMove( _open!, _character, itemId ) : HostMove( _character, _open!, itemId );
+		var open = _open!;
+		var moved = taking ? HostMove( open, _character, itemId ) : HostMove( _character, open, itemId );
 		if ( !moved.Ok ) Chat.Tell( caller, moved.Message );
+		Corpse.RemoveIfEmpty( open );
+	}
+
+	/// <summary>Takes every token the open holder has: a body's, a searched person's.</summary>
+	[Rpc.Host]
+	public void RequestTakeTokens()
+	{
+		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
+		if ( !HostOpenIsValid() )
+		{
+			HostClose();
+			return;
+		}
+		var open = _open!;
+		var taken = game.Transfers!.MoveTokens( open, _character, open.Tokens, Actor.Of( _character ) );
+		if ( !taken.Ok )
+		{
+			Chat.Tell( caller, taken.Message );
+			return;
+		}
+		HostSaveHolder( open );
+		HostSaveHolder( _character );
+		HostRefresh( open );
+		HostRefresh( _character );
+		Corpse.RemoveIfEmpty( open );
 	}
 
 	[Rpc.Host]
@@ -130,6 +158,7 @@ public sealed partial class Player
 		if ( IsIncapable ) outcome = Result.Fail( ErrorCode.Denied, "You cannot do that now." );
 		else if ( verbId == "item.drop" ) outcome = Drop( game, stack );
 		else if ( verbId == "item.use" && definition is { Consumable: true } ) outcome = Consume( game, stack, definition );
+		else if ( verbId == "item.equip" ) outcome = Equip( game, stack );
 		else outcome = Result.Fail( ErrorCode.Invalid, "That cannot be done with it." );
 		HostRecord( $"verb.{verbId}", $"item:{itemId:N}", outcome.Ok, ("definition", stack.Definition), ("reason", outcome.Code.ToString()) );
 		if ( !outcome.Ok ) Chat.Tell( caller, outcome.Message );
@@ -146,8 +175,22 @@ public sealed partial class Player
 		return moved;
 	}
 
+	/// <summary>Takes the item in hand, or puts it away if it already is. What is in hand is visible to everyone.</summary>
+	private Result Equip( GameManager game, ItemStack stack )
+	{
+		_character!.Equipped = _character.Equipped == stack.Id ? null : stack.Id;
+		game.Roster!.Save( _character );
+		SendPrivateState();
+		return Result.Success();
+	}
+
 	private Result Consume( GameManager game, ItemStack stack, ItemDefinition definition )
 	{
+		if ( definition.Heals > 0 )
+		{
+			var healed = Vitals.Heal( _character!, definition.Heals );
+			if ( !healed.Ok ) return healed;
+		}
 		var used = game.Transfers!.Destroy( Sinks.Consumed, _character!, stack.Id, Actor.Of( _character! ) );
 		if ( !used.Ok ) return used;
 		game.Roster!.Save( _character! );

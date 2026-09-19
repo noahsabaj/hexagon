@@ -71,7 +71,18 @@
 			<div class="name">@player.CharacterName</div>
 			<div class="muted">@(player.Faction?.Title ?? "Unaffiliated")</div>
 			<div class="muted">@player.Tokens.ToString( "N0" ) tokens</div>
+			<div class="muted">@(player.IsDown ? "Down" : player.IsRestrained ? "Restrained" : $"Health {player.Health}")</div>
 		</div>
+
+		@if ( !Player.UiBusy && player.HoveredTarget is IVerbTarget hovered )
+		{
+			<div class="verbs">
+				@foreach ( var (verb, index) in hovered.Verbs.Select( ( value, index ) => (value, index) ) )
+				{
+					<div class="line">[@(index == 0 ? "E" : index == 1 ? "R" : (index + 1).ToString())] @verb.Title</div>
+				}
+			</div>
+		}
 
 		<div class="chat @(ChatOpen ? "open" : "")">
 			<div class="lines">
@@ -104,6 +115,10 @@
 							}
 						</div>
 						<div class="actions">
+							@if ( player.OpenTokens > 0 )
+							{
+								<button class="primary" onclick=@(() => player.RequestTakeTokens())>Take @player.OpenTokens.ToString( "N0" ) tokens</button>
+							}
 							<button onclick=@(() => player.RequestCloseHolder())>Close</button>
 						</div>
 						<div class="muted">Click an item to take it.</div>
@@ -141,6 +156,7 @@
 						{
 							<button class="primary" onclick=@(() => ActOnSelected( "item.use" ))>@usable.UseTitle</button>
 						}
+						<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "item.equip" ))>Hold</button>
 						<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "item.drop" ))>Drop</button>
 						<button onclick=@(() => player.RequestLeaveCity())>Leave the city</button>
 					</div>
@@ -169,6 +185,7 @@
 
 	protected override void OnUpdate()
 	{
+		Player.UiBusy = ChatOpen || InventoryOpen || Player.Local?.OpenInventory is not null || Player.Local is not { HasCharacter: true };
 		if ( Player.Local is not { HasCharacter: true } )
 		{
 			ChatOpen = false;
@@ -242,6 +259,7 @@
 	protected override int BuildHash() => HashCode.Combine(
 		HashCode.Combine( Player.Local, Player.Local?.HasCharacter, Player.Local?.PrivateVersion, Player.Local?.CharacterName ),
 		HashCode.Combine( Chat.Version, ChatOpen, InventoryOpen, Selected, Creating, NewFaction ),
+		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.IsDown, Player.Local?.IsRestrained, (Player.Local?.HoveredTarget as Player)?.IsDown, (Player.Local?.HoveredTarget as Player)?.IsRestrained ),
 		// Lines and notices fade, so the panel must rebuild as time passes.
 		(int)RealTime.Now );
 }

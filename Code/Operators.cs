@@ -77,6 +77,38 @@ public static class Operators
 		Log.Info( $"Moved {target.HostCharacter.Name}." );
 	}
 
+	[ConCmd( "hexagon_revive" )]
+	public static void Revive( string characterName )
+	{
+		if ( !TryHost( out var game ) ) return;
+		var target = game.Scene.GetAllComponents<Player>()
+			.FirstOrDefault( value => value.HostCharacter?.Name.Equals( characterName, StringComparison.OrdinalIgnoreCase ) == true );
+		if ( target is null )
+		{
+			Log.Warning( "Usage: hexagon_revive \"<character name>\". The character must be in the city." );
+			return;
+		}
+		game.Journal!.Record( "operator.revive", Actor.Console, target.HostCharacter!.HolderLabel );
+		var revived = target.HostRevive();
+		Log.Info( revived.Ok ? $"Helped {target.HostCharacter.Name} up." : revived.Message );
+	}
+
+	[ConCmd( "hexagon_hurt" )]
+	public static void Hurt( string characterName, int amount )
+	{
+		if ( !TryHost( out var game ) ) return;
+		var target = game.Scene.GetAllComponents<Player>()
+			.FirstOrDefault( value => value.HostCharacter?.Name.Equals( characterName, StringComparison.OrdinalIgnoreCase ) == true );
+		if ( target is null || amount <= 0 )
+		{
+			Log.Warning( "Usage: hexagon_hurt \"<character name>\" <amount>. The character must be in the city." );
+			return;
+		}
+		game.Journal!.Record( "operator.hurt", Actor.Console, target.HostCharacter!.HolderLabel, data: ("amount", amount.ToString()) );
+		target.HostDamage( amount, null, "operator" );
+		Log.Info( $"Hurt {target.HostCharacter.Name} for {amount}." );
+	}
+
 	private static bool TryHost( out GameManager game )
 	{
 		game = GameManager.Instance!;

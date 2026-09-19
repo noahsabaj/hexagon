@@ -10,6 +10,7 @@ namespace Hexagon.Logic;
 public static class Capability
 {
 	public const string DoorLock = "door.lock";
+	public const string Restrain = "person.restrain";
 }
 
 /// <summary>

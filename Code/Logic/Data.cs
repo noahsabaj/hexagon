@@ -20,6 +20,13 @@ public sealed class CharacterData : IHolder
 	public DateTimeOffset CreatedAt { get; set; }
 	/// <summary>Where the character last stood, or null to use a spawn point.</summary>
 	public float[]? Position { get; set; }
+	public int Health { get; set; } = 100;
+	public bool IsDown { get; set; }
+	public bool IsRestrained { get; set; }
+	/// <summary>The item in hand, if any. Anyone can see what it is.</summary>
+	public Guid? Equipped { get; set; }
+	/// <summary>The characters who have introduced themselves to this one, and the name each gave.</summary>
+	public Dictionary<Guid, string> Known { get; set; } = new();
 
 	[JsonIgnore] public Guid HolderId => Id;
 	[JsonIgnore] public string HolderLabel => $"character:{Id:N}";

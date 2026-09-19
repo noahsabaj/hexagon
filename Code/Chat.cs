@@ -47,9 +47,15 @@ public static class Chat
 			where: new[] { origin.x, origin.y, origin.z },
 			witnesses: listeners.Where( listener => listener != speaker && listener.HostCharacter is not null ).Select( listener => listener.HostCharacter!.Id ),
 			data: ("text", message.Text) );
-		if ( listeners.Length == 0 ) return;
-		var line = ChatRules.Format( message.Channel, character.Name, message.Text );
-		using ( Rpc.FilterInclude( listeners.Select( listener => listener.Network.Owner! ) ) ) Receive( (int)message.Channel, line );
+		// Each listener gets their own line: the speaker's name if they know it, otherwise what they
+		// see. Out-of-character talk is between players, so it carries the player's name instead.
+		foreach ( var listener in listeners )
+		{
+			var label = message.Channel == ChatChannel.Ooc
+				? speaker.Network.Owner?.DisplayName ?? "Someone"
+				: listener.HostCharacter is { } hearing ? Recognition.Label( hearing, character ) : Recognition.Stranger( character.Description );
+			using ( Rpc.FilterInclude( listener.Network.Owner! ) ) Receive( (int)message.Channel, ChatRules.Format( message.Channel, label, message.Text ) );
+		}
 	}
 
 	/// <summary>Host: a line for one connection only, such as the reason an action was refused.</summary>

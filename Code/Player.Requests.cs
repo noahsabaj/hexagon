@@ -89,11 +89,13 @@ public sealed partial class Player
 
 		_character = character;
 		CharacterDescription = character.Description;
+		CharacterId = character.Id;
 		HasCharacter = true;
 		var position = character.Position is { Length: 3 } saved
 			? new Vector3( saved[0], saved[1], saved[2] )
 			: game.FindSpawn().Position;
 		HostTeleport( position );
+		_sinceDown = 0;
 		SendPrivateState();
 		HostRecord( "city.enter" );
 	}
@@ -102,13 +104,28 @@ public sealed partial class Player
 	public void RequestLeaveCity()
 	{
 		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
+		if ( IsIncapable )
+		{
+			// Walking out of a scene that has gone badly is not on offer. Disconnecting changes nothing
+			// either: the state is in the character's document and is waiting when it returns.
+			Chat.Tell( caller, "You cannot leave the city like this." );
+			return;
+		}
 		HostSave();
-		HostClose();
 		HostRecord( "city.leave" );
+		HostUnload();
+		SendCharacterList( caller, game );
+	}
+
+	/// <summary>Host: the character stops being in the city. The pawn stays, back in the menu.</summary>
+	private void HostUnload()
+	{
+		HostClose();
 		_character = null;
 		HasCharacter = false;
+		CharacterId = Guid.Empty;
 		CharacterDescription = string.Empty;
-		SendCharacterList( caller, game );
+		HostSyncVitals();
 	}
 
 	[Rpc.Host]
