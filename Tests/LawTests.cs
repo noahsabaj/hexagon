@@ -99,6 +99,28 @@ public sealed class LawTests
 	}
 
 	[TestMethod]
+	public void ACrateKeepsWhatWasPutInItAcrossARestartAndCannotVanishFull()
+	{
+		var files = new MemoryFiles();
+		var transfers = new Transfers( new Journal( files, () => Now ) );
+		var holders = new HolderStore( new DocumentStore( files ) );
+		var crateId = Guid.NewGuid();
+		var crate = holders.GetOrCreate( crateId, HolderKinds.Container, "Crate", 4, 4 );
+		var alice = Holder();
+		var ration = transfers.Issue( Sources.Operator, alice, "items/ration.item", 1, 1, Actor.Console );
+
+		Assert.IsTrue( transfers.Move( alice, crate, ration.Value.Id, Actor.Of( alice ) ).Ok );
+		holders.Save( crate );
+
+		var reloaded = new HolderStore( new DocumentStore( files.Reboot() ) );
+		Assert.AreEqual( ration.Value.Id, reloaded.Find( crateId )!.Inventory.Items.Single().Id );
+		Assert.AreSame( reloaded.Find( crateId ), reloaded.GetOrCreate( crateId, HolderKinds.Container, "Crate", 4, 4 ) );
+		Assert.AreEqual( ErrorCode.Conflict, reloaded.Delete( crateId ).Code, "deleting a full crate would delete what is in it" );
+		Assert.IsTrue( transfers.Move( reloaded.Find( crateId )!, alice, ration.Value.Id, Actor.Of( alice ) ).Ok );
+		Assert.IsTrue( reloaded.Delete( crateId ).Ok );
+	}
+
+	[TestMethod]
 	public void CapabilitiesAreGrantedByNameOrPrefixAndDenialWins()
 	{
 		Assert.IsTrue( Capabilities.Can( Capability.DoorLock, new[] { "door.lock" } ) );

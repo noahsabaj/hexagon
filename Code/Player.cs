@@ -104,6 +104,7 @@ public sealed partial class Player : Component
 	{
 		if ( !Networking.IsHost || _character is null || Controller is not { } controller ) return;
 		var limit = MathF.Max( controller.RunSpeed, controller.WalkSpeed ) * SpeedTolerance;
+		if ( _open is not null && !HostOpenIsValid() ) HostClose();
 		if ( _movement.Observe( WorldPosition, Time.Now, limit ) ) return;
 		var claimed = WorldPosition;
 		HostRecord( "movement.implausible", ok: false, data: ("claimed", $"{claimed.x:0},{claimed.y:0},{claimed.z:0}") );
@@ -117,6 +118,9 @@ public sealed partial class Player : Component
 		_movement.Reset( position, Time.Now );
 		using ( Rpc.FilterInclude( owner ) ) ReceiveTeleport( position );
 	}
+
+	/// <summary>Unable to act on the world. States such as being downed or restrained feed this.</summary>
+	public bool IsIncapable => false;
 
 	private PlayerController? Controller => GetComponent<PlayerController>( true );
 

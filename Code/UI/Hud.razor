@@ -86,9 +86,29 @@
 			}
 		</div>
 
-		@if ( InventoryOpen && player.Inventory is { } inventory )
+		@if ( (InventoryOpen || player.OpenInventory is not null) && player.Inventory is { } inventory )
 		{
 			<div class="center">
+				@if ( player.OpenInventory is { } other )
+				{
+					<div class="card">
+						<h1>@player.OpenTitle</h1>
+						<div class="grid" style="width: @(other.Width * 68)px; height: @(other.Height * 68)px;">
+							@foreach ( var item in other.Items )
+							{
+								<div class="item"
+									style="left: @(item.X * 68)px; top: @(item.Y * 68)px; width: @(item.Width * 68 - 4)px; height: @(item.Height * 68 - 4)px;"
+									onclick=@(() => player.RequestTake( item.Id ))>
+									@(ItemDefinition.Find( item.Definition )?.Title ?? "Unknown item")
+								</div>
+							}
+						</div>
+						<div class="actions">
+							<button onclick=@(() => player.RequestCloseHolder())>Close</button>
+						</div>
+						<div class="muted">Click an item to take it.</div>
+					</div>
+				}
 				<div class="card">
 					<h1>Inventory</h1>
 					<div class="grid" style="width: @(inventory.Width * 68)px; height: @(inventory.Height * 68)px;">
@@ -113,7 +133,15 @@
 						}
 					</div>
 					<div class="actions">
-						<button disabled=@(Selected is null) onclick=@DiscardSelected>Discard</button>
+						@if ( player.OpenInventory is not null )
+						{
+							<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "put" ))>Put in</button>
+						}
+						@if ( SelectedDefinition is { Consumable: true } usable )
+						{
+							<button class="primary" onclick=@(() => ActOnSelected( "item.use" ))>@usable.UseTitle</button>
+						}
+						<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "item.drop" ))>Drop</button>
 						<button onclick=@(() => player.RequestLeaveCity())>Leave the city</button>
 					</div>
 					<div class="muted">Select an item, then click an empty cell to move it.</div>
@@ -199,10 +227,14 @@
 		Selected = null;
 	}
 
-	private void DiscardSelected()
+	private ItemDefinition? SelectedDefinition =>
+		Player.Local?.Inventory?.Items.FirstOrDefault( value => value.Id == Selected ) is { } stack ? ItemDefinition.Find( stack.Definition ) : null;
+
+	private void ActOnSelected( string verb )
 	{
 		if ( Selected is not { } item ) return;
-		Player.Local?.RequestDiscardItem( item );
+		if ( verb == "put" ) Player.Local?.RequestPut( item );
+		else Player.Local?.RequestItemAct( item, verb );
 		Selected = null;
 	}
 

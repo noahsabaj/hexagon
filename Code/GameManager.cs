@@ -24,6 +24,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 	public DocumentStore? Store { get; private set; }
 	public Journal? Journal { get; private set; }
 	public Transfers? Transfers { get; private set; }
+	public HolderStore? Holders { get; private set; }
 	public WorldData World { get; private set; } = new();
 
 	[Property] public float AutosaveSeconds { get; set; } = 60f;
@@ -35,6 +36,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 	private readonly List<Guid> _clients = new();
 	private readonly Dictionary<long, AccountData> _accounts = new();
 	private RealTimeSince _sinceAutosave;
+	private bool _worldRestored;
 
 	protected override void OnAwake() => Instance = this;
 
@@ -58,6 +60,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 		Store = new DocumentStore( files, message => Log.Warning( $"[store] {message}" ) );
 		Journal = new Journal( files, warn: message => Log.Warning( $"[journal] {message}" ) );
 		Transfers = new Transfers( Journal );
+		Holders = new HolderStore( Store );
 		Roster = new CharacterRoster( Store );
 		World = Store.Load<WorldData>( "world.json" ) ?? new WorldData();
 		Log.Info( $"Hexagon host ready: {Roster.Count} characters, {World.Doors.Count} saved doors." );
@@ -66,6 +69,12 @@ public sealed class GameManager : Component, Component.INetworkListener
 	protected override void OnFixedUpdate()
 	{
 		Dev.DevCommands.PollInbox();
+		if ( !_worldRestored && Networking.IsHost && Networking.IsActive && Holders is not null )
+		{
+			// What was lying on the ground when the server stopped is still lying there.
+			_worldRestored = true;
+			foreach ( var ground in Holders.OfKind( HolderKinds.Ground ) ) WorldItem.Spawn( ground );
+		}
 		if ( !Networking.IsHost || Roster is null || _sinceAutosave < AutosaveSeconds ) return;
 		_sinceAutosave = 0;
 		foreach ( var player in Scene.GetAllComponents<Player>() ) player.HostSave();

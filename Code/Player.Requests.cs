@@ -103,6 +103,7 @@ public sealed partial class Player
 	{
 		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
 		HostSave();
+		HostClose();
 		HostRecord( "city.leave" );
 		_character = null;
 		HasCharacter = false;
@@ -134,16 +135,6 @@ public sealed partial class Player
 		SendPrivateState();
 	}
 
-	[Rpc.Host]
-	public void RequestDiscardItem( Guid itemId )
-	{
-		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
-		var removed = game.Transfers!.Destroy( Sinks.Discard, _character, itemId, Actor.Of( _character ) );
-		if ( removed.Ok ) game.Roster!.Save( _character );
-		else Chat.Tell( caller, removed.Message );
-		SendPrivateState();
-	}
-
 	/// <summary>
 	/// The one way a character acts on something in the world. The target only says what can be
 	/// done to it; this decides whether this character may, here, now, and records the answer.
@@ -156,7 +147,7 @@ public sealed partial class Player
 		if ( actable.Verbs.FirstOrDefault( value => value.Id == verbId ) is not { } verb ) return;
 
 		var subject = $"{target.GetType().Name}:{target.GameObject.Id:N}";
-		var outcome = Judge( target, actable, verb );
+		var outcome = IsIncapable ? Result.Fail( ErrorCode.Denied, "You cannot do that now." ) : Judge( target, actable, verb );
 		if ( outcome.Ok ) outcome = actable.Perform( this, verb );
 		HostRecord( $"verb.{verb.Id}", subject, outcome.Ok, ("target", target.GameObject.Name), ("reason", outcome.Code.ToString()) );
 		if ( !outcome.Ok ) Chat.Tell( caller, outcome.Message );

@@ -26,6 +26,8 @@ public static class Sources
 public static class Sinks
 {
 	public const string Discard = "discard";
+	/// <summary>Eaten, drunk, fired, used up.</summary>
+	public const string Consumed = "consumed";
 	public const string CharacterDeleted = "character.deleted";
 }
 

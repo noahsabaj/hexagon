@@ -182,11 +182,35 @@ public static class DevCommands
 					if ( door is null ) return "no such door";
 					player.RequestAct( door, args[2] == "lock" ? "door.lock" : "door.use" );
 					return $"sent door {args[2]}";
-				case "discard":
-					var unwanted = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
-					if ( unwanted is null ) return "no such item";
-					player.RequestDiscardItem( unwanted.Id );
-					return "sent discard";
+				case "drop":
+				case "use":
+					var held = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					if ( held is null ) return "no such item";
+					player.RequestItemAct( held.Id, $"item.{args[0]}" );
+					return $"sent {args[0]}";
+				case "pickup":
+					var lying = Game.ActiveScene.GetAllComponents<WorldItem>().FirstOrDefault( value => value.Definition?.Title == args[1] );
+					if ( lying is null ) return "nothing like that on the ground";
+					player.RequestAct( lying, "item.take" );
+					return "sent pickup";
+				case "open":
+					var container = Game.ActiveScene.GetAllComponents<Container>().FirstOrDefault( value => value.GameObject.Name == args[1] );
+					if ( container is null ) return "no such container";
+					player.RequestAct( container, "container.open" );
+					return "sent open";
+				case "take":
+					var wanted = player.OpenInventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					if ( wanted is null ) return "no such item";
+					player.RequestTake( wanted.Id );
+					return "sent take";
+				case "put":
+					var given = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					if ( given is null ) return "no such item";
+					player.RequestPut( given.Id );
+					return "sent put";
+				case "close":
+					player.RequestCloseHolder();
+					return "sent close";
 				case "proxies":
 					// What this client was told about everyone else. Names and factions must be empty.
 					return string.Join( " ; ", Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy )
@@ -205,6 +229,8 @@ public static class DevCommands
 						$"characters=[{string.Join( ", ", player.Characters.Select( value => value.Name ) )}] " +
 						$"items=[{string.Join( ", ", player.Inventory?.Items.Select( value => $"{ItemDefinition.Find( value.Definition )?.Title}@{value.X},{value.Y}" ) ?? Array.Empty<string>() )}] " +
 						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked}" ) )}] " +
+						$"open=[{player.OpenTitle}: {string.Join( ", ", player.OpenInventory?.Items.Select( value => ItemDefinition.Find( value.Definition )?.Title ) ?? Array.Empty<string?>() )}] " +
+						$"ground=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<WorldItem>().Select( value => value.Definition?.Title ).OrderBy( value => value ) )}] " +
 						$"pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";
 				default:
 					return $"unknown command '{args[0]}'";

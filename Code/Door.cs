@@ -45,10 +45,9 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 	/// </summary>
 	private void HostRestore()
 	{
-		if ( !Networking.IsHost || !Networking.IsActive || GameManager.Instance?.Roster is null ) return;
+		if ( !HostScene.Join( this ) ) return;
 		_restored = true;
-		if ( !Network.Active ) GameObject.NetworkSpawn();
-		if ( GameManager.Instance.World.Doors.TryGetValue( GameObject.Id, out var saved ) )
+		if ( GameManager.Instance!.World.Doors.TryGetValue( GameObject.Id, out var saved ) )
 		{
 			IsOpen = saved.IsOpen;
 			IsLocked = saved.IsLocked;

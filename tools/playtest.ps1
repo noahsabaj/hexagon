@@ -163,11 +163,28 @@ try {
     Expect 'an operator issued a keycard' $state 'Keycard@'
     Expect 'holding the keycard let a citizen lock the door' $state 'Door 1:open=False,locked=True'
     [void](Send 'door|Door 1|lock')
-    [void](Send 'discard|2')
+    [void](Send 'drop|2')
     [void](Send 'door|Door 1|lock')
     $state = Send 'state'
-    Expect 'the discarded keycard left the inventory' "$($state -notmatch 'Keycard@')" 'True'
+    Expect 'the dropped keycard left the inventory' "$($state -notmatch 'Keycard@')" 'True'
+    Expect 'and lies in the world' $state 'ground=\[Keycard\]'
     Expect 'without the keycard the door stayed unlocked' $state 'Door 1:open=False,locked=False.*nothing that lets you do that'
+
+    Write-Host '==> Holders: the ground, a crate' -ForegroundColor Cyan
+    [void](Send 'pickup|Keycard')
+    $state = Send 'state'
+    Expect 'picking it up is the same transfer in reverse' $state 'Keycard@.*ground=\[\]'
+    [void](Send 'open|Crate')
+    [void](Send 'put|2')
+    [void](Send 'door|Door 1|lock')
+    $state = Send 'state'
+    Expect 'the crate shows its contents to whoever opened it' $state 'open=\[Crate: Keycard\]'
+    Expect 'a keycard in a crate grants nothing' "$($state -notmatch 'Keycard@') $state" '^True .*Door 1:open=False,locked=False'
+    [void](Send 'use|1')
+    $state = Send 'state'
+    Expect 'drinking used the water up, in view of anyone nearby' "$($state -notmatch 'Water@') $state" '^True .*John Doe drinks from a can of water'
+    [void](Send 'close')
+    Expect 'the crate closed' (Send 'state') 'open=\[: \]'
 
     Write-Host '==> Faction gate' -ForegroundColor Cyan
     $steamId = Send 'steamid'
@@ -194,6 +211,8 @@ try {
     [void](Send 'enter|John Doe')
     $state = Send 'state'
     Expect 'the moved item survived the restart' $state 'Ration@4,3'
+    [void](Send 'open|Crate')
+    Expect 'what was put in the crate survived the restart' (Send 'state') 'open=\[Crate: Keycard\]'
     # The swinging door nudges the pawn, so this is a neighbourhood, not a point.
     Expect 'the character returned to where it stood' $state 'pos=2[2-5]\d\.?\d*,-1[2-6]\d'
 
@@ -201,8 +220,8 @@ try {
     $journal = Send 'journal'
     Expect 'starting tokens were issued once per character' $journal 'tokens\.issue=2(\s|$)'
     Expect 'every item came from a named source' $journal 'item\.issue=5(\s|$)'
-    Expect 'the discard went through a sink' $journal 'item\.destroy=1(\s|$)'
-    Expect 'refused locks are on record' $journal 'verb\.door\.lock!=2(\s|$)'
+    Expect 'the drink went through a sink' $journal 'item\.destroy=1(\s|$)'
+    Expect 'refused locks are on record' $journal 'verb\.door\.lock!=3(\s|$)'
     Expect 'refused uses are on record' $journal 'verb\.door\.use!=3(\s|$)'
     Expect 'allowed acts are on record' $journal 'verb\.door\.lock=3(\s|$)'
     Expect 'the operator is on record too' $journal 'operator\.whitelist=1(\s|$)'
