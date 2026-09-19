@@ -111,4 +111,4 @@ Typed in the host's console as `hexagon_<command>`, or by staff in game (Tab) wi
 
 The journal is `journal/<date>.jsonl` under the data folder, one JSON object per line.
 
-See [docs/decisions.md](docs/decisions.md) for why it is shaped this way and what is not here yet.
+[docs/v0.1.md](docs/v0.1.md) defines the first release as a checklist. See [docs/decisions.md](docs/decisions.md) for why it is shaped this way and what is not here yet.
