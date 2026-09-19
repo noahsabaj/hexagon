@@ -3,7 +3,8 @@
 These are Hexagon's. A game built on it keeps its own.
 
 One paragraph each, newest last. A decision records what was chosen and why, so it can be
-revisited when the reason stops being true.
+revisited when the reason stops being true. When a later decision changes an earlier one, the
+earlier entry is corrected in place and says so, so that nothing here contradicts the code.
 
 ## 2026-09-18: Rewrite game-first, in one project
 
@@ -62,7 +63,8 @@ free. Reach, chat range, witnesses and the saved position all read `Player.HostP
 claim, so a client that declares itself beside a door or a speaker gains nothing even in the moment
 before it is corrected. An unbelievable claim is journaled and the owner is sent back. When the
 host moves a character itself, claims from the old place are ignored until the owner arrives, but
-never accepted, so a host teleport is not a free one. The cost is that a client which stalls for
+never accepted, so a host teleport is not a free one. Only the host places a character: the audit
+never takes a client's claim as its starting point. The cost is that a client which stalls for
 over a second and then catches up is pulled back. The play tests use `goto`, which is exactly what
 a cheat does, to prove it fails, and the operator's `hexagon_teleport` to move characters honestly.
 
@@ -70,10 +72,12 @@ a cheat does, to prove it fails, and the operator's `hexagon_teleport` to move c
 
 Every broken feature in the old code was hidden by a test that faked the exact piece that was
 wrong. Here, pure rules get unit tests, and everything else is checked by `tools/playtest.ps1`,
-which plays the real game in the real editor through the editor's own control endpoint. The
-`DevDriver` component exists only for that. It is never placed in a scene, refuses to run outside
-the editor, and calls the same client requests the HUD calls, so it cannot pass a rule the real
-path would fail.
+which plays the real game in the real editor through the editor's own control endpoint, and by
+`tools/playtest-server.ps1`, described below. The `DevDriver` component and `DevCommands` exist only
+for those. The component is never placed in a scene; outside the editor the commands run only when
+the process was started with `+hexagon_dev 1`. They call the same client requests the HUD calls, so
+they cannot pass a rule the real path would fail. What they cannot do is click: the HUD is looked
+at in pictures the test saves, and played by a person.
 
 ## 2026-09-18: Carried over unchanged
 
@@ -96,9 +100,10 @@ name to those in earshot; recognition, below, closed that.
 **Conservation.** Items and tokens only move. `Transfers` is the single way either changes hands:
 between holders, in from a named source, out through a named sink. `InventoryGrid` no longer has
 an add or a remove. Starting items and tokens are issued from `character.start`, an operator's gift
-from `operator`, a discard goes to `discard`, and deleting a character sends what it held through
-`character.deleted`. An item keeps its id for life. A holder is anything with an inventory and
-tokens: a character today; crates, vendors, corpses and dropped items are the same thing later.
+from `operator`, and deleting a character sends what it held through `character.deleted`. An item
+that does not stack keeps its id for life; piles are followed by count, as decided later. A holder
+is anything with an inventory and tokens: a character, a crate, a vendor, a body, a dropped item.
+(Corrected: discarding was later removed, and the other holders now exist.)
 
 **Memory.** Every host decision is journaled: who, what, to what, where, who was near enough to
 see, and whether it was refused. The journal is an append-only file of JSON lines per day. It is
@@ -121,25 +126,26 @@ implements `IVerbTarget`: it lists its verbs and carries them out, nothing more.
 limit, reach, capability and the journal entry are decided in that one method, so a new target
 cannot forget one; the door's own requests were not rate-limited before this. It is deliberately
 not a hook bus. Nothing can veto someone else's verb, and extension is by adding components and
-assets. Until there is a verb menu, Use is a target's first verb and Reload its second.
+assets. Use is a target's first verb; the rest are chosen from a menu, as decided later.
 
 ## 2026-09-19: Hexagon supplies a death pipeline, not a death policy
 
 Whether death is permanent, who may finish a downed character and what is lost are a setting's
-choices. Hexagon will supply the downed state, the deliberate and journaled finishing act, and the
-settings a game chooses its policy with.
+choices. Hexagon supplies the downed state, the deliberate and journaled finishing act, and the
+settings a game chooses its policy with: `Death`, `DeathDropsBelongings`, `DownedSeconds`,
+`BleedOutKills` and `FinishRequires` on the game manager.
 
 ## 2026-09-19: Dedicated servers are the target
 
 A serious city needs a host that stays up and is not a player. Listen hosting still works and is
-what the play test uses, but the host's own client sees everything the host knows, so the
+what the editor play test uses, but the host's own client sees everything the host knows, so the
 perception law is only a guarantee on a dedicated server. Host migration stays refused.
 
 ## 2026-09-19: Each primitive arrives by moving a feature that already plays onto it
 
 The old code reached 440 passing tests with broken gameplay by building abstractions ahead of
 features. The journal, transfers, capabilities and verbs each came in by carrying door locking,
-discarding, the operator's give and character creation, and the play test stayed green throughout.
+discarding (since removed), the operator's give and character creation, and the play test stayed green throughout.
 A primitive that does not make the next feature smaller should be taken out again.
 
 Trades between two characters will touch two documents. `Transfers` changes memory and the caller
@@ -182,8 +188,9 @@ exception is the staff `who` command, which is journaled.
 leave the city, and part of the scene. Anyone can help them up or search them; finishing them is
 its own verb, journaled with its witnesses, and a game can require a capability for it. After
 `DownedSeconds` a downed character gets back up, or dies if the game sets `BleedOutKills`. What
-death means is `GameManager.Death`: respawn elsewhere without belongings, or permanent. Either way
-a body is left holding what was carried, and it is a holder like any other. Health, being down and
+death means is `GameManager.Death`: respawn elsewhere without belongings, or permanent. Unless the
+game turns `DeathDropsBelongings` off, a body is left holding what was carried, if anything was, and
+it is a holder like any other. Health, being down and
 being restrained are in the character's document, so disconnecting escapes nothing. How hurt
 someone else is cannot be read off them; that they are down, bound or armed can.
 

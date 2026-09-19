@@ -150,6 +150,29 @@
 				{
 					<div class="card">
 						<h1>@player.OpenTitle</h1>
+						@if ( player.OpenTarget is Vendor counter )
+						{
+							<div class="pricelist">
+								@foreach ( var item in other.Items )
+								{
+									var goods = ItemDefinition.Find( item.Definition );
+									<div class="row">
+										<div class="grow">
+											<div class="name">@(goods?.Title ?? "Unknown item")</div>
+											<div class="muted">@item.Count in stock</div>
+										</div>
+										<div class="price">@counter.SellPrice( goods ).ToString( "N0" ) tokens</div>
+										<button class="primary" onclick=@(() => player.RequestTake( item.Id ))>Buy one</button>
+									</div>
+								}
+								@if ( other.Items.Count == 0 )
+								{
+									<div class="muted">The shelves are empty.</div>
+								}
+							</div>
+						}
+						else
+						{
 						<div class="grid" style="width: @(other.Width * 68)px; height: @(other.Height * 68)px;">
 							@foreach ( var item in other.Items )
 							{
@@ -161,13 +184,10 @@
 									{
 										<div class="count">@item.Count</div>
 									}
-									@if ( player.OpenTarget is Vendor shop )
-									{
-										<div class="muted">@shop.SellPrice( ItemDefinition.Find( item.Definition ) ) tokens each</div>
-									}
 								</div>
 							}
 						</div>
+						}
 						<div class="actions">
 							@if ( player.OpenTokens > 0 && player.OpenTarget is not Vendor )
 							{
@@ -175,7 +195,7 @@
 							}
 							<button onclick=@(() => player.RequestCloseHolder())>Close</button>
 						</div>
-						<div class="muted">@(player.OpenTarget is Vendor ? "Click an item to buy one." : "Click an item to take it.")</div>
+						<div class="muted">@(player.OpenTarget is Vendor ? "To sell, select something of yours. It pays what it offers, from its own till." : "Click an item to take it.")</div>
 					</div>
 				}
 				<div class="card">
@@ -221,7 +241,7 @@
 						@if ( player.OpenInventory is not null )
 						{
 							<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "put" ))>
-								@(player.OpenTarget is Vendor buyer ? (buyer.BuyPrice( SelectedDefinition ) is { } offer ? $"Sell for {offer}" : "Not wanted") : "Put in")
+								@(player.OpenTarget is not Vendor buyer ? "Put in" : Selected is null ? "Sell" : buyer.BuyPrice( SelectedDefinition ) is { } offer ? $"Sell one for {offer}" : "Not wanted here")
 							</button>
 						}
 						@if ( SelectedDefinition is { Consumable: true } usable )

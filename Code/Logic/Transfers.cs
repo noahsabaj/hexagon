@@ -26,7 +26,6 @@ public static class Sources
 /// <summary>Where items and tokens may leave the world.</summary>
 public static class Sinks
 {
-	public const string Discard = "discard";
 	/// <summary>Eaten, drunk, fired, used up.</summary>
 	public const string Consumed = "consumed";
 	public const string CharacterDeleted = "character.deleted";

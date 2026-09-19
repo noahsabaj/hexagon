@@ -97,7 +97,7 @@ public sealed class LawTests
 		Assert.AreEqual( ErrorCode.Conflict, transfers.MoveTokens( alice, bob, 71, Actor.Of( alice ) ).Code, "no debt" );
 		Assert.AreEqual( ErrorCode.Invalid, transfers.MoveTokens( bob, alice, -30, Actor.Of( bob ) ).Code, "a negative gift is a theft" );
 		Assert.AreEqual( ErrorCode.Invalid, transfers.MoveTokens( alice, alice, 5, Actor.Of( alice ) ).Code );
-		Assert.IsTrue( transfers.DestroyTokens( Sinks.Discard, bob, 10, Actor.Of( bob ) ).Ok );
+		Assert.IsTrue( transfers.DestroyTokens( Sinks.Property, bob, 10, Actor.Of( bob ) ).Ok );
 
 		long Sum( string kind ) => journal.Read( Now ).Where( entry => entry.Kind == kind ).Sum( entry => long.Parse( entry.Data["amount"] ) );
 		Assert.AreEqual( 90, alice.Tokens + bob.Tokens );

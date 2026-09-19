@@ -129,6 +129,7 @@ try {
     Write-Host '==> Characters' -ForegroundColor Cyan
     Start-Play
     Expect 'a new city has no characters' (Send 'state') 'has=False .*characters=\[\]'
+    Snapshot 'characters'
     [void](Send "create|John Doe|$description|citizen")
     [void](Send "create|J0hn Doe|$description|citizen")
     [void](Send "create|Officer Kane|$description|civil_protection")
@@ -222,6 +223,7 @@ try {
     Expect 'buying a door paid its price into a sink' $state 'tokens=50 .*Door 2:open=False,locked=False,owned'
     [void](Send 'open|Ration Vendor')
     Expect 'the vendor stocked its shelves from its declared source, and has a float' (Send 'state') 'opentokens=200 .*open=\[Ration Vendor: Rationx3, Waterx3, Bandagex3\]'
+    Snapshot 'vendor'
     [void](Send 'take|0')
     Expect 'taking from a vendor is buying one, which joins the pile' (Send 'state') 'tokens=40 .*Rationx2@4,3.*opentokens=210 .*open=\[Ration Vendor: Rationx2,'
     [void](Send 'put|0')
@@ -237,6 +239,9 @@ try {
     [void](Send "console|hexagon_staff $steamId 1")
     [void](Send 'staff|who')
     Expect 'staff status comes only from the console, and then who is who is visible' (Send 'state') 'staff=True said=\[[^/]* is John Doe at '
+    [void](Send 'panel|staff')
+    Snapshot 'staff'
+    [void](Send 'panel|none')
     [void](Send 'staff|give "John Doe" radio')
     Expect 'a staff command does what the console command does' (Send 'state') 'Radio@.*said=\[Gave Radio to John Doe\.\]'
     [void](Send 'staff|journal door.buy')

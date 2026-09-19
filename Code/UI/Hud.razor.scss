@@ -189,6 +189,22 @@ Hud {
 	color: #d8e2ea;
 }
 
+.pricelist {
+	flex-direction: column;
+	width: 380px;
+
+	.row {
+		align-items: center;
+		padding: 6px 0;
+		border-bottom: 1px solid rgba( 159, 211, 238, 0.15 );
+	}
+
+	.price {
+		margin: 0 12px;
+		color: #e7c98a;
+	}
+}
+
 .keys {
 	position: absolute;
 	right: 24px;
