@@ -16,8 +16,11 @@ public sealed class FactionDefinition : GameResource
 	/// <summary>When set, an operator must whitelist the account before it can create a character here.</summary>
 	[Property] public bool RequiresWhitelist { get; set; }
 
-	/// <summary>Members may lock and unlock doors.</summary>
-	[Property] public bool CanLockDoors { get; set; }
+	/// <summary>What members are able to do, such as <c>door.lock</c>. See <see cref="Hexagon.Logic.Capabilities"/>.</summary>
+	[Property] public List<string> Capabilities { get; set; } = new();
+
+	/// <summary>Tokens a new character is issued.</summary>
+	[Property] public long StartingTokens { get; set; } = 100;
 
 	[Property] public List<ItemDefinition> StartingItems { get; set; } = new();
 

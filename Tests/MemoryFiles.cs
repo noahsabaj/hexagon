@@ -32,6 +32,21 @@ internal sealed class MemoryFiles : IFileStore
 		Files[path] = text;
 	}
 
+	public void Append( string path, string text )
+	{
+		var existing = Files.TryGetValue( path, out var found ) ? found : string.Empty;
+		try
+		{
+			Write( path, existing + text );
+		}
+		catch ( InvalidOperationException ) when ( Files[path].Length < existing.Length )
+		{
+			// A torn append loses half of the new text, never what was already on disk.
+			Files[path] = existing + text[..(text.Length / 2)];
+			throw;
+		}
+	}
+
 	public void Delete( string path )
 	{
 		if ( _dead ) throw new InvalidOperationException( "Power is off." );

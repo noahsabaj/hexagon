@@ -22,6 +22,8 @@ public sealed class GameManager : Component, Component.INetworkListener
 	/// <summary>Host-only. Null on clients.</summary>
 	public CharacterRoster? Roster { get; private set; }
 	public DocumentStore? Store { get; private set; }
+	public Journal? Journal { get; private set; }
+	public Transfers? Transfers { get; private set; }
 	public WorldData World { get; private set; } = new();
 
 	[Property] public float AutosaveSeconds { get; set; } = 60f;
@@ -47,7 +49,10 @@ public sealed class GameManager : Component, Component.INetworkListener
 	protected override void OnStart()
 	{
 		if ( !Networking.IsHost ) return;
-		Store = new DocumentStore( new SandboxFileStore(), message => Log.Warning( $"[store] {message}" ) );
+		var files = new SandboxFileStore();
+		Store = new DocumentStore( files, message => Log.Warning( $"[store] {message}" ) );
+		Journal = new Journal( files, warn: message => Log.Warning( $"[journal] {message}" ) );
+		Transfers = new Transfers( Journal );
 		Roster = new CharacterRoster( Store );
 		World = Store.Load<WorldData>( "world.json" ) ?? new WorldData();
 		Log.Info( $"Hexagon host ready: {Roster.Count} characters, {World.Doors.Count} saved doors." );
@@ -70,6 +75,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 			connection.CanDestroyObjects = false;
 		}
 
+		Journal?.Record( "connection.join", new Actor( (long)connection.SteamId.ValueUnsigned, Name: connection.DisplayName ) );
 		var spawn = FindSpawn();
 		var pawn = new GameObject( true, $"Player - {connection.DisplayName}" );
 		pawn.WorldTransform = spawn;
@@ -83,6 +89,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 
 	void INetworkListener.OnDisconnected( Connection connection )
 	{
+		Journal?.Record( "connection.leave", new Actor( (long)connection.SteamId.ValueUnsigned, Name: connection.DisplayName ) );
 		foreach ( var player in Scene.GetAllComponents<Player>().Where( value => value.Network.Owner == connection ) )
 		{
 			player.HostSave();

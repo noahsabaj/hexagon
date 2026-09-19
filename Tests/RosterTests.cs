@@ -19,7 +19,7 @@ public sealed class RosterTests
 		Assert.IsTrue( created.Ok, created.Message );
 		var reloaded = new CharacterRoster( new DocumentStore( files.Reboot() ) );
 		Assert.AreEqual( "John Doe", reloaded.Find( created.Value.Id )!.Name );
-		Assert.AreEqual( CharacterRoster.StartingTokens, reloaded.Find( created.Value.Id )!.Tokens );
+		Assert.AreEqual( 0, reloaded.Find( created.Value.Id )!.Tokens, "tokens only ever arrive by transfer" );
 	}
 
 	[TestMethod]

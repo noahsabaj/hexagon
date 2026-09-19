@@ -2,12 +2,13 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace Hexagon.Logic;
 
 // Plain documents. One JSON file each; see docs/decisions.md for why there is no database.
 
-public sealed class CharacterData
+public sealed class CharacterData : IHolder
 {
 	public Guid Id { get; set; }
 	public long SteamId { get; set; }
@@ -19,6 +20,9 @@ public sealed class CharacterData
 	public DateTimeOffset CreatedAt { get; set; }
 	/// <summary>Where the character last stood, or null to use a spawn point.</summary>
 	public float[]? Position { get; set; }
+
+	[JsonIgnore] public Guid HolderId => Id;
+	[JsonIgnore] public string HolderLabel => $"character:{Id:N}";
 }
 
 public sealed class InventoryData

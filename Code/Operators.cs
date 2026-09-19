@@ -2,6 +2,7 @@
 
 using System;
 using System.Linq;
+using Hexagon.Logic;
 using Sandbox;
 
 namespace Hexagon;
@@ -9,6 +10,7 @@ namespace Hexagon;
 /// <summary>
 /// Server console commands. They run in the host's console, so there is no in-game operator
 /// account to steal or spoof; whoever can type into the server console already owns the server.
+/// Every one is journaled: staff are on the record like everyone else.
 /// </summary>
 public static class Operators
 {
@@ -25,6 +27,7 @@ public static class Operators
 		var account = game.Account( id );
 		if ( !account.Whitelists.Contains( definition.ResourcePath ) ) account.Whitelists.Add( definition.ResourcePath );
 		game.SaveAccount( account );
+		game.Journal!.Record( "operator.whitelist", Actor.Console, $"account:{id}", data: ("faction", definition.ResourceName) );
 		Log.Info( $"{id} may now create {definition.Title} characters." );
 	}
 
@@ -36,6 +39,7 @@ public static class Operators
 		var account = game.Account( id );
 		account.Whitelists.Remove( definition.ResourcePath );
 		game.SaveAccount( account );
+		game.Journal!.Record( "operator.unwhitelist", Actor.Console, $"account:{id}", data: ("faction", definition.ResourceName) );
 		Log.Info( $"{id} may no longer create {definition.Title} characters." );
 	}
 
@@ -44,7 +48,7 @@ public static class Operators
 	{
 		if ( !TryHost( out var game ) ) return;
 		var target = game.Scene.GetAllComponents<Player>()
-			.FirstOrDefault( value => value.HasCharacter && value.CharacterName.Equals( characterName, StringComparison.OrdinalIgnoreCase ) );
+			.FirstOrDefault( value => value.HostCharacter?.Name.Equals( characterName, StringComparison.OrdinalIgnoreCase ) == true );
 		var definition = ResourceLibrary.GetAll<ItemDefinition>()
 			.FirstOrDefault( value => value.ResourceName.Equals( item, StringComparison.OrdinalIgnoreCase ) );
 		if ( target is null || definition is null )
@@ -52,8 +56,9 @@ public static class Operators
 			Log.Warning( "Usage: hexagon_give \"<character name>\" <item>. The character must be in the city." );
 			return;
 		}
-		var given = target.HostGive( definition );
-		Log.Info( given.Ok ? $"Gave {definition.Title} to {target.CharacterName}." : given.Message );
+		// An operator's gift is new matter entering the world, so it comes from a named source.
+		var given = target.HostIssue( Sources.Operator, definition, Actor.Console );
+		Log.Info( given.Ok ? $"Gave {definition.Title} to {target.HostCharacter!.Name}." : given.Message );
 	}
 
 	private static bool TryHost( out GameManager game )

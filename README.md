@@ -4,6 +4,16 @@ A roleplay framework for s&box. Hexagon is a library: it supplies the components
 and tools a serious roleplay server needs, and a game supplies the setting. It is written against
 the engine's own features rather than a layer over them.
 
+It is not a port of NutScript or Helix. Those leave a server's hardest problems to a rulebook:
+metagaming, duplicated items, disputes and staff abuse. Hexagon holds itself to three laws.
+
+- **Perception.** A client receives only what its character could perceive. Names and factions
+  reach their owner alone; speech reaches only those in range.
+- **Conservation.** Items and tokens only move: between holders, in from a named source, out
+  through a named sink. Nothing is set, spawned or deleted.
+- **Memory.** Every host decision is journaled with who, where and who saw it, refusals and
+  operator commands included.
+
 [HL2RP](https://github.com/noahsabaj/hl2rp-hexagon) is the first game built on it, and contains
 no code at all: its factions, items and scene are assets. That is the standard Hexagon holds
 itself to.
@@ -13,12 +23,15 @@ itself to.
 - **Players.** The host gives each connection a pawn driven by the engine's `PlayerController`.
 - **Characters.** Several per account. Names are checked for look-alikes, mixed scripts and
   invisible characters, so one player cannot pass for another.
-- **Factions**, as `.faction` assets: starting items, an optional operator whitelist, and what
-  members may do, such as lock doors.
-- **Items**, as `.item` assets, held in a grid inventory.
+- **Factions**, as `.faction` assets: starting items and tokens, an optional operator whitelist,
+  and the capabilities members have, such as `door.lock`.
+- **Items**, as `.item` assets, held in a grid inventory. An item can grant capabilities, so a
+  key is an item and can be stolen.
+- **Verbs.** A world object lists what can be done to it. One host checkpoint decides who may:
+  identity, rate limit, reach, capability, journal.
 - **Chat**: say, `/w` whisper, `/y` yell, `/me`, and `//` out-of-character. In-character speech
   reaches only players in range, and nobody out of range learns a message existed.
-- **Doors** that anyone in reach can open and only permitted factions can lock.
+- **Doors** that anyone in reach can open and only a character with `door.lock` can lock.
 - **Persistence.** Characters, inventories, positions, whitelists and doors survive a restart.
 - **A default HUD**: character menu, chat and inventory. A game can place its own instead.
 
@@ -34,13 +47,13 @@ itself to.
 
 | Part | Where | How it is checked |
 | --- | --- | --- |
-| Rules with no engine in them: names, inventory grid, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
+| Rules with no engine in them: names, inventory grid, transfers, journal, capabilities, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
 | Components: game manager, player, door, chat, operator commands | `Code` | Compiled against the installed engine, warnings as errors |
 | Default HUD | `Code/UI` | Same compile, then looked at in the play test |
 | A whole game on top | a game project | `tools/playtest.ps1` plays it in the real editor |
 
-Public state is `[Sync( SyncFlags.FromHost )]` on components. Private state goes to its owner by
-`[Rpc.Owner]`. A client changes nothing directly: it calls a `[Rpc.Host]` request, and the host
+What an onlooker could see is `[Sync( SyncFlags.FromHost )]` on components. Everything else goes
+to its owner by `[Rpc.Owner]`. A client changes nothing directly: it calls a `[Rpc.Host]` request, and the host
 re-derives who is asking from the connection, measures distances itself, and saves before it
 replies.
 
@@ -70,6 +83,8 @@ Typed in the host's console.
 | --- | --- |
 | `hexagon_whitelist <steamid64> <faction>` | Allow an account to create characters in a whitelisted faction |
 | `hexagon_unwhitelist <steamid64> <faction>` | Remove that permission |
-| `hexagon_give "<character name>" <item>` | Give an item to a character who is in the city |
+| `hexagon_give "<character name>" <item>` | Issue an item, from the `operator` source, to a character who is in the city |
+
+The journal is `journal/<date>.jsonl` under the data folder, one JSON object per line.
 
 See [docs/decisions.md](docs/decisions.md) for why it is shaped this way and what is not here yet.

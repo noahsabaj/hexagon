@@ -14,9 +14,11 @@ public sealed record CharacterSummary( Guid Id, string Name, string Faction );
 
 /// <summary>
 /// One connection's presence in the city. Movement is the engine's <see cref="PlayerController"/>,
-/// simulated by the owner. Everything that matters to other players is written by the host and
-/// replicated through <c>[Sync]</c>; everything private to the owner arrives by owner-only RPC.
-/// A client changes nothing directly: it calls a <c>[Rpc.Host]</c> request, and the host decides.
+/// simulated by the owner. Only what another character could see is replicated to everyone through
+/// <c>[Sync]</c>: that someone is there, and what they look like. A name or a faction is knowledge,
+/// not appearance, so it reaches its owner alone by owner-only RPC and a client cannot list who is
+/// in the city. A client changes nothing directly: it calls a <c>[Rpc.Host]</c> request, and the
+/// host decides.
 /// </summary>
 [Title( "Hexagon Player" ), Category( "Hexagon" ), Icon( "person" )]
 public sealed partial class Player : Component
@@ -25,13 +27,12 @@ public sealed partial class Player : Component
 	public static Player? Local { get; private set; }
 
 	[Sync( SyncFlags.FromHost )] public bool HasCharacter { get; set; }
-	[Sync( SyncFlags.FromHost )] public string CharacterName { get; set; } = string.Empty;
 	[Sync( SyncFlags.FromHost )] public string CharacterDescription { get; set; } = string.Empty;
-	[Sync( SyncFlags.FromHost )] public string FactionPath { get; set; } = string.Empty;
 
+	// Owner-side copies of private state. Empty on every other client.
+	public string CharacterName { get; private set; } = string.Empty;
+	public string FactionPath { get; private set; } = string.Empty;
 	public FactionDefinition? Faction => FactionDefinition.Find( FactionPath );
-
-	// Owner-side copies of private state.
 	public IReadOnlyList<CharacterSummary> Characters { get; private set; } = Array.Empty<CharacterSummary>();
 	public InventoryData? Inventory { get; private set; }
 	public long Tokens { get; private set; }
@@ -83,8 +84,10 @@ public sealed partial class Player : Component
 	{
 		ApplyPresence();
 		if ( IsProxy || !HasCharacter ) return;
-		// "Use" opens and closes a door through IPressable. "Reload" locks and unlocks it.
-		if ( Input.Pressed( "Reload" ) && Controller?.Hovered?.GetComponent<Door>() is { } door ) door.RequestLock();
+		// "Use" reaches a target's first verb through IPressable. "Reload" is its second.
+		if ( Input.Pressed( "Reload" ) && Controller?.Hovered?.GetComponent<IVerbTarget>() is Component target &&
+			((IVerbTarget)target).Verbs.ElementAtOrDefault( 1 ) is { } second )
+			RequestAct( target, second.Id );
 	}
 
 	private PlayerController? Controller => GetComponent<PlayerController>( true );
@@ -127,16 +130,42 @@ public sealed partial class Player : Component
 	/// <summary>Host: the loaded character, for other host systems such as doors.</summary>
 	public CharacterData? HostCharacter => Networking.IsHost ? _character : null;
 
-	/// <summary>Host: gives an item to the loaded character and tells the owner.</summary>
-	public Result HostGive( ItemDefinition definition )
+	/// <summary>Host: issues an item to the loaded character from a named source and tells the owner.</summary>
+	public Result HostIssue( string source, ItemDefinition definition, Actor by )
 	{
-		if ( _character is null ) return Result.Fail( ErrorCode.NotFound, "That player has no character loaded." );
-		var added = InventoryGrid.Add( _character.Inventory, definition.ResourcePath, definition.Width, definition.Height );
-		if ( !added.Ok ) return added.ToResult();
-		GameManager.Instance?.Roster?.Save( _character );
+		if ( _character is null || GameManager.Instance is not { Transfers: { } transfers, Roster: { } roster } )
+			return Result.Fail( ErrorCode.NotFound, "That player has no character loaded." );
+		var issued = transfers.Issue( source, _character, definition.ResourcePath, definition.Width, definition.Height, by );
+		if ( !issued.Ok ) return issued.ToResult();
+		roster.Save( _character );
 		SendPrivateState();
 		return Result.Success();
 	}
+
+	/// <summary>Host: whether the loaded character is able to do something, from its faction and what it holds.</summary>
+	public bool HostCan( string capability )
+	{
+		if ( !Networking.IsHost || _character is null ) return false;
+		var granted = (FactionDefinition.Find( _character.Faction )?.Capabilities ?? Enumerable.Empty<string>())
+			.Concat( _character.Inventory.Items.SelectMany( item => ItemDefinition.Find( item.Definition )?.Grants ?? Enumerable.Empty<string>() ) );
+		return Capabilities.Can( capability, granted );
+	}
+
+	/// <summary>Host: writes what this character just did to the journal, with where and who was near enough to see.</summary>
+	public void HostRecord( string kind, string? subject = null, bool ok = true, params (string Key, string Value)[] data )
+	{
+		if ( !Networking.IsHost || GameManager.Instance?.Journal is not { } journal ) return;
+		var by = _character is not null ? Actor.Of( _character ) : new Actor( Network.Owner is { } owner ? SteamIdOf( owner ) : 0 );
+		var witnesses = _character is null
+			? Array.Empty<Guid>()
+			: Scene.GetAllComponents<Player>()
+				.Where( other => other != this && other._character is not null && other.WorldPosition.Distance( WorldPosition ) <= WitnessRange )
+				.Select( other => other._character!.Id ).ToArray();
+		journal.Record( kind, by, subject, ok, new[] { WorldPosition.x, WorldPosition.y, WorldPosition.z }, witnesses, data );
+	}
+
+	/// <summary>How near a character must be to count as having seen an act: the range of ordinary speech.</summary>
+	public const float WitnessRange = 300f;
 
 	private void SendCharacterList( Connection caller, GameManager game )
 	{
@@ -150,19 +179,26 @@ public sealed partial class Player : Component
 	{
 		if ( _character is null || Network.Owner is not { } owner ) return;
 		using ( Rpc.FilterInclude( owner ) )
-			ReceivePrivateState( JsonSerializer.Serialize( _character.Inventory ), _character.Tokens );
+			ReceivePrivateState( _character.Name, _character.Faction, JsonSerializer.Serialize( _character.Inventory ), _character.Tokens );
 	}
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
 	private void ReceiveCharacters( string json )
 	{
 		Characters = JsonSerializer.Deserialize<CharacterSummary[]>( json ) ?? Array.Empty<CharacterSummary>();
+		// The list is only ever sent to a player in the menu, so whatever character they had is gone.
+		CharacterName = string.Empty;
+		FactionPath = string.Empty;
+		Inventory = null;
+		Tokens = 0;
 		PrivateVersion++;
 	}
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
-	private void ReceivePrivateState( string inventoryJson, long tokens )
+	private void ReceivePrivateState( string name, string factionPath, string inventoryJson, long tokens )
 	{
+		CharacterName = name;
+		FactionPath = factionPath;
 		Inventory = JsonSerializer.Deserialize<InventoryData>( inventoryJson );
 		Tokens = tokens;
 		PrivateVersion++;

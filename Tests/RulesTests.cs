@@ -10,9 +10,11 @@ public sealed class RulesTests
 	[TestMethod]
 	public void InventoryPlacesMovesAndRefusesOverlap()
 	{
-		var inventory = new InventoryData { Width = 3, Height = 2 };
-		var big = InventoryGrid.Add( inventory, "items/pistol.item", 2, 1 );
-		var small = InventoryGrid.Add( inventory, "items/ration.item", 1, 1 );
+		var holder = new CharacterData { Inventory = new InventoryData { Width = 3, Height = 2 } };
+		var inventory = holder.Inventory;
+		var transfers = new Transfers( new Journal( new MemoryFiles() ) );
+		var big = transfers.Issue( "test", holder, "items/pistol.item", 2, 1, Actor.Console );
+		var small = transfers.Issue( "test", holder, "items/ration.item", 1, 1, Actor.Console );
 
 		Assert.IsTrue( big.Ok && small.Ok );
 		Assert.AreEqual( (0, 0), (big.Value.X, big.Value.Y) );
@@ -22,17 +24,6 @@ public sealed class RulesTests
 		Assert.IsTrue( InventoryGrid.Move( inventory, big.Value.Id, 0, 1 ).Ok );
 		Assert.IsTrue( InventoryGrid.Move( inventory, big.Value.Id, 1, 1 ).Ok, "an item may overlap its own old cells" );
 		Assert.AreEqual( ErrorCode.NotFound, InventoryGrid.Move( inventory, Guid.NewGuid(), 0, 0 ).Code );
-	}
-
-	[TestMethod]
-	public void AFullInventoryRefusesAndRemovalMakesRoom()
-	{
-		var inventory = new InventoryData { Width = 1, Height = 1 };
-		var only = InventoryGrid.Add( inventory, "items/ration.item", 1, 1 );
-
-		Assert.AreEqual( ErrorCode.Conflict, InventoryGrid.Add( inventory, "items/ration.item", 1, 1 ).Code );
-		Assert.IsTrue( InventoryGrid.Remove( inventory, only.Value.Id ).Ok );
-		Assert.IsTrue( InventoryGrid.Add( inventory, "items/ration.item", 1, 1 ).Ok );
 	}
 
 	[TestMethod]

@@ -74,8 +74,84 @@ path would fail.
 The character-name work: NFKC normalization, the single-script rule, and the Unicode confusable
 skeleton with its generated table. It held up under review and is the hardest part to get right.
 
-## Not here yet
+## 2026-09-19: Three laws, because the hard problems of a roleplay server are social
 
-Death and combat, restraints, the scanner, vendors and currency spending, world item drops,
-clothing, a second-client play test, and continuous integration. Each should arrive as a playable
-slice with its own play-test section.
+NutScript and Helix are toolkits for building a gamemode. What actually costs a roleplay server its
+players is metagaming, duplicated items and worthless money, disputes nobody can settle, and staff
+abuse. Those frameworks leave all four to a rulebook and the admins. Hexagon enforces them, and
+every feature is judged against three laws.
+
+**Perception.** A client receives only what its character could perceive. Chat already reached
+only the connections in range. A character's name and faction were `[Sync]`, so every client held
+every name; they now go to the owner alone, and what replicates to everyone is presence and
+description, which is what an onlooker would see. One leak remains and is known: a spoken line
+still carries the speaker's name to those in earshot. Recognition closes it by formatting each line
+for its listener.
+
+**Conservation.** Items and tokens only move. `Transfers` is the single way either changes hands:
+between holders, in from a named source, out through a named sink. `InventoryGrid` no longer has
+an add or a remove. Starting items and tokens are issued from `character.start`, an operator's gift
+from `operator`, a discard goes to `discard`, and deleting a character sends what it held through
+`character.deleted`. An item keeps its id for life. A holder is anything with an inventory and
+tokens: a character today; crates, vendors, corpses and dropped items are the same thing later.
+
+**Memory.** Every host decision is journaled: who, what, to what, where, who was near enough to
+see, and whether it was refused. The journal is an append-only file of JSON lines per day. It is
+evidence and never state: nothing is rebuilt from it, the documents stay the truth, and a failed
+journal write never undoes a decision. Operator commands are journaled like everything else. The
+token supply equals the journal's issues minus its destroys, and a test holds it to that.
+
+## 2026-09-19: Capabilities and verbs, not faction checks
+
+`FactionDefinition.CanLockDoors` was the first of what would have become a flag per feature, the
+same shape as Helix's `IsCombine()` and single-letter flags. The host now asks one question,
+`Player.HostCan( "door.lock" )`, answered from what the character is and what it holds: a faction
+lists capabilities, and so does an item. HL2RP's keycard is an item that grants `door.lock`, so a
+citizen holding one can lock a door and loses the ability with the card. A permission that lives in
+an object can be stolen, lent and confiscated; a flag in a database row cannot. Denials, for
+conditions such as restraints, are in the rule and win over any grant.
+
+Everything a character does to something in the world goes through `Player.RequestAct`. A target
+implements `IVerbTarget`: it lists its verbs and carries them out, nothing more. Identity, the rate
+limit, reach, capability and the journal entry are decided in that one method, so a new target
+cannot forget one; the door's own requests were not rate-limited before this. It is deliberately
+not a hook bus. Nothing can veto someone else's verb, and extension is by adding components and
+assets. Until there is a verb menu, Use is a target's first verb and Reload its second.
+
+## 2026-09-19: Hexagon supplies a death pipeline, not a death policy
+
+Whether death is permanent, who may finish a downed character and what is lost are a setting's
+choices. Hexagon will supply the downed state, the deliberate and journaled finishing act, and the
+settings a game chooses its policy with.
+
+## 2026-09-19: Dedicated servers are the target
+
+A serious city needs a host that stays up and is not a player. Listen hosting still works and is
+what the play test uses, but the host's own client sees everything the host knows, so the
+perception law is only a guarantee on a dedicated server. Host migration stays refused.
+
+## 2026-09-19: Each primitive arrives by moving a feature that already plays onto it
+
+The old code reached 440 passing tests with broken gameplay by building abstractions ahead of
+features. The journal, transfers, capabilities and verbs each came in by carrying door locking,
+discarding, the operator's give and character creation, and the play test stayed green throughout.
+A primitive that does not make the next feature smaller should be taken out again.
+
+Trades between two characters will touch two documents. `Transfers` changes memory and the caller
+saves the giver first, so a crash between the saves loses a thing the journal can restore and
+never duplicates one. This replaces the earlier note about putting both sides in one document.
+
+## Order of work
+
+1. Done: journal, transfers, capabilities, the verb checkpoint, owner-only names.
+2. Two-client play test, against a dedicated server. The perception law cannot be checked with one client.
+3. Movement plausibility, with violations journaled. Every reach and range rule rests on it.
+4. World items, item verbs and storage, all as holders.
+5. Recognition, which also closes the spoken-name leak.
+6. Downed state and combat.
+7. Restraints and search: a denial, and opening someone else's holder with a capability.
+8. Commerce, with declared sources and sinks.
+9. A staff console over the journal.
+
+HL2RP keeps what is about its setting: the scanner, civic records as a view of the journal,
+forcefields and ration dispensers. Continuous integration is still missing.

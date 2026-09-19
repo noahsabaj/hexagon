@@ -28,6 +28,16 @@ public sealed class SandboxFileStore : IFileStore
 		Files.WriteAllText( full, text );
 	}
 
+	public void Append( string path, string text )
+	{
+		var full = Full( path );
+		var slash = full.LastIndexOf( '/' );
+		if ( slash > 0 ) Files.CreateDirectory( full[..slash] );
+		using var stream = Files.OpenWrite( full, System.IO.FileMode.Append );
+		var bytes = System.Text.Encoding.UTF8.GetBytes( text );
+		stream.Write( bytes, 0, bytes.Length );
+	}
+
 	public IEnumerable<string> Find( string folder, string pattern ) =>
 		Files.DirectoryExists( Full( folder ) ) ? Files.FindFile( Full( folder ), pattern ) : Array.Empty<string>();
 

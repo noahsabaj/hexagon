@@ -12,6 +12,8 @@ public interface IFileStore
 	bool Exists( string path );
 	string Read( string path );
 	void Write( string path, string text );
+	/// <summary>Adds to the end of a file, creating it if needed.</summary>
+	void Append( string path, string text );
 	void Delete( string path );
 	IEnumerable<string> Find( string folder, string pattern );
 }

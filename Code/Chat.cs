@@ -34,18 +34,22 @@ public static class Chat
 	/// <summary>Host: deliver a message from a speaker to everyone in range of it.</summary>
 	public static void Deliver( Player speaker, ChatMessage message )
 	{
-		if ( !Networking.IsHost ) return;
+		if ( !Networking.IsHost || speaker.HostCharacter is not { } character ) return;
 		var range = ChatRules.Range( message.Channel );
 		var origin = speaker.WorldPosition;
-		var recipients = Game.ActiveScene.GetAllComponents<Player>()
+		var listeners = Game.ActiveScene.GetAllComponents<Player>()
 			.Where( listener => listener.Network.Owner is not null )
 			.Where( listener => range is null ||
 				(listener.HasCharacter && listener.WorldPosition.Distance( origin ) <= range.Value) )
-			.Select( listener => listener.Network.Owner! )
 			.ToArray();
-		if ( recipients.Length == 0 ) return;
-		var line = ChatRules.Format( message.Channel, speaker.CharacterName, message.Text );
-		using ( Rpc.FilterInclude( recipients ) ) Receive( (int)message.Channel, line );
+		// Speech is journaled with exactly who received it, which is what a dispute will ask.
+		GameManager.Instance?.Journal?.Record( $"chat.{message.Channel.ToString().ToLowerInvariant()}", Actor.Of( character ),
+			where: new[] { origin.x, origin.y, origin.z },
+			witnesses: listeners.Where( listener => listener != speaker && listener.HostCharacter is not null ).Select( listener => listener.HostCharacter!.Id ),
+			data: ("text", message.Text) );
+		if ( listeners.Length == 0 ) return;
+		var line = ChatRules.Format( message.Channel, character.Name, message.Text );
+		using ( Rpc.FilterInclude( listeners.Select( listener => listener.Network.Owner! ) ) ) Receive( (int)message.Channel, line );
 	}
 
 	/// <summary>Host: a line for one connection only, such as the reason an action was refused.</summary>

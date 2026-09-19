@@ -13,7 +13,6 @@ namespace Hexagon.Logic;
 public sealed class CharacterRoster
 {
 	public const int MaximumSlots = 5;
-	public const long StartingTokens = 100;
 
 	private readonly DocumentStore _store;
 	private readonly Dictionary<Guid, CharacterData> _characters = new();
@@ -57,7 +56,6 @@ public sealed class CharacterRoster
 			Name = cleanName.Value,
 			Description = cleanDescription.Value,
 			Faction = faction,
-			Tokens = StartingTokens,
 			CreatedAt = now
 		};
 		_store.Save( Path( character.Id ), character );
@@ -69,6 +67,7 @@ public sealed class CharacterRoster
 	/// <summary>Writes the character's current state. Call after every change the player should keep.</summary>
 	public void Save( CharacterData character ) => _store.Save( Path( character.Id ), character );
 
+	/// <summary>The caller empties the character through <see cref="Transfers.DestroyAll"/> first.</summary>
 	public Result Delete( long steamId, Guid id )
 	{
 		// Same answer for "not yours" and "does not exist", so ids cannot be probed.

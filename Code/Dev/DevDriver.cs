@@ -76,8 +76,22 @@ public sealed class DevDriver : Component
 				case "door":
 					var door = Game.ActiveScene.GetAllComponents<Door>().FirstOrDefault( value => value.GameObject.Name == args[1] );
 					if ( door is null ) return "no such door";
-					if ( args[2] == "lock" ) door.RequestLock(); else door.RequestUse();
+					player.RequestAct( door, args[2] == "lock" ? "door.lock" : "door.use" );
 					return $"sent door {args[2]}";
+				case "discard":
+					var unwanted = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					if ( unwanted is null ) return "no such item";
+					player.RequestDiscardItem( unwanted.Id );
+					return "sent discard";
+				case "journal":
+					// Today's journal as kind=count, refusals marked, so a test can assert what was remembered.
+					var entries = GameManager.Instance?.Journal?.Read( DateTimeOffset.UtcNow );
+					if ( entries is null ) return "no journal";
+					return string.Join( " ", entries.GroupBy( value => value.Kind + (value.Ok ? "" : "!") ).Select( group => $"{group.Key}={group.Count()}" ) );
+				case "proxies":
+					// What this client was told about everyone else. Names and factions must be empty.
+					return string.Join( " ; ", Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy )
+						.Select( value => $"has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}'" ) );
 				case "console":
 					// Runs a real console command, so operator commands are tested as an operator types them.
 					ConsoleSystem.Run( args[1] );

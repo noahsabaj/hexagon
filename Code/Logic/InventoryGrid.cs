@@ -5,7 +5,10 @@ using System.Linq;
 
 namespace Hexagon.Logic;
 
-/// <summary>Placement rules for a grid inventory. Mutates the document only when the move is legal.</summary>
+/// <summary>
+/// Placement rules for a grid inventory. Items enter and leave an inventory only through
+/// <see cref="Transfers"/>, so there is no add or remove here.
+/// </summary>
 public static class InventoryGrid
 {
 	public static bool Fits( InventoryData inventory, int x, int y, int width, int height, Guid? ignore = null )
@@ -17,20 +20,7 @@ public static class InventoryGrid
 			y < other.Y + other.Height && other.Y < y + height );
 	}
 
-	/// <summary>Places the item in the first free cell, scanning rows then columns.</summary>
-	public static Result<ItemStack> Add( InventoryData inventory, string definition, int width, int height )
-	{
-		for ( var y = 0; y < inventory.Height; y++ )
-		for ( var x = 0; x < inventory.Width; x++ )
-		{
-			if ( !Fits( inventory, x, y, width, height ) ) continue;
-			var item = new ItemStack { Id = Guid.NewGuid(), Definition = definition, X = x, Y = y, Width = width, Height = height };
-			inventory.Items.Add( item );
-			return Result<ItemStack>.Success( item );
-		}
-		return Result<ItemStack>.Fail( ErrorCode.Conflict, "There is no room for that." );
-	}
-
+	/// <summary>Rearranges within one inventory. Nothing changes hands, so nothing is journaled.</summary>
 	public static Result Move( InventoryData inventory, Guid itemId, int x, int y )
 	{
 		var item = inventory.Items.FirstOrDefault( value => value.Id == itemId );
@@ -40,13 +30,5 @@ public static class InventoryGrid
 		item.X = x;
 		item.Y = y;
 		return Result.Success();
-	}
-
-	public static Result<ItemStack> Remove( InventoryData inventory, Guid itemId )
-	{
-		var item = inventory.Items.FirstOrDefault( value => value.Id == itemId );
-		if ( item is null ) return Result<ItemStack>.Fail( ErrorCode.NotFound, "That item is not in this inventory." );
-		inventory.Items.Remove( item );
-		return Result<ItemStack>.Success( item );
 	}
 }

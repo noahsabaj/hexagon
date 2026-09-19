@@ -131,7 +131,7 @@ try {
     [void](Send 'say|//brb')
     [void](Send 'move|0|4|3')
     $state = Send 'state'
-    Expect 'public identity replicated from the host' $state "has=True name='John Doe' faction='Citizen'"
+    Expect 'the owner was told its own name and faction' $state "has=True name='John Doe' faction='Citizen' tokens=100"
     Expect 'the faction asset granted starting items' $state 'Water@'
     Expect 'an item moved to the requested cell' $state 'Ration@4,3'
     Expect 'speech, emote and out-of-character lines were delivered' $state 'says "Hello there" / \*\* John Doe waves / \[OOC\] John Doe: brb'
@@ -139,7 +139,7 @@ try {
     Write-Host '==> Doors' -ForegroundColor Cyan
     [void](Send 'goto|240|-150|900')
     [void](Send 'door|Door 1|use')
-    Expect 'a door out of reach was refused' (Send 'state') 'Door 1:open=False.*too far from the door'
+    Expect 'a door out of reach was refused' (Send 'state') 'Door 1:open=False.*too far away'
     [void](Send 'goto|240|-150|60')
     Start-Sleep -Seconds 1
     [void](Send 'door|Door 1|use')
@@ -148,7 +148,20 @@ try {
     $state = Send 'state'
     Expect 'a door in reach opened' $state 'Door 1:open=True,locked=False'
     Expect 'a door authored as locked stayed shut' $state 'Door 2:open=False,locked=True.*The door is locked'
-    Expect 'a citizen could not lock a door' $state 'Your faction cannot lock doors'
+    Expect 'a citizen could not lock a door' $state 'nothing that lets you do that'
+
+    Write-Host '==> A key is an item' -ForegroundColor Cyan
+    [void](Send 'console|hexagon_give "John Doe" keycard')
+    [void](Send 'door|Door 1|lock')
+    $state = Send 'state'
+    Expect 'an operator issued a keycard' $state 'Keycard@'
+    Expect 'holding the keycard let a citizen lock the door' $state 'Door 1:open=False,locked=True'
+    [void](Send 'door|Door 1|lock')
+    [void](Send 'discard|2')
+    [void](Send 'door|Door 1|lock')
+    $state = Send 'state'
+    Expect 'the discarded keycard left the inventory' "$($state -notmatch 'Keycard@')" 'True'
+    Expect 'without the keycard the door stayed unlocked' $state 'Door 1:open=False,locked=False.*nothing that lets you do that'
 
     Write-Host '==> Faction gate' -ForegroundColor Cyan
     $steamId = Send 'steamid'
@@ -176,6 +189,18 @@ try {
     $state = Send 'state'
     Expect 'the moved item survived the restart' $state 'Ration@4,3'
     Expect 'the character returned to where it stood' $state 'pos=2[34]\d\.?\d*,-1[45]\d'
+
+    Write-Host '==> The journal' -ForegroundColor Cyan
+    $journal = Send 'journal'
+    Expect 'starting tokens were issued once per character' $journal 'tokens\.issue=2(\s|$)'
+    Expect 'every item came from a named source' $journal 'item\.issue=5(\s|$)'
+    Expect 'the discard went through a sink' $journal 'item\.destroy=1(\s|$)'
+    Expect 'refused locks are on record' $journal 'verb\.door\.lock!=2(\s|$)'
+    Expect 'refused uses are on record' $journal 'verb\.door\.use!=2(\s|$)'
+    Expect 'allowed acts are on record' $journal 'verb\.door\.lock=3(\s|$)'
+    Expect 'the operator is on record too' $journal 'operator\.whitelist=1(\s|$)'
+    Expect 'speech is on record' $journal 'chat\.say=1 .*chat\.me=1 .*chat\.ooc=1'
+    Expect 'this client was told no other name' (Send 'proxies') '^[^A-Za-z]*$|^(has=(True|False) name='''' faction=''''( ; )?)*$'
 
     $problems = @((Invoke-Tool 'read_console' @{ limit = 500; minimumLevel = 'Warn' }) -split "`n" |
         Where-Object { $_ -match 'Hexagon|Exception|\[store\]|Whitelist violation|hexagon\.' -and $_ -notmatch 'Bad texture|Error loading resource' })

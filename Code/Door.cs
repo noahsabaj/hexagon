@@ -1,19 +1,20 @@
 #nullable enable
 
 using System;
-using System.Linq;
+using System.Collections.Generic;
 using Hexagon.Logic;
 using Sandbox;
 
 namespace Hexagon;
 
 /// <summary>
-/// A door anyone can open and only some factions can lock. State is host-written and replicated;
+/// A door anyone can open and only a character with <c>door.lock</c> can lock. It lists its verbs and
+/// carries them out; <see cref="Player.RequestAct"/> judges who may. State is host-written and replicated;
 /// the swing is animated locally on every client. It persists by the scene object's id, which the
 /// editor keeps stable across loads.
 /// </summary>
 [Title( "Hexagon Door" ), Category( "Hexagon" ), Icon( "door_front" )]
-public sealed class Door : Component, Component.IPressable
+public sealed class Door : Component, Component.IPressable, IVerbTarget
 {
 	/// <summary>How far a pawn may stand from the door and still work it.</summary>
 	public const float Reach = 150f;
@@ -58,59 +59,39 @@ public sealed class Door : Component, Component.IPressable
 		}
 	}
 
+	private static readonly Verb Use = new( "door.use", "Open or close" );
+	private static readonly Verb Lock = new( "door.lock", "Lock or unlock", Capability.DoorLock );
+
+	public IReadOnlyList<Verb> Verbs { get; } = new[] { Use, Lock };
+	float IVerbTarget.Reach => Reach;
+
 	bool IPressable.CanPress( IPressable.Event e ) => true;
 
 	bool IPressable.Press( IPressable.Event e )
 	{
-		RequestUse();
+		Player.Local?.RequestAct( this, Use.Id );
 		return true;
 	}
 
 	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) => new IPressable.Tooltip(
 		IsLocked ? "Locked door" : IsOpen ? "Close door" : "Open door",
 		IsLocked ? "lock" : "door_front",
-		"Press Reload to lock or unlock, if your faction may." );
+		"Press Reload to lock or unlock, if you are able." );
 
-	[Rpc.Host]
-	public void RequestUse()
+	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
-		if ( Actor() is not { } actor ) return;
-		if ( IsLocked )
+		if ( verb == Lock )
 		{
-			Chat.Tell( Rpc.Caller, "The door is locked." );
-			return;
+			IsLocked = !IsLocked;
+			if ( IsLocked ) IsOpen = false;
 		}
-		IsOpen = !IsOpen;
-		Persist();
-	}
-
-	[Rpc.Host]
-	public void RequestLock()
-	{
-		if ( Actor() is not { } actor ) return;
-		if ( actor.Faction?.CanLockDoors != true )
+		else
 		{
-			Chat.Tell( Rpc.Caller, "Your faction cannot lock doors." );
-			return;
+			if ( IsLocked ) return Result.Fail( ErrorCode.Conflict, "The door is locked." );
+			IsOpen = !IsOpen;
 		}
-		IsLocked = !IsLocked;
-		if ( IsLocked ) IsOpen = false;
 		Persist();
-	}
-
-	/// <summary>
-	/// The caller's pawn, if it has a character in the city and stands within reach. The host
-	/// measures this itself; a client saying "I am at the door" counts for nothing.
-	/// </summary>
-	private Player? Actor()
-	{
-		if ( !Networking.IsHost || Rpc.Caller is not { } caller ) return null;
-		var actor = Scene.GetAllComponents<Player>().FirstOrDefault( value => value.Network.Owner == caller );
-		if ( actor?.HostCharacter is null ) return null;
-		var nearest = GameObject.GetBounds().ClosestPoint( actor.WorldPosition );
-		if ( nearest.Distance( actor.WorldPosition ) <= Reach ) return actor;
-		Chat.Tell( caller, "You are too far from the door." );
-		return null;
+		return Result.Success();
 	}
 
 	private void Persist()

@@ -15,6 +15,9 @@ public sealed class ItemDefinition : GameResource
 	[Property, Range( 1, 4 )] public int Height { get; set; } = 1;
 	[Property] public Color Tint { get; set; } = Color.White;
 
+	/// <summary>What holding this lets a character do. A key is an item that grants <c>door.lock</c>.</summary>
+	[Property] public List<string> Grants { get; set; } = new();
+
 	public static ItemDefinition? Find( string path ) =>
 		ResourceLibrary.TryGet<ItemDefinition>( path, out var definition ) ? definition : null;
 }
