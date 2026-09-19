@@ -1,40 +1,75 @@
-# Hexagon v2
+# Hexagon
 
-Hexagon is a strongly typed, host-authoritative roleplay framework for s&box. Version 2 is a clean break: it has no v1 data reader, compatibility manager, reflected character variables, static permission hooks, or client-owned mutation RPCs.
+A roleplay framework for s&box. Hexagon is a library: it supplies the components, rules, panels
+and tools a serious roleplay server needs, and a game supplies the setting. It is written against
+the engine's own features rather than a layer over them.
 
-The v3 durable protocol requires an exclusive-writer lease and absent-or-complete
-immutable publication, and its recovery explicitly tolerates one torn tail
-artifact per WAL metadata class from adapters without atomic rename. Hexagon
-remains a platform-whitelisted library: it owns the protocol and accepts an
-`IPersistenceStorage` from the game. The HL2RP host supplies one whitelist-safe
-adapter over the engine filesystem, shared by every host shape, so the streamed
-assembly passes s&box access control on dedicated servers and remote clients
-alike.
+[HL2RP](https://github.com/noahsabaj/hl2rp-hexagon) is the first game built on it, and contains
+no code at all: its factions, items and scene are assets. That is the standard Hexagon holds
+itself to.
 
-The framework is split into explicit layers:
+## What a game gets
 
-- `V2/Kernel` compiles one schema and its deterministic module graph.
-- `V2/Domain` contains immutable records and strong identifiers.
-- `V2/Application` owns policies, transactions, inventory capabilities, interactions, item actions, chat, and lifecycle rules.
-- `V2/Persistence` provides canonical repositories, isolated unit-of-work editors, WAL recovery, and checkpoints.
-- `V2/Client` and `V2/Networking` expose immutable snapshots and intent commands only.
-- `V2/Runtime` and `V2/Infrastructure` are the only s&box-dependent layers.
+- **Players.** The host gives each connection a pawn driven by the engine's `PlayerController`.
+- **Characters.** Several per account. Names are checked for look-alikes, mixed scripts and
+  invisible characters, so one player cannot pass for another.
+- **Factions**, as `.faction` assets: starting items, an optional operator whitelist, and what
+  members may do, such as lock doors.
+- **Items**, as `.item` assets, held in a grid inventory.
+- **Chat**: say, `/w` whisper, `/y` yell, `/me`, and `//` out-of-character. In-character speech
+  reaches only players in range, and nobody out of range learns a message existed.
+- **Doors** that anyone in reach can open and only permitted factions can lock.
+- **Persistence.** Characters, inventories, positions, whitelists and doors survive a restart.
+- **A default HUD**: character menu, chat and inventory. A game can place its own instead.
 
-The library does not own a scene. A game package owns its startup scene, places one `HexagonBootstrapComponent`, and supplies an explicit `IHexSchemaSource` for the selected schema ID. Its runtime descriptor also supplies the game-owned persistence storage factory.
+## Using it in a game
 
-## Verify
+1. Reference the library in the game's `.sbproj`: `"PackageReferences": [ "kbj.hexagon" ]`.
+2. Link this checkout into the game: a `Libraries/hexagon` junction pointing here.
+3. In the startup scene, add a `Hexagon Game Manager`, a `ScreenPanel` with the `Hud`, at least one
+   `SpawnPoint`, and any `Hexagon Door` objects, which must be networked objects.
+4. Author `.faction` and `.item` assets.
 
-From the parent workspace:
+## How it is built
 
-```powershell
-./hexagon/tools/verify.ps1 -SkipRemoteAcceptance
+| Part | Where | How it is checked |
+| --- | --- | --- |
+| Rules with no engine in them: names, inventory grid, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
+| Components: game manager, player, door, chat, operator commands | `Code` | Compiled against the installed engine, warnings as errors |
+| Default HUD | `Code/UI` | Same compile, then looked at in the play test |
+| A whole game on top | a game project | `tools/playtest.ps1` plays it in the real editor |
+
+Public state is `[Sync( SyncFlags.FromHost )]` on components. Private state goes to its owner by
+`[Rpc.Owner]`. A client changes nothing directly: it calls a `[Rpc.Host]` request, and the host
+re-derives who is asking from the connection, measures distances itself, and saves before it
+replies.
+
+## Commands
+
+Run from this folder with the s&box editor closed. Both default to the sibling `hl2rp-hexagon`
+checkout; pass `-GameRoot` for another game.
+
+```bash
+pwsh tools/verify.ps1
 ```
 
-The command runs the neutral .NET suite, validates the library/game compiler boundary,
-and asset ownership, generates and builds the mounted s&box projects with
-warnings as errors, and executes the isolated startup/persistence smoke check.
-This is the explicitly incomplete local-only form; a release invocation must
-instead provide the real two-client evidence manifest described in the testing
-guide.
+Runs the logic tests, has s&box generate the projects, and compiles Hexagon against the engine.
 
-See [architecture](docs/architecture.md), [schema authoring](docs/schema-authoring.md), [security](docs/security.md), [persistence](docs/persistence.md), [testing](docs/testing.md), and the [v2 audit closure register](docs/audit-closure.md).
+```bash
+pwsh tools/playtest.ps1
+```
+
+Boots the editor, enters play mode, and plays a full scenario through the real RPC path,
+including a restart, in a throwaway data folder.
+
+## Operator commands
+
+Typed in the host's console.
+
+| Command | Effect |
+| --- | --- |
+| `hexagon_whitelist <steamid64> <faction>` | Allow an account to create characters in a whitelisted faction |
+| `hexagon_unwhitelist <steamid64> <faction>` | Remove that permission |
+| `hexagon_give "<character name>" <item>` | Give an item to a character who is in the city |
+
+See [docs/decisions.md](docs/decisions.md) for why it is shaped this way and what is not here yet.
