@@ -178,3 +178,15 @@ Hud {
 	font-size: 16px;
 	color: #d8e2ea;
 }
+
+.staff {
+	width: 900px;
+
+	.lines {
+		flex-direction: column;
+		margin-top: 12px;
+		max-height: 420px;
+		overflow: scroll;
+		font-size: 14px;
+	}
+}

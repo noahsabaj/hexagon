@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 
 namespace Hexagon.Logic;
@@ -24,6 +25,15 @@ public sealed class JournalEntry
 	/// <summary>Characters close enough to have seen it.</summary>
 	public List<Guid> Witnesses { get; set; } = new();
 	public Dictionary<string, string> Data { get; set; } = new();
+
+	/// <summary>One line a person can read.</summary>
+	public string Describe()
+	{
+		var who = ActorName ?? (Account == 0 ? "console" : Account.ToString());
+		var details = string.Join( " ", Data.Select( pair => $"{pair.Key}={pair.Value}" ) );
+		return $"{At.UtcDateTime:HH:mm:ss} {Kind}{(Ok ? "" : " REFUSED")} by {who}{(Subject is null ? "" : $" on {Subject}")}" +
+			$"{(details.Length == 0 ? "" : $" ({details})")}{(Witnesses.Count == 0 ? "" : $" seen by {Witnesses.Count}")}";
+	}
 }
 
 /// <summary>Who is behind a recorded act.</summary>
@@ -80,6 +90,13 @@ public sealed class Journal
 		if ( witnesses is not null ) entry.Witnesses.AddRange( witnesses );
 		foreach ( var (key, value) in data ) entry.Data[key] = value;
 		Record( entry );
+	}
+
+	/// <summary>The latest entries of a day whose readable line contains the text, oldest first. Empty text matches all.</summary>
+	public IReadOnlyList<JournalEntry> Search( DateTimeOffset day, string text, int maximum )
+	{
+		var matches = Read( day ).Where( entry => text.Length == 0 || entry.Describe().Contains( text, StringComparison.OrdinalIgnoreCase ) ).ToList();
+		return matches.Skip( Math.Max( 0, matches.Count - maximum ) ).ToArray();
 	}
 
 	/// <summary>That day's entries, oldest first. A line torn by a crash is skipped.</summary>

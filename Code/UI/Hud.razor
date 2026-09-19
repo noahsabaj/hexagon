@@ -97,6 +97,24 @@
 			}
 		</div>
 
+		@if ( StaffOpen && player.IsStaff )
+		{
+			<div class="center">
+				<div class="card staff">
+					<h1>Staff</h1>
+					<div class="muted">Everything typed here is journaled under your name.</div>
+					<TextEntry Value:bind="@StaffDraft" MaxLength="@(256)" onsubmit=@SubmitStaff />
+					<div class="lines">
+						@foreach ( var line in player.StaffLines )
+						{
+							<div class="line">@line</div>
+						}
+					</div>
+					<div class="muted">@Operators.Help</div>
+				</div>
+			</div>
+		}
+
 		@if ( (InventoryOpen || player.OpenInventory is not null) && player.Inventory is { } inventory )
 		{
 			<div class="center">
@@ -187,11 +205,13 @@
 	private bool _focusChat;
 
 	private bool InventoryOpen { get; set; }
+	private bool StaffOpen { get; set; }
+	private string StaffDraft { get; set; } = string.Empty;
 	private Guid? Selected { get; set; }
 
 	protected override void OnUpdate()
 	{
-		Player.UiBusy = ChatOpen || InventoryOpen || Player.Local?.OpenInventory is not null || Player.Local is not { HasCharacter: true };
+		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || Player.Local?.OpenInventory is not null || Player.Local is not { HasCharacter: true };
 		if ( Player.Local is not { HasCharacter: true } )
 		{
 			ChatOpen = false;
@@ -219,6 +239,7 @@
 		}
 
 		if ( !ChatOpen && Input.Pressed( "Menu" ) ) InventoryOpen = !InventoryOpen;
+		if ( !ChatOpen && Input.Pressed( "Score" ) && Player.Local.IsStaff ) StaffOpen = !StaffOpen;
 	}
 
 	private void SubmitChat()
@@ -240,6 +261,12 @@
 		ChatEntry?.Blur();
 		ChatDraft = string.Empty;
 		ChatOpen = false;
+	}
+
+	private void SubmitStaff()
+	{
+		if ( !string.IsNullOrWhiteSpace( StaffDraft ) ) Player.Local?.RequestStaff( StaffDraft );
+		StaffDraft = string.Empty;
 	}
 
 	private void SubmitCharacter()
@@ -271,7 +298,7 @@
 	// Rebuild whenever anything the panel shows has changed.
 	protected override int BuildHash() => HashCode.Combine(
 		HashCode.Combine( Player.Local, Player.Local?.HasCharacter, Player.Local?.PrivateVersion, Player.Local?.CharacterName ),
-		HashCode.Combine( Chat.Version, ChatOpen, InventoryOpen, Selected, Creating, NewFaction ),
+		HashCode.Combine( Chat.Version, ChatOpen, InventoryOpen, Selected, Creating, NewFaction, StaffOpen ),
 		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.IsDown, Player.Local?.IsRestrained, (Player.Local?.HoveredTarget as Player)?.IsDown, (Player.Local?.HoveredTarget as Player)?.IsRestrained ),
 		// Lines and notices fade, so the panel must rebuild as time passes.
 		(int)RealTime.Now );

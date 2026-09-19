@@ -217,6 +217,23 @@ try {
     Expect 'the till is not a body to be looted' (Send 'state') 'tokens=45 .*The till is not yours'
     [void](Send 'close')
 
+    Write-Host '==> Staff work in game, on the record' -ForegroundColor Cyan
+    $steamId = Send 'steamid'
+    [void](Send 'staff|who')
+    Expect 'someone who is not staff is refused' (Send 'state') 'staff=False said=\[You are not staff\.\]'
+    [void](Send "console|hexagon_staff $steamId 1")
+    [void](Send 'staff|who')
+    Expect 'staff status comes only from the console, and then who is who is visible' (Send 'state') 'staff=True said=\[[^/]* is John Doe at '
+    [void](Send 'staff|give "John Doe" radio')
+    Expect 'a staff command does what the console command does' (Send 'state') 'Radio@.*said=\[Gave Radio to John Doe\.\]'
+    [void](Send 'staff|journal door.buy')
+    Expect 'staff can read the journal' (Send 'state') 'said=\[\d\d:\d\d:\d\d verb\.door\.buy by John Doe on Door:'
+    [void](Send 'staff|journal "REFUSED by John Doe (line=who)"')
+    Expect 'including what staff themselves did, refusals too' (Send 'state') 'staff\.command REFUSED by John Doe \(line=who\)'
+    [void](Send "console|hexagon_staff $steamId 0")
+    [void](Send 'staff|who')
+    Expect 'and it can be taken away' (Send 'state') 'staff=False said=\[You are not staff\.\]'
+
     Write-Host '==> Faction gate' -ForegroundColor Cyan
     $steamId = Send 'steamid'
     [void](Send 'leave')
@@ -252,7 +269,7 @@ try {
     Write-Host '==> The journal' -ForegroundColor Cyan
     $journal = Send 'journal'
     Expect 'tokens entered the world four times: two characters, a float, a wage' $journal 'tokens\.issue=4(\s|$)'
-    Expect 'every item came from a named source' $journal 'item\.issue=15(\s|$)'
+    Expect 'every item came from a named source' $journal 'item\.issue=16(\s|$)'
     Expect 'the drink went through a sink' $journal 'item\.destroy=2(\s|$)'
     Expect 'refused locks are on record' $journal 'verb\.door\.lock!=3(\s|$)'
     Expect 'refused uses are on record' $journal 'verb\.door\.use!=4(\s|$)'

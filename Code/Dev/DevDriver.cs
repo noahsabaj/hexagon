@@ -237,6 +237,9 @@ public static class DevCommands
 					if ( payee is null ) return "nobody there";
 					player.RequestPay( payee, long.Parse( args[1] ) );
 					return "sent pay";
+				case "staff":
+					player.RequestStaff( args[1] );
+					return "sent staff";
 				case "taketokens":
 					player.RequestTakeTokens();
 					return "sent taketokens";
@@ -264,6 +267,7 @@ public static class DevCommands
 						$"items=[{string.Join( ", ", player.Inventory?.Items.Select( value => $"{ItemDefinition.Find( value.Definition )?.Title}@{value.X},{value.Y}" ) ?? Array.Empty<string>() )}] " +
 						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked}{(value.IsOwned ? ",owned" : "")}" ) )}] " +
 						$"health={player.Health} down={player.IsDown} restrained={player.IsRestrained} held='{ItemDefinition.Find( player.HeldItemPath )?.Title}' bodies={Game.ActiveScene.GetAllComponents<Corpse>().Count()} opentokens={player.OpenTokens} " +
+						$"staff={player.IsStaff} said=[{string.Join( " / ", player.StaffLines.TakeLast( 4 ) )}] " +
 						$"known=[{string.Join( ", ", player.Known.Values.OrderBy( value => value ) )}] " +
 						$"open=[{player.OpenTitle}: {string.Join( ", ", player.OpenInventory?.Items.Select( value => ItemDefinition.Find( value.Definition )?.Title ) ?? Array.Empty<string?>() )}] " +
 						$"ground=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<WorldItem>().Select( value => value.Definition?.Title ).OrderBy( value => value ) )}] " +

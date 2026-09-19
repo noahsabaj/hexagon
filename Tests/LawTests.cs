@@ -162,6 +162,23 @@ public sealed class LawTests
 	}
 
 	[TestMethod]
+	public void TheJournalCanBeSearchedAndReadsAsSentences()
+	{
+		var journal = new Journal( new MemoryFiles(), () => Now );
+		var alice = new Actor( 7, Guid.NewGuid(), "Alice" );
+		journal.Record( "verb.door.lock", alice, "Door:1", ok: false, witnesses: new[] { Guid.NewGuid() }, data: ("reason", "Denied") );
+		journal.Record( "chat.say", alice, data: ("text", "hello") );
+		journal.Record( "operator.give", Actor.Console, "character:2" );
+
+		Assert.AreEqual( "12:00:00 verb.door.lock REFUSED by Alice on Door:1 (reason=Denied) seen by 1", journal.Read( Now )[0].Describe() );
+		Assert.AreEqual( "12:00:00 operator.give by console on character:2", journal.Read( Now )[2].Describe() );
+		Assert.HasCount( 2, journal.Search( Now, "alice", 10 ) );
+		Assert.AreEqual( "chat.say", journal.Search( Now, "alice", 1 ).Single().Kind, "the latest are kept" );
+		Assert.HasCount( 3, journal.Search( Now, "", 10 ) );
+		Assert.IsEmpty( journal.Search( Now, "bob", 10 ) );
+	}
+
+	[TestMethod]
 	public void CapabilitiesAreGrantedByNameOrPrefixAndDenialWins()
 	{
 		Assert.IsTrue( Capabilities.Can( Capability.DoorLock, new[] { "door.lock" } ) );

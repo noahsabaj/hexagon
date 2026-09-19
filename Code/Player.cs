@@ -231,6 +231,7 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 			.Select( value => new CharacterSummary( value.Id, value.Name, FactionDefinition.Find( value.Faction )?.Title ?? value.Faction ) )
 			.ToArray();
 		using ( Rpc.FilterInclude( caller ) ) ReceiveCharacters( JsonSerializer.Serialize( summaries ) );
+		HostSendAccount();
 	}
 
 	private void SendPrivateState()

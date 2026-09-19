@@ -55,6 +55,8 @@ public sealed class AccountData
 	public long SteamId { get; set; }
 	/// <summary>Faction ids this account may create characters in, beyond the open ones.</summary>
 	public List<string> Whitelists { get; set; } = new();
+	/// <summary>May use the operator commands in game. Granted only from the server console.</summary>
+	public bool IsStaff { get; set; }
 }
 
 public sealed class WorldData
