@@ -13,6 +13,11 @@ public sealed class FactionDefinition : GameResource
 	[Property, TextArea] public string Description { get; set; } = string.Empty;
 	[Property] public Color Tint { get; set; } = Color.White;
 
+	/// <summary>What members wear. Anyone can see it; see <see cref="Looks"/>.</summary>
+	[Property] public List<Clothing> Outfit { get; set; } = new();
+	/// <summary>The body members have, or none for the engine's citizen.</summary>
+	[Property] public Model? Body { get; set; }
+
 	/// <summary>When set, an operator must whitelist the account before it can create a character here.</summary>
 	[Property] public bool RequiresWhitelist { get; set; }
 

@@ -118,8 +118,19 @@ public static class DevCommands
 		if ( Enabled ) Log.Info( $"[dev] {client} {command} => {result}" );
 	}
 
+	/// <summary>
+	/// Set by the first command a test sends. From then on this client takes no input from the
+	/// keyboard or mouse: its window is real and has focus, so anyone touching the machine would
+	/// otherwise walk a test character about, which a journal once showed happening.
+	/// </summary>
+	public static bool Driven { get; private set; }
+
+	/// <summary>Set while a test has put the camera somewhere itself, to look at a character from outside.</summary>
+	public static bool CameraHeld { get; private set; }
+
 	public static string Run( string[] args )
 	{
+		Driven = true;
 		if ( !Game.IsEditor && !Enabled ) return "refused: not a dev session";
 		if ( args[0] == "who" )
 			return $"local={Player.Local is not null} connection={Connection.Local?.DisplayName} host={Networking.IsHost} active={Networking.IsActive} scene={Game.ActiveScene?.Name} pawns=[" +
@@ -177,6 +188,23 @@ public static class DevCommands
 					if ( item is null ) return "no such item";
 					player.RequestMoveItem( item.Id, int.Parse( args[2] ), int.Parse( args[3] ) );
 					return "sent move";
+				case "thirdperson":
+					player.GetComponent<PlayerController>().ThirdPerson = args[1] == "1";
+					return "sent thirdperson";
+				case "camera":
+					// camera|x|y|z|tx|ty|tz puts the view at a point, looking at another. camera alone gives it back.
+					CameraHeld = args.Length >= 7 && !args[1].StartsWith( '#' );
+					if ( CameraHeld && Game.ActiveScene.Camera is { } view )
+					{
+						var eye = new Vector3( float.Parse( args[1] ), float.Parse( args[2] ), float.Parse( args[3] ) );
+						view.WorldPosition = eye;
+						view.WorldRotation = Rotation.LookAt( new Vector3( float.Parse( args[4] ), float.Parse( args[5] ), float.Parse( args[6] ) ) - eye );
+					}
+					return "sent camera";
+				case "face":
+					var toward = new Vector3( float.Parse( args[1] ), float.Parse( args[2] ), float.Parse( args[3] ) ) - player.GetComponent<PlayerController>().EyePosition;
+					player.GetComponent<PlayerController>().EyeAngles = Rotation.LookAt( toward ).Angles();
+					return "sent face";
 				case "tune":
 					var radio = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
 					if ( radio is null ) return "no such item";

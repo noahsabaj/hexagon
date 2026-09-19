@@ -75,21 +75,34 @@ public sealed class Corpse : Component, Component.IPressable, IVerbTarget
 	public Guid HolderId { get; private set; }
 	public IReadOnlyList<Verb> Verbs { get; } = new[] { Search };
 
+	[Sync( SyncFlags.FromHost )] public string Look { get; set; } = string.Empty;
+	private string? _shownLook;
+
+	protected override void OnUpdate()
+	{
+		if ( _shownLook == Look || GetComponentInChildren<SkinnedModelRenderer>() is not { } renderer ) return;
+		_shownLook = Look;
+		Looks.Apply( renderer, Look );
+	}
+
 	public static Corpse? Spawn( HolderData holder )
 	{
 		if ( holder.Position is not { Length: 3 } at ) return null;
 		var body = new GameObject( true, "Body" );
 		body.WorldPosition = new Vector3( at[0], at[1], at[2] + 8f );
-		body.WorldScale = new Vector3( 1.4f, 0.5f, 0.3f );
 		body.Tags.Add( "corpse" );
-		var renderer = body.AddComponent<ModelRenderer>();
-		renderer.Model = Model.Load( "models/dev/box.vmdl" );
-		renderer.Tint = new Color( 0.35f, 0.3f, 0.3f );
+		// It lies as the downed lie: the same figure, in the same clothes, on its back.
+		var figure = new GameObject( body, true, "Figure" );
+		figure.LocalRotation = Rotation.From( -90, 0, 0 );
+		var renderer = figure.AddComponent<SkinnedModelRenderer>();
+		renderer.Model = Model.Load( Looks.DefaultBody );
 		var collider = body.AddComponent<BoxCollider>();
-		collider.Scale = new Vector3( 50, 50, 50 );
+		collider.Scale = new Vector3( 76, 28, 20 );
+		collider.Center = new Vector3( -36, 0, 2 );
 		collider.Static = true;
 		var corpse = body.AddComponent<Corpse>();
 		corpse.HolderId = holder.Id;
+		corpse.Look = holder.Look ?? string.Empty;
 		body.NetworkSpawn();
 		return corpse;
 	}
@@ -146,13 +159,13 @@ public sealed class WorldItem : Component, Component.IPressable, IVerbTarget
 		var definition = ItemDefinition.Find( stack.Definition );
 		var item = new GameObject( true, $"Item - {definition?.Title ?? "Unknown"}" );
 		item.WorldPosition = new Vector3( at[0], at[1], at[2] );
-		item.WorldScale = new Vector3( 0.2f * stack.Width, 0.2f * stack.Height, 0.12f );
 		item.Tags.Add( "item" );
-		var renderer = item.AddComponent<ModelRenderer>();
-		renderer.Model = Model.Load( "models/dev/box.vmdl" );
-		renderer.Tint = definition?.Tint ?? Color.White;
+		var renderer = Looks.Show( item, definition, 0.2f );
 		var collider = item.AddComponent<BoxCollider>();
-		collider.Scale = new Vector3( 50, 50, 50 );
+		// Big enough to look at and press, whatever the model.
+		var bounds = renderer.Model.Bounds;
+		collider.Center = bounds.Center;
+		collider.Scale = definition?.WorldModel is null ? new Vector3( 50, 50, 50 ) : Vector3.Max( bounds.Size, new Vector3( 12, 12, 12 ) );
 		collider.Static = true;
 		var component = item.AddComponent<WorldItem>();
 		component.HolderId = holder.Id;

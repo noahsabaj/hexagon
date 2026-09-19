@@ -70,7 +70,9 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 		// duck bob, which on the root would drag the whole pawn to the origin.
 		var body = new GameObject( pawn, true, "Body" );
 		var renderer = body.AddComponent<SkinnedModelRenderer>();
-		renderer.Model = Model.Load( "models/citizen/citizen.vmdl" );
+		renderer.Model = Model.Load( Looks.DefaultBody );
+		// So that what is in hand can be hung on the hand.
+		renderer.CreateBoneObjects = true;
 
 		var controller = pawn.AddComponent<PlayerController>();
 		// Left null for controllers created at runtime, yet its generated colliders need a tag set.
@@ -101,7 +103,8 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 	protected override void OnUpdate()
 	{
 		ApplyPresence();
-		if ( IsProxy || !HasCharacter ) return;
+		ApplyAppearance();
+		if ( IsProxy || !HasCharacter || Dev.DevCommands.Driven ) return;
 		// "Use" reaches a target's first verb through IPressable. "Reload" is its second.
 		if ( UiBusy ) return;
 		if ( HoveredTarget is { } target )
@@ -145,6 +148,37 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 
 	private PlayerController? Controller => GetComponent<PlayerController>( true );
 
+	/// <summary>The body and what is worn on it. Appearance, so everyone has it.</summary>
+	[Sync( SyncFlags.FromHost )] public string Look { get; set; } = string.Empty;
+
+	private string? _shownLook;
+	private string? _shownHeld;
+	private GameObject? _heldObject;
+
+	/// <summary>Every client: makes the body look like its look, and hangs what is in hand on the hand.</summary>
+	private void ApplyAppearance()
+	{
+		if ( Application.IsDedicatedServer || Controller?.Renderer is not { } renderer || !renderer.IsValid() ) return;
+		if ( _shownLook != Look )
+		{
+			_shownLook = Look;
+			Looks.Apply( renderer, Look );
+		}
+		var held = ItemDefinition.Find( HeldItemPath );
+		if ( _shownHeld != HeldItemPath )
+		{
+			_shownHeld = HeldItemPath;
+			_heldObject?.Destroy();
+			_heldObject = null;
+			if ( held is not null && renderer.GetBoneObject( "hold_R" ) is { } hand )
+			{
+				_heldObject = new GameObject( hand, true, "Held" ) { NetworkMode = NetworkMode.Never };
+				Looks.Show( _heldObject, held, 0.08f );
+			}
+		}
+		renderer.Set( "holdtype", (int)(held?.HoldType ?? Sandbox.Citizen.CitizenAnimationHelper.HoldTypes.None) );
+	}
+
 	/// <summary>A connection without a character is in the menu: no body in the world, no movement.</summary>
 	private void ApplyPresence()
 	{
@@ -156,9 +190,10 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 			controller.Renderer.GameObject.LocalRotation = IsDown ? Rotation.From( -90, 0, 0 ) : Rotation.Identity;
 		}
 		if ( IsProxy ) return;
-		controller.UseInputControls = HasCharacter && !IsDown;
-		controller.UseLookControls = HasCharacter;
-		controller.UseCameraControls = HasCharacter;
+		controller.UseInputControls = HasCharacter && !IsDown && !Dev.DevCommands.Driven;
+		controller.EnablePressing = !Dev.DevCommands.Driven;
+		controller.UseLookControls = HasCharacter && !Dev.DevCommands.Driven;
+		controller.UseCameraControls = HasCharacter && !Dev.DevCommands.CameraHeld;
 	}
 
 	/// <summary>

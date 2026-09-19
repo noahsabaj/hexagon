@@ -15,6 +15,11 @@ public sealed class ItemDefinition : GameResource
 	[Property, Range( 1, 4 )] public int Width { get; set; } = 1;
 	[Property, Range( 1, 4 )] public int Height { get; set; } = 1;
 	[Property] public Color Tint { get; set; } = Color.White;
+	/// <summary>What it looks like lying in the world and held in a hand. None shows a tinted block.</summary>
+	[Property] public Model? WorldModel { get; set; }
+	/// <summary>How it is carried when in hand, which anyone can see from across the street.</summary>
+	[Property] public Sandbox.Citizen.CitizenAnimationHelper.HoldTypes HoldType { get; set; }
+
 	/// <summary>How many share one inventory slot. One means each is its own object, followed by id.</summary>
 	[Property, Range( 1, 100 )] public int MaxStack { get; set; } = 1;
 

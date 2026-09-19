@@ -236,7 +236,7 @@
 	protected override void OnUpdate()
 	{
 		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || Player.Local?.OpenInventory is not null || Player.Local is not { HasCharacter: true };
-		if ( Player.Local is not { HasCharacter: true } )
+		if ( Player.Local is not { HasCharacter: true } || Dev.DevCommands.Driven )
 		{
 			ChatOpen = false;
 			InventoryOpen = false;

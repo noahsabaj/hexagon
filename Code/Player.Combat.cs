@@ -150,6 +150,7 @@ public sealed partial class Player
 		var at = HostPosition;
 		var body = game.Holders!.GetOrCreate( Guid.NewGuid(), HolderKinds.Corpse, "Body", character.Inventory.Width, character.Inventory.Height );
 		body.Position = new[] { at.x, at.y, at.z };
+		body.Look = Look;
 		var actor = Actor.Of( character );
 		foreach ( var item in character.Inventory.Items.ToArray() ) game.Transfers!.Move( character, body, item.Id, actor );
 		if ( character.Tokens > 0 ) game.Transfers!.MoveTokens( character, body, character.Tokens, actor );

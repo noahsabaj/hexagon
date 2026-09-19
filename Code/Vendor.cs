@@ -34,6 +34,14 @@ public sealed class Vendor : Component, Component.IPressable, IVerbTarget
 	/// <summary>A capability needed to trade here, such as a permit, or empty for anyone.</summary>
 	[Property] public string Requires { get; set; } = string.Empty;
 
+	/// <summary>What the shopkeeper wears, if the object has a figure to dress. See <see cref="Looks"/>.</summary>
+	[Property] public List<Clothing> Outfit { get; set; } = new();
+
+	protected override void OnStart()
+	{
+		if ( GetComponentInChildren<SkinnedModelRenderer>() is { } figure ) Looks.Apply( figure, Looks.Of( null, Outfit ) );
+	}
+
 	private bool _joined;
 	private RealTimeSince _sinceRestock;
 

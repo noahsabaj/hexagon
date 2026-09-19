@@ -54,6 +54,19 @@ function Invoke-Tool([string] $Name, $Arguments = @{}) {
     return $text
 }
 
+# Saves what the game camera sees, so a person (or the model running this) can look at it.
+function Snapshot([string] $Name) {
+    try {
+        $reply = Invoke-Editor 'tools/call' ([ordered]@{ name = 'call_tool'; arguments = [ordered]@{ name = 'camera_screenshot'; arguments = @{} } })
+        $image = $reply.result.content | Where-Object { $_.type -eq 'image' } | Select-Object -First 1
+        if (-not $image) { Write-Host "       no picture: $(($reply.result.content | ForEach-Object { $_.text }) -join ' ')" -ForegroundColor DarkGray; return }
+        $path = Join-Path ([IO.Path]::GetTempPath()) "hexagon-look-$Name.png"
+        [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($image.data))
+        Write-Host "       picture: $path" -ForegroundColor DarkGray
+    }
+    catch { Write-Host "       no picture: $($_.Exception.Message)" -ForegroundColor DarkGray }
+}
+
 function Wait-Until([string] $What, [scriptblock] $Condition) {
     while ([DateTime]::UtcNow -lt $script:deadline) {
         if ($editor.HasExited) { throw "s&box exited with code $($editor.ExitCode) while waiting for $What." }
@@ -261,6 +274,18 @@ try {
     [void](Send 'split|3|10')
     Expect 'part of a pile can be set aside' (Send 'state') 'Pistol roundx20@.*Pistol roundx10@'
     [void](Send 'merge|5|3')
+    [void](Send 'equip|2')
+    Expect 'what is in hand is appearance: everyone is sent it' (Send 'state') "held='Pistol'"
+    [void](Send 'thirdperson|1')
+    [void](Send 'face|330|-100|40')
+    Start-Sleep -Seconds 2
+    Snapshot 'officer'
+    [void](Send 'camera|330|-150|70|240|-150|45')
+    Start-Sleep -Seconds 1
+    Snapshot 'officer-front'
+    [void](Send 'camera')
+    [void](Send 'thirdperson|0')
+    Snapshot 'crate-and-vendor'
     Expect 'and put back' "$((Send 'state') -notmatch 'roundx10') $(Send 'state')" '^True .*Pistol roundx30@'
 
     Write-Host '==> Restart' -ForegroundColor Cyan

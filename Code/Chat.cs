@@ -82,7 +82,7 @@ public static class Chat
 		var origin = speaker.HostPosition;
 		var present = Game.ActiveScene.GetAllComponents<Player>().Where( listener => listener.Network.Owner is not null && listener.HostCharacter is not null ).ToArray();
 		var near = present.Where( listener => listener != speaker && listener.HostPosition.Distance( origin ) <= ChatRules.Range( ChatChannel.Radio )!.Value ).ToArray();
-		var tuned = present.Where( listener => !near.Contains( listener ) && TunedTo( listener.HostCharacter! ) == frequency ).ToArray();
+		var tuned = present.Where( listener => listener != speaker && !near.Contains( listener ) && TunedTo( listener.HostCharacter! ) == frequency ).ToArray();
 		GameManager.Instance?.Journal?.Record( "chat.radio", Actor.Of( character ),
 			where: new[] { origin.x, origin.y, origin.z },
 			witnesses: near.Concat( tuned ).Where( listener => listener != speaker ).Select( listener => listener.HostCharacter!.Id ),

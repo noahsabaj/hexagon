@@ -21,6 +21,8 @@ public sealed class HolderData : IHolder
 	public long Tokens { get; set; }
 	/// <summary>Where it lies, for holders that are not part of the authored scene.</summary>
 	public float[]? Position { get; set; }
+	/// <summary>For a body: what the character looked like. See the engine side's Looks.</summary>
+	public string? Look { get; set; }
 
 	[JsonIgnore] public Guid HolderId => Id;
 	[JsonIgnore] public string HolderLabel => $"{Kind}:{Id:N}";

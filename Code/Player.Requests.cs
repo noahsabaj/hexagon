@@ -90,6 +90,7 @@ public sealed partial class Player
 		_character = character;
 		CharacterDescription = character.Description;
 		CharacterId = character.Id;
+		Look = Looks.Of( FactionDefinition.Find( character.Faction ) );
 		HasCharacter = true;
 		var position = character.Position is { Length: 3 } saved
 			? new Vector3( saved[0], saved[1], saved[2] )
@@ -125,6 +126,7 @@ public sealed partial class Player
 		HasCharacter = false;
 		CharacterId = Guid.Empty;
 		CharacterDescription = string.Empty;
+		Look = string.Empty;
 		HostSyncVitals();
 	}
 
