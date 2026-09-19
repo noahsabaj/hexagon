@@ -100,26 +100,32 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 		if ( Local == this ) Local = null;
 	}
 
+	protected override void OnPreRender()
+	{
+		// A test looking at a character from outside. After everything else has placed the camera.
+		if ( !IsProxy && Dev.DevCommands.HeldCamera is { } held && Scene.Camera is { } view ) view.WorldTransform = held;
+	}
+
 	protected override void OnUpdate()
 	{
 		ApplyPresence();
 		ApplyAppearance();
 		if ( IsProxy || !HasCharacter || Dev.DevCommands.Driven ) return;
-		// "Use" reaches a target's first verb through IPressable. "Reload" is its second.
+		// "Use" reaches a target's first verb through IPressable. Everything else it offers is chosen
+		// from a menu, by name: nothing that costs tokens or binds someone hangs off a bare number key.
 		if ( UiBusy ) return;
-		if ( HoveredTarget is { } target )
-		{
-			var verbs = ((IVerbTarget)target).Verbs;
-			if ( Input.Pressed( "Reload" ) && verbs.ElementAtOrDefault( 1 ) is { } second ) RequestAct( target, second.Id );
-			// Every verb also answers to its number, which is how a third and later one is reached.
-			for ( var index = 0; index < verbs.Count && index < 9; index++ )
-				if ( Input.Pressed( $"Slot{index + 1}" ) ) RequestAct( target, verbs[index].Id );
-		}
+		if ( HoveredTarget is IVerbTarget { Verbs.Count: > 1 } && Input.Pressed( MenuAction ) ) MenuTarget = HoveredTarget;
 		if ( Input.Pressed( "Attack1" ) && Controller is { } controller ) RequestAttack( controller.EyeAngles.Forward );
 	}
 
 	/// <summary>Owner: set by the HUD while a panel has the cursor, so a click in a menu is not a punch.</summary>
 	public static bool UiBusy { get; set; }
+
+	/// <summary>The input action that lays out everything a target offers.</summary>
+	public const string MenuAction = "Flashlight";
+
+	/// <summary>Owner: the target whose verbs the HUD is showing as a menu, if any.</summary>
+	public Component? MenuTarget { get; set; }
 
 	/// <summary>Owner: the thing being looked at, if characters can act on it.</summary>
 	public Component? HoveredTarget => Controller?.Hovered?.GetComponent<IVerbTarget>() as Component;
@@ -190,7 +196,9 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 			controller.Renderer.GameObject.LocalRotation = IsDown ? Rotation.From( -90, 0, 0 ) : Rotation.Identity;
 		}
 		if ( IsProxy ) return;
-		controller.UseInputControls = HasCharacter && !IsDown && !Dev.DevCommands.Driven;
+		// A driven test client acts as though nobody is at the keyboard, but still stands, falls and is pushed.
+		if ( Dev.DevCommands.Driven ) Input.Suppressed = true;
+		controller.UseInputControls = HasCharacter && !IsDown;
 		controller.EnablePressing = !Dev.DevCommands.Driven;
 		controller.UseLookControls = HasCharacter && !Dev.DevCommands.Driven;
 		controller.UseCameraControls = HasCharacter && !Dev.DevCommands.CameraHeld;
@@ -309,6 +317,9 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 	private void ReceiveTeleport( Vector3 position )
 	{
 		WorldPosition = position;
-		if ( Controller?.Body is { } body && body.IsValid() ) body.Velocity = Vector3.Zero;
+		if ( Controller?.Body is not { } body || !body.IsValid() ) return;
+		body.Velocity = Vector3.Zero;
+		// A body at rest is asleep, and one put in the air asleep would hang there.
+		body.Sleeping = false;
 	}
 }

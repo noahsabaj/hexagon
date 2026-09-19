@@ -126,7 +126,8 @@ public static class DevCommands
 	public static bool Driven { get; private set; }
 
 	/// <summary>Set while a test has put the camera somewhere itself, to look at a character from outside.</summary>
-	public static bool CameraHeld { get; private set; }
+	public static bool CameraHeld => HeldCamera is not null;
+	public static Transform? HeldCamera { get; private set; }
 
 	public static string Run( string[] args )
 	{
@@ -136,6 +137,13 @@ public static class DevCommands
 			return $"local={Player.Local is not null} connection={Connection.Local?.DisplayName} host={Networking.IsHost} active={Networking.IsActive} scene={Game.ActiveScene?.Name} pawns=[" +
 				string.Join( ", ", Game.ActiveScene?.GetAllComponents<Player>().Select( value =>
 					$"{value.GameObject.Name}: proxy={value.IsProxy} owner={value.Network.Owner?.DisplayName} netactive={value.Network.Active} claimed={value.WorldPosition} believed={value.HostPosition}" ) ?? Array.Empty<string>() ) + "]";
+		if ( args[0] == "roster" )
+		{
+			// Everything saved, as one line, so a test can compare a server with a copy of it.
+			if ( GameManager.Instance is not { Roster: { } roster, Holders: { } holders } ) return "no roster";
+			return "characters=[" + string.Join( ", ", roster.All.OrderBy( value => value.Name ).Select( value =>
+				$"{value.Name}:{value.Tokens}t:{value.Inventory.Items.Sum( item => item.Count )}i:{value.Health}hp:{value.Known.Count}known" ) ) + $"] holders={holders.Count}";
+		}
 		if ( args[0] == "journal" )
 		{
 			// Today's journal as kind=count, refusals marked, so a test can assert what was remembered.
@@ -191,14 +199,23 @@ public static class DevCommands
 				case "thirdperson":
 					player.GetComponent<PlayerController>().ThirdPerson = args[1] == "1";
 					return "sent thirdperson";
+				case "menu":
+					// menu|<object name> lays out what it offers, as the menu key would. menu alone closes it.
+					player.MenuTarget = args.Length > 1 && !args[1].StartsWith( '#' )
+						? Game.ActiveScene.GetAllComponents<IVerbTarget>().OfType<Component>().FirstOrDefault( value => value.GameObject.Name == args[1] )
+						: null;
+					return player.MenuTarget is null ? "menu closed" : "menu open";
+				case "panel":
+					UI.Hud.InventoryOpen = args[1] == "inventory";
+					UI.Hud.StaffOpen = args[1] == "staff";
+					return "sent panel";
 				case "camera":
 					// camera|x|y|z|tx|ty|tz puts the view at a point, looking at another. camera alone gives it back.
-					CameraHeld = args.Length >= 7 && !args[1].StartsWith( '#' );
-					if ( CameraHeld && Game.ActiveScene.Camera is { } view )
+					HeldCamera = null;
+					if ( args.Length >= 7 && !args[1].StartsWith( '#' ) )
 					{
 						var eye = new Vector3( float.Parse( args[1] ), float.Parse( args[2] ), float.Parse( args[3] ) );
-						view.WorldPosition = eye;
-						view.WorldRotation = Rotation.LookAt( new Vector3( float.Parse( args[4] ), float.Parse( args[5] ), float.Parse( args[6] ) ) - eye );
+						HeldCamera = new Transform( eye, Rotation.LookAt( new Vector3( float.Parse( args[4] ), float.Parse( args[5] ), float.Parse( args[6] ) ) - eye ) );
 					}
 					return "sent camera";
 				case "face":

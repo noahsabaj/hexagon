@@ -30,6 +30,7 @@ public sealed class CharacterRoster
 	}
 
 	public int Count => _characters.Count;
+	public IReadOnlyCollection<CharacterData> All => _characters.Values;
 
 	public CharacterData? Find( Guid id ) => _characters.TryGetValue( id, out var character ) ? character : null;
 

@@ -30,11 +30,16 @@ itself to.
   and the capabilities members have, such as `door.lock`.
 - **Items**, as `.item` assets in a grid inventory. An item can grant capabilities (a key), be
   used up (food, a bandage), be held in view of everyone, or be a weapon that uses ammunition.
+  Identical items pile up in one slot, and every one of them is accounted for.
+- **Radio.** A radio is tuned on the radio. `/r` reaches radios tuned the same, as a voice without
+  a face, and anyone beside the speaker as ordinary speech.
+- **Looks.** A faction sets its members' body and outfit, an item its model and how it is held.
+  Appearance goes to everyone; the faction behind a uniform does not.
 - **Holders.** A crate, a dropped item, a body and a vendor are one kind of thing, so dropping,
   storing, looting, searching and trading are the same transfer.
 - **Verbs.** A world object or a person lists what can be done to it. One host checkpoint decides
-  who may: identity, rate limit, reach, capability, journal.
-- **Chat**: say, `/w` whisper, `/y` yell, `/me`, `//` out-of-character, and `/pay`. Speech reaches
+  who may: identity, rate limit, reach, capability, journal. Use does the first; a menu names the rest.
+- **Chat**: say, `/w` whisper, `/y` yell, `/me`, `/r` radio, `//` out-of-character, and `/pay`. Speech reaches
   only players in range, each in their own words for the speaker.
 - **Doors** that anyone in reach can open, that a capability or ownership can lock, and that can be bought.
 - **Violence with consequences.** Harm puts a character down, never out. Helping up, searching and
@@ -45,7 +50,27 @@ itself to.
   whitelists survive a restart. So does the journal.
 - **A default HUD**: character menu, chat, inventory, the open holder, verbs, staff panel.
 
-## Using it in a game
+## Setting up from a clean checkout
+
+Needs Windows, s&box installed through Steam, the .NET 10 SDK and PowerShell 7 (`pwsh`).
+
+1. Clone `hexagon` and a game that uses it, such as `hl2rp-hexagon`, side by side.
+2. Link this checkout into the game. From the game's folder:
+
+```bash
+pwsh -Command "New-Item -ItemType Junction -Path Libraries/hexagon -Target (Resolve-Path ../hexagon)"
+```
+
+3. From this folder, with the s&box editor closed, check that it builds:
+
+```bash
+pwsh tools/verify.ps1
+```
+
+4. Open the game's `.sbproj` in the s&box editor and press play. To host it instead, see
+   [docs/hosting.md](docs/hosting.md).
+
+## Using it in a new game
 
 1. Reference the library in the game's `.sbproj`: `"PackageReferences": [ "kbj.hexagon" ]`.
 2. Link this checkout into the game: a `Libraries/hexagon` junction pointing here.
@@ -83,7 +108,8 @@ pwsh tools/playtest.ps1
 ```
 
 Boots the editor, enters play mode, and plays a full scenario through the real RPC path,
-including a restart, in a throwaway data folder.
+including a restart, in a throwaway data folder. It saves pictures of what it saw as
+`hexagon-look-*.png` in the temp folder. A failed run keeps its data folder, journal included.
 
 ```bash
 pwsh tools/playtest-server.ps1
@@ -102,7 +128,7 @@ Typed in the host's console as `hexagon_<command>`, or by staff in game (Tab) wi
 | --- | --- |
 | `staff <steamid64> <0|1>` | Console only. Let an account use these commands in game |
 | `whitelist <steamid64> <faction>` / `unwhitelist` | Allow or stop an account creating characters in a whitelisted faction |
-| `give "<character name>" <item>` | Issue an item, from the `operator` source |
+| `give "<character name>" <item> [count]` | Issue items, from the `operator` source |
 | `teleport "<character name>" <x> <y> <z>`, and in game `bring` / `goto "<character name>"` | Move a character |
 | `hurt "<character name>" <amount>` / `revive "<character name>"` | Harm a character, or help one up |
 | `payday` | Pay every faction's wage now |

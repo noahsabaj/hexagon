@@ -64,22 +64,29 @@ function Expect([string] $What, [string] $State, [string] $Pattern, [switch] $No
     }
 }
 
-Write-Host "==> Starting the dedicated server (data folder '$dataRoot')" -ForegroundColor Cyan
-$start = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $SboxRoot 'sbox-server.exe'))
-$start.WorkingDirectory = $SboxRoot
-$start.Arguments = "+game `"$manifest`" +net_allow_local 1 +hexagon_data_root $dataRoot +hexagon_dev 1"
-$start.RedirectStandardOutput = $true
-$start.UseShellExecute = $false
-$server = [System.Diagnostics.Process]::Start($start)
-$null = Register-ObjectEvent -InputObject $server -EventName OutputDataReceived -MessageData $log -Action {
-    if ($null -ne $EventArgs.Data) { Add-Content -LiteralPath $Event.MessageData -Value $EventArgs.Data }
+# Starts a dedicated server on a data folder and waits until it is taking commands.
+function Start-Server([string] $DataFolder) {
+    $start = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $SboxRoot 'sbox-server.exe'))
+    $start.WorkingDirectory = $SboxRoot
+    $start.Arguments = "+game `"$manifest`" +net_allow_local 1 +hexagon_data_root $DataFolder +hexagon_dev 1"
+    $start.RedirectStandardOutput = $true
+    $start.UseShellExecute = $false
+    $script:server = [System.Diagnostics.Process]::Start($start)
+    $null = Register-ObjectEvent -InputObject $script:server -EventName OutputDataReceived -MessageData $log -Action {
+        if ($null -ne $EventArgs.Data) { Add-Content -LiteralPath $Event.MessageData -Value $EventArgs.Data }
+    }
+    $script:server.BeginOutputReadLine()
+    $announced = "\[dev\] inbox at .*$([regex]::Escape($DataFolder))[\\/]"
+    Wait-Until 'the server' { (Read-Log) -match $announced }
+    $script:inbox = ((Read-Log) -match $announced | Select-Object -Last 1) -replace '^.*inbox at ', ''
 }
-$server.BeginOutputReadLine()
+
+Write-Host "==> Starting the dedicated server (data folder '$dataRoot')" -ForegroundColor Cyan
 $script:deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+$script:server = $null
 $clients = @()
 try {
-    Wait-Until 'the server' { (Read-Log) -match '\[dev\] inbox at ' }
-    $script:inbox = ((Read-Log) -match '\[dev\] inbox at ' | Select-Object -First 1) -replace '^.*inbox at ', ''
+    Start-Server $dataRoot
     Expect 'a dedicated server has no player of its own' (Send 0 'who') 'local=False .*host=True .*pawns=\[\]'
 
     Write-Host '==> Starting two clients (a few minutes)' -ForegroundColor Cyan
@@ -236,15 +243,27 @@ try {
     Expect 'the player who left is gone from the other client' (Send 1 'proxies') '^[^A-Za-z]*$'
     Expect 'both joins and both entries are on record' (Send 0 'journal') 'connection\.join=2 .*city\.enter=2'
 
+    Write-Host '==> A copy taken while the server runs is a working backup' -ForegroundColor Cyan
+    $saved = Send 0 'roster'
+    $live = Split-Path -Parent $script:inbox
+    $copy = "$dataRoot-copy"
+    Copy-Item -LiteralPath $live -Destination (Join-Path (Split-Path -Parent $live) $copy) -Recurse
+    Expect 'the running server has both characters saved' $saved 'characters=\[Jane Roe:.*John Doe:.*\] holders=[1-9]'
+    foreach ($client in $clients) { if (-not $client.HasExited) { Stop-Process -Id $client.Id -Force } }
+    Stop-Process -Id $script:server.Id -Force
+    Start-Sleep -Seconds 2
+    Start-Server $copy
+    Expect 'a server started on the copy has every character, with all they had' (Send 0 'roster') "^$([regex]::Escape($saved))$"
+
     $problems = @(Read-Log | Where-Object { $_ -match 'Exception|\[store\]|\[journal\]|Whitelist violation|Hexagon does not' -and $_ -notmatch 'Exception when loading' })
     Expect 'the server logged no game warnings or errors' "$($problems.Count) problem lines: $($problems -join ' | ')" '^0 problem'
 }
 finally {
     foreach ($client in $clients) { if (-not $client.HasExited) { Stop-Process -Id $client.Id -Force } }
-    if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force }
+    if ($script:server -and -not $script:server.HasExited) { Stop-Process -Id $script:server.Id -Force }
     Start-Sleep -Seconds 1
     # A failed run keeps its data, journal included: that is the evidence of what the host decided.
-    $kept = Get-ChildItem -LiteralPath (Join-Path $SboxRoot 'data') -Recurse -Directory -Filter $dataRoot -ErrorAction SilentlyContinue
+    $kept = Get-ChildItem -LiteralPath (Join-Path $SboxRoot 'data') -Recurse -Directory -Filter "$dataRoot*" -ErrorAction SilentlyContinue
     if ($script:failures -gt 0) { $kept | ForEach-Object { Write-Host "Data kept at $($_.FullName)" -ForegroundColor DarkGray } }
     else { $kept | Remove-Item -Recurse -Force }
     if ($script:failures -gt 0) { Write-Host "Server log kept at $log" -ForegroundColor DarkGray }

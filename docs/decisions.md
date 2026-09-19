@@ -207,14 +207,59 @@ staff panel. Staff status is set only from the console, so it cannot be granted 
 inside the game. Every line staff type is journaled before it runs, refusals included, and reading
 the journal is itself an entry. There is no separate admin mod to trust.
 
+## 2026-09-19: Identical things pile up, and a pile is counted
+
+An item asset says how many share a slot. One means each is its own object and is followed
+through the journal by id, as before. More than one makes a pile: every issue, move and destroy
+records a count, so the supply of rounds is the journal's issues minus its destroys exactly as the
+supply of tokens is. A whole pile that lands in a slot of its own keeps its id; part of a pile is a
+new pile. Splitting and merging move nothing between holders and are journaled anyway, because
+"where did the other ten go" is a question a dispute asks. A vendor trades one at a time, at a
+price for one. All of a transfer happens or none of it does.
+
+## 2026-09-19: A radio is an object with a dial
+
+The frequency is on the radio, not the character, so whoever takes a radio takes its setting:
+a searched officer's radio is tuned to the officers' channel. `/r` reaches everyone else carrying
+a radio tuned the same, wherever they are, as a voice: a name if the listener was given one, and
+otherwise nothing, because a radio shows no face. Anyone within speaking distance hears someone
+talking into a radio, whatever they carry. Someone down or bound cannot reach theirs. People
+standing next to a *listener* do not yet overhear it.
+
+## 2026-09-19: What is worn is seen; who issued it is not
+
+A faction sets a body and an outfit, an item sets a model and how it is held, and both are synced
+to everyone as a look, because they are appearance. The faction itself is still told only to its
+owner. So a uniform says "this person is dressed as Civil Protection", which is exactly what an
+onlooker would know, and a stolen uniform would say the same. A body lies as its character looked.
+An item with no model is a small block in its tint, in the world and in the hand.
+
+## 2026-09-19: Use does the obvious thing; everything else is chosen by name
+
+Looking at something shows what Use will do and lists what else is offered. One key lays the rest
+out as a menu of named buttons. Numbers work only inside that menu. Before this, every verb hung
+off a bare number key, and a journal showed a door bought for 50 tokens by someone pressing 3.
+
+## 2026-09-19: What the play tests taught
+
+- A failed run keeps its data folder. The first kept journal explained the run once recorded here
+  as unexplained, where a character was judged from the wrong place: the test clients are real
+  windows with focus, and someone at the machine had walked one about, clicked, and pressed keys.
+  A client driven by a test now suppresses keyboard and mouse input. It still has a body.
+- The movement audit never adopts a client's claim as a starting point. Only the host places a
+  character; until it has, claims are neither believed nor punished.
+- A body at rest is asleep, and one teleported into the air asleep hung there. A teleport wakes it.
+- The editor test saves pictures of the HUD and the scene, so that "it renders" is looked at.
+- One editor run accepted a claimed teleport to a door with no refusal on record, before failed
+  runs kept their data. It has not recurred in six runs since. If it does, the journal will be there.
+
 ## What is thin, and known
 
 - Weapons hit by a host ray along the attacker's claimed aim. There is no recoil, spread or cover.
-- One round is one inventory item. Stacks would make ammunition and tokens-as-items practical.
-- Bodies, dropped items, crates and vendors are boxes. Models and clothing are not done.
-- There is no verb menu beyond keys: Use, Reload, and number keys for the rest.
-- Radio channels, and an in-game whitelist application flow, are not built.
-- Continuous integration is still missing: unit tests could run hosted; both play tests need s&box.
+- The engine ships no weapon models, so HL2RP's pistol is a block held in a pistol stance. Clothing cannot yet be an item.
+- The HUD has been looked at in pictures, not yet played by a person. Drag and drop is not done: items move by select, then click.
+- An in-game whitelist application flow is not built. A radio is not overheard by those beside a listener.
+- Unit tests run on a hosted runner on every push. Both play tests need s&box and stay local.
 - The play tests run both clients as one Steam account, so account-level rules are tested by one account.
 
 HL2RP keeps what is about its setting: the scanner, civic records as a view of the journal,

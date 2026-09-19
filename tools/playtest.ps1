@@ -270,6 +270,7 @@ try {
     Expect 'a wage is a declared faucet, paid to those at work' (Send 'state') 'tokens=120 .*You are paid 20 tokens'
     Expect 'the console whitelist unlocked the faction' $state "name='Officer Kane' faction='Civil Protection'"
     Expect 'Civil Protection locked the door, which also shut it' $state 'Door 1:open=False,locked=True'
+    Expect 'a character put in the air comes down: a driven client still has a body' (Send 'state') 'pos=[-\d.]+,[-\d.]+,[0-4]\.'
     Expect 'a pistol and thirty rounds fit in a starting inventory' $state 'Pistol@.*Pistol roundx30@.*Zip tiex2@'
     [void](Send 'split|3|10')
     Expect 'part of a pile can be set aside' (Send 'state') 'Pistol roundx20@.*Pistol roundx10@'
@@ -280,11 +281,20 @@ try {
     [void](Send 'face|330|-100|40')
     Start-Sleep -Seconds 2
     Snapshot 'officer'
-    [void](Send 'camera|330|-150|70|240|-150|45')
+    [void](Send 'camera|330|-110|70|240|-150|40')
     Start-Sleep -Seconds 1
     Snapshot 'officer-front'
+    [void](Send 'camera|310|-120|130|240|-150|120')
+    Start-Sleep -Seconds 1
+    Snapshot 'officer-front-high'
     [void](Send 'camera')
     [void](Send 'thirdperson|0')
+    [void](Send 'menu|Door 2')
+    Snapshot 'verb-menu'
+    [void](Send 'menu')
+    [void](Send 'panel|inventory')
+    Snapshot 'inventory'
+    [void](Send 'panel|none')
     Snapshot 'crate-and-vendor'
     Expect 'and put back' "$((Send 'state') -notmatch 'roundx10') $(Send 'state')" '^True .*Pistol roundx30@'
 
