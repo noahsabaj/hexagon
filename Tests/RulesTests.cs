@@ -1,0 +1,93 @@
+using System;
+using Hexagon.Logic;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace Hexagon.Tests;
+
+[TestClass]
+public sealed class RulesTests
+{
+	[TestMethod]
+	public void InventoryPlacesMovesAndRefusesOverlap()
+	{
+		var holder = new CharacterData { Inventory = new InventoryData { Width = 3, Height = 2 } };
+		var inventory = holder.Inventory;
+		var transfers = new Transfers( new Journal( new MemoryFiles() ) );
+		var big = transfers.Issue( "test", holder, "items/pistol.item", 2, 1, Actor.Console );
+		var small = transfers.Issue( "test", holder, "items/ration.item", 1, 1, Actor.Console );
+
+		Assert.IsTrue( big.Ok && small.Ok );
+		Assert.AreEqual( (0, 0), (big.Value.X, big.Value.Y) );
+		Assert.AreEqual( (2, 0), (small.Value.X, small.Value.Y) );
+		Assert.AreEqual( ErrorCode.Conflict, InventoryGrid.Move( inventory, small.Value.Id, 1, 0 ).Code );
+		Assert.AreEqual( ErrorCode.Conflict, InventoryGrid.Move( inventory, big.Value.Id, 2, 1 ).Code, "would hang off the edge" );
+		Assert.IsTrue( InventoryGrid.Move( inventory, big.Value.Id, 0, 1 ).Ok );
+		Assert.IsTrue( InventoryGrid.Move( inventory, big.Value.Id, 1, 1 ).Ok, "an item may overlap its own old cells" );
+		Assert.AreEqual( ErrorCode.NotFound, InventoryGrid.Move( inventory, Guid.NewGuid(), 0, 0 ).Code );
+	}
+
+	[TestMethod]
+	public void ChatPrefixesSelectTheChannelWithoutSwallowingOtherWords()
+	{
+		Assert.AreEqual( new ChatMessage( ChatChannel.Say, "hello" ), ChatRules.Parse( "  hello " ).Value );
+		Assert.AreEqual( new ChatMessage( ChatChannel.Ooc, "brb" ), ChatRules.Parse( "//brb" ).Value );
+		Assert.AreEqual( new ChatMessage( ChatChannel.Ooc, "brb" ), ChatRules.Parse( "/OOC brb" ).Value );
+		Assert.AreEqual( new ChatMessage( ChatChannel.Me, "waves" ), ChatRules.Parse( "/me waves" ).Value );
+		Assert.AreEqual( new ChatMessage( ChatChannel.Whisper, "psst" ), ChatRules.Parse( "/w psst" ).Value );
+		Assert.AreEqual( ChatChannel.Say, ChatRules.Parse( "/wave at them" ).Value.Channel );
+	}
+
+	[TestMethod]
+	public void ChatRefusesEmptyOversizedAndControlText()
+	{
+		Assert.AreEqual( ErrorCode.Invalid, ChatRules.Parse( "   " ).Code );
+		Assert.AreEqual( ErrorCode.Invalid, ChatRules.Parse( "/me" ).Code );
+		Assert.AreEqual( ErrorCode.Invalid, ChatRules.Parse( new string( 'a', ChatRules.MaximumScalars + 1 ) ).Code );
+		Assert.IsTrue( ChatRules.Parse( new string( 'a', ChatRules.MaximumScalars ) ).Ok );
+		// A bell, a right-to-left override, and a lone surrogate.
+		Assert.AreEqual( ErrorCode.Invalid, ChatRules.Parse( "hi" + (char)7 + "there" ).Code );
+		Assert.AreEqual( ErrorCode.Invalid, ChatRules.Parse( "hi" + (char)0x202E + "there" ).Code );
+		Assert.AreEqual( ErrorCode.Invalid, ChatRules.Parse( "bad " + (char)0xD800 + " surrogate" ).Code );
+	}
+
+	[TestMethod]
+	public void OnlyOutOfCharacterChatIsGlobal()
+	{
+		foreach ( var channel in Enum.GetValues<ChatChannel>() )
+		{
+			Assert.AreEqual( channel == ChatChannel.Ooc, ChatRules.Range( channel ) is null, channel.ToString() );
+		}
+		Assert.IsLessThan( ChatRules.Range( ChatChannel.Say )!.Value, ChatRules.Range( ChatChannel.Whisper )!.Value );
+		Assert.IsLessThan( ChatRules.Range( ChatChannel.Yell )!.Value, ChatRules.Range( ChatChannel.Say )!.Value );
+	}
+
+	[TestMethod]
+	public void RateLimiterSpendsItsBurstThenRefillsWithTime()
+	{
+		var limiter = new RateLimiter( capacity: 3, refillPerSecond: 1 );
+
+		Assert.IsTrue( limiter.TryTake( 0 ) && limiter.TryTake( 0 ) && limiter.TryTake( 0 ) );
+		Assert.IsFalse( limiter.TryTake( 0 ) );
+		Assert.IsFalse( limiter.TryTake( 0.5 ) );
+		Assert.IsTrue( limiter.TryTake( 1.5 ) );
+		Assert.IsFalse( limiter.TryTake( 1.5 ), "refill is proportional to elapsed time" );
+		Assert.IsTrue( limiter.TryTake( 1000 ) && limiter.TryTake( 1000 ) && limiter.TryTake( 1000 ) );
+		Assert.IsFalse( limiter.TryTake( 1000 ), "a long idle never banks more than the burst" );
+	}
+	[TestMethod]
+	public void TwoRadiosEitherMatchOrDoNotAndAVoiceHasNoFace()
+	{
+		Assert.AreEqual( "101.5", ChatRules.Frequency( " 101.50 " ).Value );
+		Assert.AreEqual( "100.0", ChatRules.Frequency( "100" ).Value, "one spelling per frequency" );
+		foreach ( var bad in new[] { "99.9", "200", "101.55", "1e2", "-101", "abc", "", null } )
+			Assert.AreEqual( ErrorCode.Invalid, ChatRules.Frequency( bad ).Code, bad );
+		Assert.AreEqual( ChatChannel.Radio, ChatRules.Parse( "/r unit four responding" ).Value.Channel );
+		Assert.AreEqual( ChatChannel.Say, ChatRules.Parse( "/run" ).Value.Channel, "/r must not swallow /run" );
+
+		var john = new CharacterData { Id = System.Guid.NewGuid(), Name = "John Doe", Description = "A tired resident of the city." };
+		var jane = new CharacterData { Id = System.Guid.NewGuid(), Name = "Jane Roe", Description = "A woman in a grey coat." };
+		Assert.AreEqual( "A voice", Recognition.Voice( jane, john ), "a description is what is seen, and nothing is seen" );
+		Recognition.Introduce( john, jane );
+		Assert.AreEqual( "John Doe", Recognition.Voice( jane, john ) );
+	}
+}

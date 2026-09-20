@@ -1,71 +1,140 @@
 # Hexagon
 
-A roleplay framework for [s&box](https://sbox.game), built as the spiritual successor to [NutScript](https://github.com/NutScript/NutScript) and [Helix](https://github.com/NebulousCloud/helix) for Source 2.
+A roleplay framework for s&box. Hexagon is a library: it supplies the components, rules, panels
+and tools a serious roleplay server needs, and a game supplies the setting. It is written against
+the engine's own features rather than a layer over them.
 
-Hexagon is an **s&box Library** — you don't modify it directly. Instead, you create a separate Game project (a "schema") that references Hexagon and extends it with your own characters, items, factions, and game rules.
+It is not a port of NutScript or Helix. Those leave a server's hardest problems to a rulebook:
+metagaming, duplicated items, disputes and staff abuse. Hexagon holds itself to three laws.
 
-## Features
+- **Perception.** A client receives only what its character could perceive. Names and factions
+  reach their owner alone; speech reaches only those in range.
+- **Conservation.** Items and tokens only move: between holders, in from a named source, out
+  through a named sink. Nothing is set, spawned or deleted.
+- **Memory.** Every host decision is journaled with who, where and who saw it, refusals and
+  operator commands included.
 
-- **Characters** — Multi-character system with custom fields via `[CharVar]` attributes, persistent across sessions
-- **Items & Inventory** — Grid-based inventories with item definitions (weapons, bags, outfits, ammo, currency) as GameResource assets
-- **Factions & Classes** — Data-driven faction/class system with GameResource definitions
-- **Chat** — Pluggable chat classes (IC, OOC, whisper, yell, /me, /it, /roll, LOOC) with custom routing
-- **Commands** — Typed command system with argument parsing and permission checks
-- **Permissions** — Flag-based character permissions with extensible hooks
-- **Currency** — Configurable money system with physical currency items
-- **Attributes** — Character stats with a boost/debuff system
-- **Doors** — Ownership, factions, access lists, locking
-- **Storage** — Persistent world containers
-- **Vendors** — NPC buy/sell shops with configurable catalogs
-- **UI** — 9 default Razor panels (character select, creation, HUD, chat, inventory, storage, vendor, scoreboard, death screen), all overridable
-- **Persistence** — Custom JSON database layer with in-memory caching
-- **Plugins** — Extend the framework via `[HexPlugin]` classes or s&box addon packages
-- **Events & Hooks** — Interface-based event system with fire, permission-gate, and value-reduce patterns
+[HL2RP](https://github.com/noahsabaj/hl2rp-hexagon) is the first game built on it, and contains
+no code at all: its factions, items and scene are assets. That is the standard Hexagon holds
+itself to.
 
-## Quick Start
+## What a game gets
 
-1. Add Hexagon as a library reference in your s&box Game project
-2. Drop the `HexagonFramework` component into your scene — all systems auto-initialize
-3. Create a character data class extending `HexCharacterData`
-4. Define items, factions, and classes as GameResource assets
-5. Optionally create a `[HexPlugin]` to hook into framework events
+- **Players.** The host gives each connection a pawn driven by the engine's `PlayerController`.
+  Where a client says it is counts as a claim; host rules read where the host believes it is.
+- **Characters.** Several per account. Names are checked for look-alikes, mixed scripts and
+  invisible characters, so one player cannot pass for another.
+- **Recognition.** Strangers are what they look like until they introduce themselves. What each
+  character knows is its own and is never sent to anyone else.
+- **Factions**, as `.faction` assets: starting items and tokens, a wage, an optional whitelist,
+  and the capabilities members have, such as `door.lock`.
+- **Items**, as `.item` assets in a grid inventory. An item can grant capabilities (a key), be
+  used up (food, a bandage), be held in view of everyone, or be a weapon that uses ammunition.
+  Identical items pile up in one slot, and every one of them is accounted for.
+- **Radio.** A radio is tuned on the radio. `/r` reaches radios tuned the same, as a voice without
+  a face, and anyone beside the speaker as ordinary speech.
+- **Looks.** A faction sets its members' body and outfit, an item its model and how it is held.
+  Appearance goes to everyone; the faction behind a uniform does not.
+- **Holders.** A crate, a dropped item, a body and a vendor are one kind of thing, so dropping,
+  storing, looting, searching and trading are the same transfer.
+- **Verbs.** A world object or a person lists what can be done to it. One host checkpoint decides
+  who may: identity, rate limit, reach, capability, journal. Use does the first; a menu names the rest.
+- **Chat**: say, `/w` whisper, `/y` yell, `/me`, `/r` radio, `//` out-of-character, and `/pay`. Speech reaches
+  only players in range, each in their own words for the speaker.
+- **Doors** that anyone in reach can open, that a capability or ownership can lock, and that can be bought.
+- **Violence with consequences.** Harm puts a character down, never out. Helping up, searching and
+  finishing are deliberate, witnessed acts. The game chooses what death means.
+- **Restraints and search**, **vendors, wages and payments**, all conserving items and tokens.
+- **Staff tools** in game: the console's own commands, journaled under the staff member's name.
+- **Persistence.** Characters, what they know, their health and state, holders, doors and
+  whitelists survive a restart. So does the journal.
+- **A default HUD**: character menu, chat, inventory, the open holder, verbs, staff panel.
 
-## Documentation
+## Setting up from a clean checkout
 
-- **[Wiki](https://github.com/noahsabaj/hexagon/wiki)** — Full schema developer guide + API reference
-- **[Example Schema (hl2rp)](https://github.com/noahsabaj/hl2rp-hexagon)** — A Half-Life 2 RP schema built on Hexagon
+Needs Windows, s&box installed through Steam, the .NET 10 SDK and PowerShell 7 (`pwsh`).
 
-## Project Structure
+1. Clone `hexagon` and a game that uses it, such as `hl2rp-hexagon`, side by side.
+2. Link this checkout into the game. From the game's folder:
 
+```bash
+pwsh -Command "New-Item -ItemType Junction -Path Libraries/hexagon -Target (Resolve-Path ../hexagon)"
 ```
-Code/
-├── Core/           # Bootstrap, events, plugin system
-├── Characters/     # Character data, runtime, networking
-├── Factions/       # Faction and class definitions
-├── Items/          # Item definitions and base types
-├── Inventory/      # Grid-based inventory system
-├── Chat/           # Chat routing and built-in classes
-├── Commands/       # Command parsing and execution
-├── Permissions/    # Flag-based permission system
-├── Currency/       # Money management
-├── Attributes/     # Character stats and boosts
-├── Doors/          # Door mechanics and ownership
-├── Storage/        # Persistent containers
-├── Vendors/        # NPC vendor system
-├── Config/         # Server configuration
-├── Logging/        # Server-side logging
-├── Persistence/    # Database layer
-├── UI/             # UI manager, panels, styles
-└── Schema/         # Skeleton schema template
+
+3. From this folder, with the s&box editor closed, check that it builds:
+
+```bash
+pwsh tools/verify.ps1
 ```
 
-## License
+4. Open the game's `.sbproj` in the s&box editor and press play. To host it instead, see
+   [docs/hosting.md](docs/hosting.md).
 
-Hexagon is dual-licensed under the [MIT License](LICENSE-MIT) and [Apache License 2.0](LICENSE-APACHE), at your option.
+## Using it in a new game
 
-**What does this mean?** Both are permissive open-source licenses — you can freely use, modify, and distribute Hexagon in your own projects (including commercial servers) without paying anything. You just pick whichever license you prefer:
+1. Reference the library in the game's `.sbproj`: `"PackageReferences": [ "kbj.hexagon" ]`.
+2. Link this checkout into the game: a `Libraries/hexagon` junction pointing here.
+3. In the startup scene, add a `Hexagon Game Manager`, a `ScreenPanel` with the `Hud`, at least one
+   `SpawnPoint`, and any `Hexagon Door` objects, which must be networked objects.
+4. Author `.faction` and `.item` assets.
 
-- **MIT** — The simplest option. Just keep the copyright notice in your project and you're good.
-- **Apache 2.0** — Same freedom as MIT, but also includes explicit patent protection (useful for larger projects or organizations).
+## How it is built
 
-**TL;DR:** Use Hexagon however you want. Build your schema, run your server, sell VIP packages — no restrictions. Just don't remove the license file.
+| Part | Where | How it is checked |
+| --- | --- | --- |
+| Rules with no engine in them: names, inventory grid, transfers, journal, capabilities, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
+| Components: game manager, player, door, chat, operator commands | `Code` | Compiled against the installed engine, warnings as errors |
+| Default HUD | `Code/UI` | Same compile, then looked at in the play test |
+| A whole game on top | a game project | `tools/playtest.ps1` plays it in the real editor; `tools/playtest-server.ps1` plays it as two clients on a dedicated server |
+
+What an onlooker could see is `[Sync( SyncFlags.FromHost )]` on components. Everything else goes
+to its owner by `[Rpc.Owner]`. A client changes nothing directly: it calls a `[Rpc.Host]` request, and the host
+re-derives who is asking from the connection, measures distances itself, and saves before it
+replies.
+
+## Commands
+
+Run from this folder with the s&box editor closed. Both default to the sibling `hl2rp-hexagon`
+checkout; pass `-GameRoot` for another game.
+
+```bash
+pwsh tools/verify.ps1
+```
+
+Runs the logic tests, has s&box generate the projects, and compiles Hexagon against the engine.
+
+```bash
+pwsh tools/playtest.ps1
+```
+
+Boots the editor, enters play mode, and plays a full scenario through the real RPC path,
+including a restart, in a throwaway data folder. It saves pictures of what it saw as
+`hexagon-look-*.png` in the temp folder. A failed run keeps its data folder, journal included.
+
+```bash
+pwsh tools/playtest-server.ps1
+```
+
+Starts a real dedicated server and joins two real game clients to it, then asks each client what
+it was actually told: that the other player's name never arrived, that a whisper stopped at its
+range, that a door one opened is open for the other. Needs Steam running and takes several
+minutes, most of it the clients starting.
+
+## Operator commands
+
+Typed in the host's console as `hexagon_<command>`, or by staff in game (Tab) without the prefix.
+
+| Command | Effect |
+| --- | --- |
+| `staff <steamid64> <0|1>` | Console only. Let an account use these commands in game |
+| `whitelist <steamid64> <faction>` / `unwhitelist` | Allow or stop an account creating characters in a whitelisted faction |
+| `give "<character name>" <item> [count]` | Issue items, from the `operator` source |
+| `teleport "<character name>" <x> <y> <z>`, and in game `bring` / `goto "<character name>"` | Move a character |
+| `hurt "<character name>" <amount>` / `revive "<character name>"` | Harm a character, or help one up |
+| `payday` | Pay every faction's wage now |
+| `who` | Who is playing whom, and where. The one place a name is shown to someone never told it |
+| `journal [text] [count]` | The latest of today's journal entries containing the text |
+
+The journal is `journal/<date>.jsonl` under the data folder, one JSON object per line.
+
+[docs/v0.1.md](docs/v0.1.md) defines the first release as a checklist. See [docs/decisions.md](docs/decisions.md) for why it is shaped this way and what is not here yet.

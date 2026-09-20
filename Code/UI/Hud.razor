@@ -1,0 +1,433 @@
+@using System
+@using System.Linq
+@using Hexagon.Logic
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits PanelComponent
+
+<root>
+	@if ( Player.Local is not { } player )
+	{
+		<div class="center"><div class="card"><h1>Connecting…</h1></div></div>
+	}
+	else if ( !player.HasCharacter )
+	{
+		<div class="center">
+			<div class="card">
+				<h1>@(Creating ? "New character" : "Your characters")</h1>
+				@if ( !Creating )
+				{
+					@foreach ( var character in player.Characters )
+					{
+						<div class="row">
+							<div class="grow">
+								<div class="name">@character.Name</div>
+								<div class="muted">@character.Faction</div>
+							</div>
+							<button class="primary" onclick=@(() => player.RequestEnterCity( character.Id ))>Enter</button>
+							<button onclick=@(() => player.RequestDeleteCharacter( character.Id ))>Delete</button>
+						</div>
+					}
+					@if ( player.Characters.Count == 0 )
+					{
+						<div class="muted">You have no characters yet.</div>
+					}
+					<div class="actions">
+						<button class="primary" onclick=@(() => Creating = true)>Create a character</button>
+					</div>
+				}
+				else
+				{
+					<label>Name</label>
+					<TextEntry Value:bind="@NewName" MaxLength="@NameRules.MaximumNameLength" />
+					<label>Description (at least @NameRules.MinimumDescriptionLength characters)</label>
+					<TextEntry Value:bind="@NewDescription" MaxLength="@NameRules.MaximumDescriptionLength" />
+					<label>Faction</label>
+					<div class="row wrap">
+						@foreach ( var faction in FactionDefinition.All.OrderBy( value => value.Title ) )
+						{
+							<button class="@(faction.ResourcePath == NewFaction ? "primary" : "")"
+								onclick=@(() => NewFaction = faction.ResourcePath)>
+								@faction.Title@(faction.RequiresWhitelist ? " (whitelist)" : "")
+							</button>
+						}
+					</div>
+					<div class="actions">
+						<button class="primary" onclick=@SubmitCharacter>Create</button>
+						<button onclick=@(() => Creating = false)>Back</button>
+					</div>
+				}
+				@foreach ( var notice in Chat.Lines.Where( value => value.IsNotice && value.Age < 8f ).TakeLast( 2 ) )
+				{
+					<div class="line notice">@notice.Text</div>
+				}
+			</div>
+		</div>
+	}
+	else
+	{
+		<div class="identity">
+			<div class="name">@player.CharacterName</div>
+			<div class="muted">@(player.Faction?.Title ?? "Unaffiliated")</div>
+			<div class="muted">@player.Tokens.ToString( "N0" ) tokens</div>
+			<div class="muted">@(player.IsDown ? "Down" : player.IsRestrained ? "Restrained" : $"Health {player.Health}")</div>
+		</div>
+
+		@if ( !Player.UiBusy && player.HoveredTarget is IVerbTarget hovered && hovered.Verbs.Count > 0 )
+		{
+			<div class="verbs">
+				<div class="line">[@Key( "Use" )] @hovered.Verbs[0].Title</div>
+				@if ( hovered.Verbs.Count > 1 )
+				{
+					<div class="line muted">[@Key( Player.MenuAction )] More: @string.Join( ", ", hovered.Verbs.Skip( 1 ).Select( value => value.Title ) )</div>
+				}
+			</div>
+		}
+
+		@if ( player.MenuTarget is IVerbTarget offered )
+		{
+			<div class="center">
+				<div class="card menu">
+					<h1>@(player.MenuTarget is Player person ? player.LabelFor( person ) : player.MenuTarget.GameObject.Name)</h1>
+					@foreach ( var (verb, index) in offered.Verbs.Select( ( value, index ) => (value, index) ) )
+					{
+						<button class="@(index == 0 ? "primary" : "")" onclick=@(() => Choose( verb ))>@(index + 1). @verb.Title</button>
+					}
+					<button onclick=@(() => player.MenuTarget = null)>Never mind</button>
+				</div>
+			</div>
+		}
+
+		@if ( !Player.UiBusy )
+		{
+			<div class="keys">
+				<div class="line">[@Key( "Chat" )] Talk</div>
+				<div class="line">[@Key( "Menu" )] Inventory</div>
+				<div class="line">[@Key( "Attack1" )] @(ItemDefinition.Find( player.HeldItemPath ) is { Damage: > 0 } weapon ? $"Use the {weapon.Title.ToLowerInvariant()}" : "Strike")</div>
+				@if ( player.IsStaff )
+				{
+					<div class="line">[@Key( "Score" )] Staff</div>
+				}
+			</div>
+		}
+
+		<div class="chat @(ChatOpen ? "open" : "")">
+			<div class="lines">
+				@foreach ( var line in Chat.Lines.TakeLast( ChatOpen ? 14 : 6 ).Where( value => ChatOpen || value.Age < 12f ) )
+				{
+					<div class="line @(line.IsNotice ? "notice" : line.Channel.ToString().ToLowerInvariant())">@line.Text</div>
+				}
+			</div>
+			@if ( ChatOpen )
+			{
+				<TextEntry @ref="ChatEntry" Value:bind="@ChatDraft" MaxLength="@ChatRules.MaximumScalars" onsubmit=@SubmitChat />
+			}
+		</div>
+
+		@if ( StaffOpen && player.IsStaff )
+		{
+			<div class="center">
+				<div class="card staff">
+					<h1>Staff</h1>
+					<div class="muted">Everything typed here is journaled under your name.</div>
+					<TextEntry Value:bind="@StaffDraft" MaxLength="@(256)" onsubmit=@SubmitStaff />
+					<div class="lines">
+						@foreach ( var line in player.StaffLines )
+						{
+							<div class="line">@line</div>
+						}
+					</div>
+					<div class="muted">@Operators.Help</div>
+				</div>
+			</div>
+		}
+
+		@if ( (InventoryOpen || player.OpenInventory is not null) && player.Inventory is { } inventory )
+		{
+			<div class="center">
+				@if ( player.OpenInventory is { } other )
+				{
+					<div class="card">
+						<h1>@player.OpenTitle</h1>
+						@if ( player.OpenTarget is Vendor counter )
+						{
+							<div class="pricelist">
+								@foreach ( var item in other.Items )
+								{
+									var goods = ItemDefinition.Find( item.Definition );
+									<div class="row">
+										<div class="grow">
+											<div class="name">@(goods?.Title ?? "Unknown item")</div>
+											<div class="muted">@item.Count in stock</div>
+										</div>
+										<div class="price">@counter.SellPrice( goods ).ToString( "N0" ) tokens</div>
+										<button class="primary" onclick=@(() => player.RequestTake( item.Id ))>Buy one</button>
+									</div>
+								}
+								@if ( other.Items.Count == 0 )
+								{
+									<div class="muted">The shelves are empty.</div>
+								}
+							</div>
+						}
+						else
+						{
+						<div class="grid" style="width: @(other.Width * 68)px; height: @(other.Height * 68)px;">
+							@foreach ( var item in other.Items )
+							{
+								<div class="item"
+									style="left: @(item.X * 68)px; top: @(item.Y * 68)px; width: @(item.Width * 68 - 4)px; height: @(item.Height * 68 - 4)px;"
+									onclick=@(() => player.RequestTake( item.Id ))>
+									@(ItemDefinition.Find( item.Definition )?.Title ?? "Unknown item")
+									@if ( item.Count > 1 )
+									{
+										<div class="count">@item.Count</div>
+									}
+								</div>
+							}
+						</div>
+						}
+						<div class="actions">
+							@if ( player.OpenTokens > 0 && player.OpenTarget is not Vendor )
+							{
+								<button class="primary" onclick=@(() => player.RequestTakeTokens())>Take @player.OpenTokens.ToString( "N0" ) tokens</button>
+							}
+							<button onclick=@(() => player.RequestCloseHolder())>Close</button>
+						</div>
+						<div class="muted">@(player.OpenTarget is Vendor ? "To sell, select something of yours. It pays what it offers, from its own till." : "Click an item to take it.")</div>
+					</div>
+				}
+				<div class="card">
+					<h1>Inventory</h1>
+					<div class="grid" style="width: @(inventory.Width * 68)px; height: @(inventory.Height * 68)px;">
+						@for ( var y = 0; y < inventory.Height; y++ )
+						{
+							@for ( var x = 0; x < inventory.Width; x++ )
+							{
+								var cellX = x;
+								var cellY = y;
+								<div class="cell" style="left: @(cellX * 68)px; top: @(cellY * 68)px;"
+									onclick=@(() => ClickCell( cellX, cellY ))></div>
+							}
+						}
+						@foreach ( var item in inventory.Items )
+						{
+							var definition = ItemDefinition.Find( item.Definition );
+							<div class="item @(item.Id == Selected ? "selected" : "")"
+								style="left: @(item.X * 68)px; top: @(item.Y * 68)px; width: @(item.Width * 68 - 4)px; height: @(item.Height * 68 - 4)px;"
+								onclick=@(() => ClickItem( item ))>
+								@(definition?.Title ?? "Unknown item")
+								@if ( item.Count > 1 )
+								{
+									<div class="count">@item.Count</div>
+								}
+								@if ( definition is { IsRadio: true } )
+								{
+									<div class="muted">@(item.Frequency ?? "untuned")</div>
+								}
+							</div>
+						}
+					</div>
+					@if ( SelectedDefinition is { IsRadio: true } )
+					{
+						<div class="row">
+							<TextEntry class="grow" Value:bind="@FrequencyDraft" MaxLength="@(5)" Placeholder="100.0 to 199.9" onsubmit=@TuneSelected />
+							<button onclick=@TuneSelected>Tune</button>
+						</div>
+						<div class="muted">Speak into it with /r. Anyone tuned the same hears you; so does anyone beside you.</div>
+					}
+					<div class="actions">
+						@if ( player.OpenInventory is not null )
+						{
+							<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "put" ))>
+								@(player.OpenTarget is not Vendor buyer ? "Put in" : Selected is null ? "Sell" : buyer.BuyPrice( SelectedDefinition ) is { } offer ? $"Sell one for {offer}" : "Not wanted here")
+							</button>
+						}
+						@if ( SelectedDefinition is { Consumable: true } usable )
+						{
+							<button class="primary" onclick=@(() => ActOnSelected( "item.use" ))>@usable.UseTitle</button>
+						}
+						@if ( SelectedStack is { Count: > 1 } pile )
+						{
+							<button onclick=@(() => SplitSelected( pile ))>Split off @(pile.Count / 2)</button>
+						}
+						<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "item.equip" ))>Hold</button>
+						<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "item.drop" ))>Drop</button>
+						<button onclick=@(() => player.RequestLeaveCity())>Leave the city</button>
+					</div>
+					<div class="muted">Select an item, then click an empty cell to move it, or a pile of the same thing to add to it.</div>
+				</div>
+			</div>
+		}
+	}
+</root>
+
+@code
+{
+	private bool Creating { get; set; }
+	private string NewName { get; set; } = string.Empty;
+	private string NewDescription { get; set; } = string.Empty;
+	private string NewFaction { get; set; } = string.Empty;
+
+	private bool ChatOpen { get; set; }
+	private string ChatDraft { get; set; } = string.Empty;
+	// A property, because the Razor @ref generator only assigns properties.
+	private TextEntry? ChatEntry { get; set; }
+	private bool _focusChat;
+
+	// Static so a test can open a panel to take its picture. There is one HUD.
+	internal static bool InventoryOpen { get; set; }
+	internal static bool StaffOpen { get; set; }
+	private string StaffDraft { get; set; } = string.Empty;
+	private Guid? Selected { get; set; }
+
+	protected override void OnUpdate()
+	{
+		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || Player.Local?.OpenInventory is not null || Player.Local?.MenuTarget is not null || Player.Local is not { HasCharacter: true };
+		if ( Player.Local is not { HasCharacter: true } )
+		{
+			ChatOpen = false;
+			InventoryOpen = false;
+			return;
+		}
+		// A driven test client takes no keys; see DevCommands.Driven.
+		if ( Dev.DevCommands.Driven ) return;
+
+		if ( Player.Local.MenuTarget is { } menu )
+		{
+			// The menu is over once something is chosen, the target is gone, or the player backs out.
+			var verbs = (menu as IVerbTarget)?.Verbs;
+			if ( !menu.IsValid() || verbs is null || Input.EscapePressed || Player.Local.IsIncapable )
+			{
+				Input.EscapePressed = false;
+				Player.Local.MenuTarget = null;
+			}
+			else
+			{
+				for ( var index = 0; index < verbs.Count && index < 9; index++ )
+					if ( Input.Pressed( $"Slot{index + 1}" ) ) Choose( verbs[index] );
+			}
+			return;
+		}
+
+		if ( !ChatOpen && Input.Pressed( "Chat" ) )
+		{
+			ChatOpen = true;
+			_focusChat = true;
+			Input.Clear( "Chat" );
+		}
+		else if ( ChatOpen && Input.EscapePressed )
+		{
+			Input.EscapePressed = false;
+			CloseChat();
+		}
+
+		// Focused programmatically: the player is embodied and has no cursor to click with.
+		if ( _focusChat && ChatEntry is not null )
+		{
+			ChatEntry.Focus();
+			_focusChat = false;
+		}
+
+		if ( !ChatOpen && Input.Pressed( "Menu" ) ) InventoryOpen = !InventoryOpen;
+		if ( !ChatOpen && Input.Pressed( "Score" ) && Player.Local.IsStaff ) StaffOpen = !StaffOpen;
+	}
+
+	private void Choose( Verb verb )
+	{
+		if ( Player.Local is not { MenuTarget: { } target } player ) return;
+		player.MenuTarget = null;
+		player.RequestAct( target, verb.Id );
+	}
+
+	/// <summary>The key a player has bound to an action, so the hint is true for them.</summary>
+	private static string Key( string action ) => (Input.GetButtonOrigin( action, false ) ?? action).ToUpperInvariant();
+
+	private void SubmitChat()
+	{
+		var text = ChatDraft;
+		CloseChat();
+		if ( string.IsNullOrWhiteSpace( text ) || Player.Local is not { } player ) return;
+		// "/pay 20" hands tokens to whoever is being looked at. It is an act, not speech.
+		if ( text.StartsWith( "/pay ", StringComparison.OrdinalIgnoreCase ) )
+		{
+			if ( long.TryParse( text[5..].Trim(), out var amount ) && player.HoveredTarget is Player payee ) player.RequestPay( payee, amount );
+			return;
+		}
+		player.RequestSay( text );
+	}
+
+	private void CloseChat()
+	{
+		ChatEntry?.Blur();
+		ChatDraft = string.Empty;
+		ChatOpen = false;
+	}
+
+	private void SubmitStaff()
+	{
+		if ( !string.IsNullOrWhiteSpace( StaffDraft ) ) Player.Local?.RequestStaff( StaffDraft );
+		StaffDraft = string.Empty;
+	}
+
+	private void SubmitCharacter()
+	{
+		Player.Local?.RequestCreateCharacter( NewName, NewDescription, NewFaction );
+		Creating = false;
+		NewName = string.Empty;
+		NewDescription = string.Empty;
+	}
+
+	private void ClickCell( int x, int y )
+	{
+		if ( Selected is not { } item ) return;
+		Player.Local?.RequestMoveItem( item, x, y );
+		Selected = null;
+	}
+
+	private ItemStack? SelectedStack => Player.Local?.Inventory?.Items.FirstOrDefault( value => value.Id == Selected );
+	private ItemDefinition? SelectedDefinition => SelectedStack is { } stack ? ItemDefinition.Find( stack.Definition ) : null;
+
+	private void ClickItem( ItemStack item )
+	{
+		// With one pile selected, clicking another of the same thing puts the first on it.
+		if ( SelectedStack is { } held && held.Id != item.Id && held.Definition == item.Definition && item.Max > 1 )
+		{
+			Player.Local?.RequestMoveItem( held.Id, item.X, item.Y );
+			Selected = null;
+			return;
+		}
+		Selected = Selected == item.Id ? null : item.Id;
+	}
+
+	private string FrequencyDraft { get; set; } = string.Empty;
+
+	private void TuneSelected()
+	{
+		if ( Selected is { } radio ) Player.Local?.RequestTune( radio, FrequencyDraft );
+		FrequencyDraft = string.Empty;
+	}
+
+	private void SplitSelected( ItemStack pile )
+	{
+		Player.Local?.RequestSplitItem( pile.Id, pile.Count / 2 );
+		Selected = null;
+	}
+
+	private void ActOnSelected( string verb )
+	{
+		if ( Selected is not { } item ) return;
+		if ( verb == "put" ) Player.Local?.RequestPut( item );
+		else Player.Local?.RequestItemAct( item, verb );
+		Selected = null;
+	}
+
+	// Rebuild whenever anything the panel shows has changed.
+	protected override int BuildHash() => HashCode.Combine(
+		HashCode.Combine( Player.Local, Player.Local?.HasCharacter, Player.Local?.PrivateVersion, Player.Local?.CharacterName ),
+		HashCode.Combine( Chat.Version, ChatOpen, InventoryOpen, Selected, Creating, NewFaction, StaffOpen, Player.Local?.MenuTarget ),
+		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.IsDown, Player.Local?.IsRestrained, (Player.Local?.HoveredTarget as Player)?.IsDown, (Player.Local?.HoveredTarget as Player)?.IsRestrained ),
+		// Lines and notices fade, so the panel must rebuild as time passes.
+		(int)RealTime.Now );
+}
