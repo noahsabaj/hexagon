@@ -11,12 +11,6 @@ namespace Hexagon;
 // state anyone can see it is in, and every such act goes through RequestAct like any other.
 public sealed partial class Player
 {
-	public const string IntroduceVerb = "person.introduce";
-	public const string RestrainVerb = "person.restrain";
-	public const string ReleaseVerb = "person.release";
-	public const string SearchVerb = "person.search";
-	public const string ReviveVerb = "person.revive";
-	public const string FinishVerb = "person.finish";
 
 	/// <summary>How near someone must stand to do anything to a person.</summary>
 	public const float PersonReach = 120f;
@@ -29,10 +23,10 @@ public sealed partial class Player
 		if ( down )
 		{
 			var finish = GameManager.Instance?.FinishRequires is { Length: > 0 } needed ? needed : null;
-			return new[] { new Verb( ReviveVerb, "Help up" ), new Verb( SearchVerb, "Search" ), new Verb( FinishVerb, "Finish", finish ) };
+			return new[] { new Verb( VerbIds.PersonRevive, "Help up" ), new Verb( VerbIds.PersonSearch, "Search" ), new Verb( VerbIds.PersonFinish, "Finish", finish ) };
 		}
-		if ( restrained ) return new[] { new Verb( SearchVerb, "Search" ), new Verb( ReleaseVerb, "Release" ) };
-		return new[] { new Verb( IntroduceVerb, "Introduce yourself" ), new Verb( OfferVerb, "Offer something" ), new Verb( RestrainVerb, "Restrain", Capability.Restrain ) };
+		if ( restrained ) return new[] { new Verb( VerbIds.PersonSearch, "Search" ), new Verb( VerbIds.PersonRelease, "Release" ) };
+		return new[] { new Verb( VerbIds.PersonIntroduce, "Introduce yourself" ), new Verb( VerbIds.PersonOffer, "Offer something" ), new Verb( VerbIds.PersonRestrain, "Restrain", Capability.Restrain ) };
 	}
 
 	float IVerbTarget.Reach => PersonReach;
@@ -59,14 +53,14 @@ public sealed partial class Player
 			return Result.Fail( ErrorCode.Invalid, "There is nobody there." );
 		switch ( verb.Id )
 		{
-			case IntroduceVerb: return HostIntroduce( actor, other );
-			case ReviveVerb: return HostRevive();
-			case SearchVerb: return HostBeSearched( actor );
-			case RestrainVerb: return HostBeRestrained( actor, other );
-			case ReleaseVerb: return HostRelease();
+			case VerbIds.PersonIntroduce: return HostIntroduce( actor, other );
+			case VerbIds.PersonRevive: return HostRevive();
+			case VerbIds.PersonSearch: return HostBeSearched( actor );
+			case VerbIds.PersonRestrain: return HostBeRestrained( actor, other );
+			case VerbIds.PersonRelease: return HostRelease();
 			// What is offered is chosen from the inventory, and sent with RequestOffer.
-			case OfferVerb: return Result.Fail( ErrorCode.Invalid, "Choose what to offer from your inventory." );
-			case FinishVerb:
+			case VerbIds.PersonOffer: return Result.Fail( ErrorCode.Invalid, "Choose what to offer from your inventory." );
+			case VerbIds.PersonFinish:
 				var can = Vitals.CanFinish( _character );
 				if ( can.Ok ) HostDie( "finished", actor );
 				return can;

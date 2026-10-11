@@ -47,7 +47,7 @@ public sealed partial class Player
 		var steamId = SteamIdOf( caller );
 		var allowed = game.Account( steamId ).IsStaff;
 		var by = _character is not null ? Actor.Of( _character ) : new Actor( steamId, Name: caller.DisplayName );
-		game.Journal!.Record( "staff.command", by, ok: allowed, data: ("line", line) );
+		game.Journal!.Record( JournalKinds.StaffCommand, by, ok: allowed, data: ("line", line) );
 		var reply = allowed ? Operators.Execute( game, by, this, Operators.Words( line ) ) : new[] { "You are not staff." };
 		using ( Rpc.FilterInclude( caller ) ) ReceiveStaffLines( reply.ToArray() );
 	}

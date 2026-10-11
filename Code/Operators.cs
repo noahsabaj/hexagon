@@ -52,7 +52,7 @@ public static class Operators
 		var account = game.Account( id );
 		account.IsStaff = enabled != 0;
 		game.SaveAccount( account );
-		game.Journal!.Record( "operator.staff", Actor.Console, $"account:{id}", data: ("staff", account.IsStaff.ToString()) );
+		game.Journal!.Record( JournalKinds.OperatorStaff, Actor.Console, $"account:{id}", data: ("staff", account.IsStaff.ToString()) );
 		foreach ( var player in game.Scene.GetAllComponents<Player>() ) player.HostSendAccount();
 		Log.Info( $"{id} is {(account.IsStaff ? "now" : "no longer")} staff." );
 	}
@@ -69,7 +69,7 @@ public static class Operators
 		while ( length > 0 && words[length - 1].Length == 0 ) length--;
 		words = words[..length];
 		// Whoever has the console is on the record too.
-		game.Journal!.Record( "staff.command", Actor.Console, data: ("line", Line( words )) );
+		game.Journal!.Record( JournalKinds.StaffCommand, Actor.Console, data: ("line", Line( words )) );
 		foreach ( var line in Execute( game, Actor.Console, null, words ) ) Log.Info( line );
 	}
 
@@ -198,14 +198,14 @@ public static class Operators
 			{
 				if ( Find( Word( 1 ) ) is not { } target || !int.TryParse( Word( 2 ), out var amount ) || amount <= 0 )
 					return new[] { "Usage: hurt \"<character name>\" <amount>. The character must be in the city." };
-				journal.Record( "operator.hurt", by, target.HostCharacter!.HolderLabel, data: ("amount", amount.ToString()) );
+				journal.Record( JournalKinds.OperatorHurt, by, target.HostCharacter!.HolderLabel, data: ("amount", amount.ToString()) );
 				target.HostDamage( amount, null, "operator" );
 				return new[] { $"Hurt {target.HostCharacter.Name} for {amount}." };
 			}
 			case "revive":
 			{
 				if ( Character( Word( 1 ) ) is not { } character ) return new[] { "Usage: revive \"<character name>\"." };
-				journal.Record( "operator.revive", by, character.HolderLabel );
+				journal.Record( JournalKinds.OperatorRevive, by, character.HolderLabel );
 				var revived = Player.HostLoaded( character.Id ) is { } loaded ? loaded.HostRevive() : Vitals.Revive( character );
 				if ( revived.Ok ) Changed( game, character );
 				return new[] { revived.Ok ? $"Helped {character.Name} up." : revived.Message };
@@ -214,7 +214,7 @@ public static class Operators
 			{
 				if ( Character( Word( 1 ) ) is not { } character ) return new[] { "Usage: release \"<character name>\"." };
 				if ( !character.IsRestrained ) return new[] { $"{character.Name}'s hands are not bound." };
-				journal.Record( "operator.release", by, character.HolderLabel );
+				journal.Record( JournalKinds.OperatorRelease, by, character.HolderLabel );
 				if ( Player.HostLoaded( character.Id ) is { } loaded ) loaded.HostRelease();
 				else
 				{
@@ -229,7 +229,7 @@ public static class Operators
 				if ( Word( 1 ).Length == 0 || roster.Named( Word( 1 ) ) is not { } dead ) return new[] { "Usage: restore \"<dead character's name>\"." };
 				var restored = Player.HostRestore( game, dead, by );
 				if ( !restored.Ok ) return new[] { restored.Message };
-				journal.Record( "operator.restore", by, dead.HolderLabel );
+				journal.Record( JournalKinds.OperatorRestore, by, dead.HolderLabel );
 				return new[] { $"{dead.Name} is alive again, and gets up where the body lay." };
 			}
 			case "faction":
@@ -238,7 +238,7 @@ public static class Operators
 				if ( Faction( Word( 2 ) ) is not { } faction ) return new[] { NoFaction( Word( 2 ) ) };
 				var was = FactionDefinition.Find( character.Faction )?.ResourceName ?? character.Faction;
 				character.Faction = faction.ResourcePath;
-				journal.Record( "operator.faction", by, character.HolderLabel, data: new[] { ("from", was), ("to", faction.ResourceName) } );
+				journal.Record( JournalKinds.OperatorFaction, by, character.HolderLabel, data: new[] { ("from", was), ("to", faction.ResourceName) } );
 				Changed( game, character );
 				var reply = new List<string> { $"{character.Name} is now {faction.Title}." };
 				if ( faction.RequiresWhitelist && !game.Account( character.SteamId ).Whitelists.Contains( faction.ResourcePath ) )
@@ -269,12 +269,12 @@ public static class Operators
 					// Staff hand out a building outright, as a player office would sell one.
 					if ( Character( Word( at + 1 ) ) is not { } owner ) return new[] { "Usage: door [\"<door>\"] assign \"<living character's name>\"." };
 					door.HostAssign( owner, by );
-					journal.Record( "operator.door", by, $"Door:{door.GameObject.Id:N}", data: new[] { ("action", action), ("owner", owner.Name) } );
+					journal.Record( JournalKinds.OperatorDoor, by, $"Door:{door.GameObject.Id:N}", data: new[] { ("action", action), ("owner", owner.Name) } );
 					return new[] { $"{door.GameObject.Name}: assigned to {owner.Name}. The keys are not part of the title; give them separately." };
 				}
 				var done = door.HostOperate( action, by );
 				if ( !done.Ok ) return new[] { done.Message };
-				journal.Record( "operator.door", by, $"Door:{door.GameObject.Id:N}", data: ("action", action) );
+				journal.Record( JournalKinds.OperatorDoor, by, $"Door:{door.GameObject.Id:N}", data: ("action", action) );
 				return new[] { $"{door.GameObject.Name}: {action}." };
 			}
 			case "who":
@@ -361,7 +361,7 @@ public static class Operators
 	private static string Move( Journal journal, Actor by, Player target, Vector3 to )
 	{
 		target.HostTeleport( to );
-		journal.Record( "operator.teleport", by, target.HostCharacter!.HolderLabel, data: ("to", $"{to.x:0},{to.y:0},{to.z:0}") );
+		journal.Record( JournalKinds.OperatorTeleport, by, target.HostCharacter!.HolderLabel, data: ("to", $"{to.x:0},{to.y:0},{to.z:0}") );
 		return $"Moved {target.HostCharacter.Name}.";
 	}
 

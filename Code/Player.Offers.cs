@@ -12,7 +12,6 @@ namespace Hexagon;
 // The title to a door is handed over the same way as anything carried.
 public sealed partial class Player
 {
-	public const string OfferVerb = "person.offer";
 	/// <summary>How long an offer waits for an answer, in seconds.</summary>
 	public const float OfferSeconds = 30f;
 
@@ -70,7 +69,7 @@ public sealed partial class Player
 		var told = giver.IsValid() ? giver.Network.Owner : null;
 		if ( !accept )
 		{
-			HostRecord( "offer.refuse", from?.HolderLabel );
+			HostRecord( JournalKinds.OfferRefuse, from?.HolderLabel );
 			if ( told is not null ) Chat.Tell( told, "Your offer is refused." );
 			return;
 		}
@@ -81,7 +80,7 @@ public sealed partial class Player
 			: giver.HostPosition.Distance( HostPosition ) > PersonReach ? Result.Fail( ErrorCode.Denied, "They are too far away." )
 			: offer.Door is { } door ? HostTakeTitle( door, from, _character! )
 			: HostTakeOffered( game, from, offer );
-		HostRecord( "offer.accept", from?.HolderLabel, outcome.Ok, ("reason", outcome.Code.ToString()) );
+		HostRecord( JournalKinds.OfferAccept, from?.HolderLabel, outcome.Ok, ("reason", outcome.Code.ToString()) );
 		if ( !outcome.Ok )
 		{
 			Chat.Tell( caller, outcome.Message );
@@ -101,7 +100,7 @@ public sealed partial class Player
 			: recipient._offer is not null ? "They are already being offered something."
 			: null;
 		var subject = recipient.IsValid() ? recipient._character?.HolderLabel : null;
-		HostRecord( $"verb.{OfferVerb}", subject, refusal is null, refusal is null ? data : data.Append( ("reason", refusal) ).ToArray() );
+		HostRecord( JournalKinds.Verb( VerbIds.PersonOffer ), subject, refusal is null, refusal is null ? data : data.Append( ("reason", refusal) ).ToArray() );
 		if ( refusal is not null )
 		{
 			Chat.Tell( caller, refusal );
@@ -153,7 +152,7 @@ public sealed partial class Player
 	{
 		if ( _offer is not { } offer ) return;
 		_offer = null;
-		if ( lapsed is not null ) HostRecord( "offer.lapse", offer.From.IsValid() ? offer.From._character?.HolderLabel : null, data: ("reason", lapsed) );
+		if ( lapsed is not null ) HostRecord( JournalKinds.OfferLapse, offer.From.IsValid() ? offer.From._character?.HolderLabel : null, data: ("reason", lapsed) );
 		HostShowOffer( string.Empty );
 	}
 

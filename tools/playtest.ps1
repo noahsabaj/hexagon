@@ -449,6 +449,12 @@ try {
     Expect 'an item moved to the requested cell' { Send 'state' } 'Rationx4@4,3'
     [void](Send 'close')
     Expect 'the crate closed' { Send 'state' } 'open=\[: \]'
+    # A wall stands beside the first door. From its far side the crate is near enough, and out of reach.
+    Teleport 'John Doe' 300 -215 60
+    Wait-Landed
+    [void](Send 'open|Crate')
+    Expect 'a crate behind a wall cannot be reached, however near' { Send 'state' } 'open=\[: \].*You cannot reach it from here'
+    Teleport 'John Doe' 240 -150 60
 
     Section 'Harm, and being down'
     [void](Send 'console|hexagon_hurt "John Doe" 40')
@@ -645,7 +651,7 @@ try {
     Expect 'refused locks are on record' $journal '(?<!\S)verb\.door\.lock!=5(?!\S)'
     Expect 'allowed locks too' $journal '(?<!\S)verb\.door\.lock=4(?!\S)'
     Expect 'refused uses are on record' $journal '(?<!\S)verb\.door\.use!=5(?!\S)'
-    Expect 'and the locker that would not open' $journal '(?<!\S)verb\.container\.open!=1(?!\S)'
+    Expect 'and the locker that would not open, and the crate behind a wall' $journal '(?<!\S)verb\.container\.open!=2(?!\S)'
     Expect 'the operator is on record too' $journal '(?<!\S)operator\.whitelist=1(?!\S)'
     Expect 'and so is what staff did to a door' $journal '(?<!\S)door\.assign=1(?!\S).*(?<!\S)door\.release=1(?!\S)'
     Expect 'every character made, and every one refused' $journal '(?<!\S)character\.create=3(?!\S).*(?<!\S)character\.create!=3(?!\S)|(?<!\S)character\.create!=3(?!\S).*(?<!\S)character\.create=3(?!\S)'

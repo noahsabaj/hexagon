@@ -71,9 +71,9 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 		}
 	}
 
-	private static readonly Verb Use = new( "door.use", "Open or close" );
+	private static readonly Verb Use = new( VerbIds.DoorUse, "Open or close" );
 	// Locking asks for no capability up front: what turns a lock is a key, which only the door can judge.
-	private static readonly Verb Lock = new( "door.lock", "Lock or unlock" );
+	private static readonly Verb Lock = new( VerbIds.DoorLock, "Lock or unlock" );
 
 	private Guid? _owner;
 
@@ -153,7 +153,7 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 		var data = new List<(string, string)> { ("owner", to.Name) };
 		var previous = was is { } from ? game.Roster?.Find( from ) : null;
 		if ( was is { } before ) data.Add( ("from", previous?.Name ?? $"character:{before:N}") );
-		game.Journal?.Record( "door.assign", by, $"Door:{GameObject.Id:N}", data: data.ToArray() );
+		game.Journal?.Record( JournalKinds.DoorAssign, by, $"Door:{GameObject.Id:N}", data: data.ToArray() );
 		// Each owner is shown the doors it now holds.
 		Player.HostRefresh( to );
 		if ( previous is not null ) Player.HostRefresh( previous );
@@ -166,7 +166,7 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 		_owner = null;
 		Persist();
 		var was = game.Roster?.Find( owner );
-		game.Journal?.Record( "door.release", by, $"Door:{GameObject.Id:N}", data: ("owner", was?.Name ?? $"character:{owner:N}") );
+		game.Journal?.Record( JournalKinds.DoorRelease, by, $"Door:{GameObject.Id:N}", data: ("owner", was?.Name ?? $"character:{owner:N}") );
 		if ( was is not null ) Player.HostRefresh( was );
 	}
 

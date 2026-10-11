@@ -73,7 +73,8 @@ itself to.
   whitelists survive a restart. So does the journal. A change to two documents, such as a hand-over,
   is saved as one.
 - **A default HUD**: character menu, chat, inventory, the open holder, verbs, offers, staff panel.
-  In the city it shows only prompts and chat. Being hurt shows through the engine's
+  In the city it shows only prompts and chat; a prompt draws the key as the player has it bound.
+  Items are dragged between cells, piles and holders, and out of the window to drop them. Being hurt shows through the engine's
   post-processing instead of a number: the edges of sight darken and the colour drains, and being
   down narrows, dims and blurs the view without hiding it.
 

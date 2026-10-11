@@ -24,14 +24,14 @@ public sealed partial class Player
 		if ( !Authorize( nameof( RequestCreateCharacter ), out var caller, out var game, needsCharacter: false ) ) return;
 		if ( FactionDefinition.Find( factionPath ) is not { } faction )
 		{
-			HostRecord( "character.create", ok: false, data: new[] { ("reason", "faction"), ("faction", Clip( factionPath ?? string.Empty )) } );
+			HostRecord( JournalKinds.CharacterCreate, ok: false, data: new[] { ("reason", "faction"), ("faction", Clip( factionPath ?? string.Empty )) } );
 			Chat.Tell( caller, "That faction does not exist." );
 			return;
 		}
 		var steamId = SteamIdOf( caller );
 		if ( faction.RequiresWhitelist && !game.Account( steamId ).Whitelists.Contains( faction.ResourcePath ) )
 		{
-			HostRecord( "character.create", faction.ResourceName, ok: false, ("reason", "whitelist") );
+			HostRecord( JournalKinds.CharacterCreate, faction.ResourceName, ok: false, ("reason", "whitelist") );
 			Chat.Tell( caller, $"You are not whitelisted for {faction.Title}." );
 			return;
 		}
@@ -41,14 +41,14 @@ public sealed partial class Player
 		if ( !created.Ok )
 		{
 			// The name is kept: an attempt to pass as someone else is worth knowing about.
-			HostRecord( "character.create", faction.ResourceName, ok: false, ("reason", created.Code.ToString()), ("name", Clip( name ?? string.Empty )) );
+			HostRecord( JournalKinds.CharacterCreate, faction.ResourceName, ok: false, ("reason", created.Code.ToString()), ("name", Clip( name ?? string.Empty )) );
 			Chat.Tell( caller, created.Message );
 			return;
 		}
 		var data = created.Value.ArrivesAt is { } arrives
 			? new[] { ("faction", faction.ResourceName), ("arrives", arrives.ToString( "u" )) }
 			: new[] { ("faction", faction.ResourceName) };
-		game.Journal!.Record( "character.create", Actor.Of( created.Value ), created.Value.HolderLabel, data: data );
+		game.Journal!.Record( JournalKinds.CharacterCreate, Actor.Of( created.Value ), created.Value.HolderLabel, data: data );
 		SendCharacterList( caller, game );
 	}
 
@@ -65,7 +65,7 @@ public sealed partial class Player
 			: null;
 		if ( doomed is null || refusal is not null )
 		{
-			HostRecord( "character.delete", $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );
+			HostRecord( JournalKinds.CharacterDelete, $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );
 			Chat.Tell( caller, refusal ?? "Character was not found." );
 			return;
 		}
@@ -73,7 +73,7 @@ public sealed partial class Player
 		var by = Actor.Of( doomed );
 		game.Transfers!.DestroyAll( Sinks.CharacterDeleted, doomed, by );
 		Door.HostReleaseOwnedBy( doomed.Id, by );
-		game.Journal!.Record( "character.delete", by, doomed.HolderLabel );
+		game.Journal!.Record( JournalKinds.CharacterDelete, by, doomed.HolderLabel );
 		game.Roster.Delete( steamId, characterId );
 		SendCharacterList( caller, game );
 	}
@@ -99,7 +99,7 @@ public sealed partial class Player
 			: null;
 		if ( retiring is null || refusal is not null )
 		{
-			HostRecord( "character.retire", $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );
+			HostRecord( JournalKinds.CharacterRetire, $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );
 			Chat.Tell( caller, refusal ?? "Character was not found." );
 			return;
 		}
@@ -108,7 +108,7 @@ public sealed partial class Player
 		Door.HostReleaseOwnedBy( retiring.Id, by );
 		Vitals.Die( retiring, DateTimeOffset.UtcNow );
 		game.Roster.Save( retiring );
-		game.Journal!.Record( "character.retire", by, retiring.HolderLabel );
+		game.Journal!.Record( JournalKinds.CharacterRetire, by, retiring.HolderLabel );
 		SendCharacterList( caller, game );
 	}
 
@@ -140,7 +140,7 @@ public sealed partial class Player
 			: null;
 		if ( character is null || refusal is not null )
 		{
-			HostRecord( "city.enter", $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );
+			HostRecord( JournalKinds.CityEnter, $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );
 			Chat.Tell( caller, refusal ?? "Character was not found." );
 			return;
 		}
@@ -162,7 +162,7 @@ public sealed partial class Player
 			: game.FindSpawn().Position;
 		HostTeleport( position );
 		SendPrivateState();
-		HostRecord( "city.enter" );
+		HostRecord( JournalKinds.CityEnter );
 	}
 
 	[Rpc.Host]
@@ -173,12 +173,12 @@ public sealed partial class Player
 		{
 			// Walking out of a scene that has gone badly is not on offer. Disconnecting is no way out
 			// either: the character stays where it is, as anyone else can see.
-			HostRecord( "city.leave", ok: false, data: ("reason", IsDown ? "down" : "restrained") );
+			HostRecord( JournalKinds.CityLeave, ok: false, data: ("reason", IsDown ? "down" : "restrained") );
 			Chat.Tell( caller, "You cannot leave the city like this." );
 			return;
 		}
 		HostSave();
-		HostRecord( "city.leave" );
+		HostRecord( JournalKinds.CityLeave );
 		HostUnload();
 		SendCharacterList( caller, game );
 	}
@@ -188,7 +188,7 @@ public sealed partial class Player
 	{
 		if ( _character is null || GameManager.Instance is not { } game ) return;
 		HostSave();
-		HostRecord( "city.leave", data: ("reason", "sent") );
+		HostRecord( JournalKinds.CityLeave, data: ("reason", "sent") );
 		HostUnload();
 		if ( Network.Owner is not { } owner ) return;
 		SendCharacterList( owner, game );
@@ -230,7 +230,7 @@ public sealed partial class Player
 			Chat.Deliver( this, message.Value );
 			return;
 		}
-		HostRecord( "chat", ok: false, data: new[] { ("reason", message.Code.ToString()), ("text", Clip( text ?? string.Empty )) } );
+		HostRecord( JournalKinds.Chat, ok: false, data: new[] { ("reason", message.Code.ToString()), ("text", Clip( text ?? string.Empty )) } );
 		Chat.Tell( caller, message.Message );
 	}
 
@@ -289,7 +289,7 @@ public sealed partial class Player
 		var subject = actable.JournalSubject ?? $"{target.GetType().Name}:{target.GameObject.Id:N}";
 		var outcome = IsIncapable ? Result.Fail( ErrorCode.Denied, "You cannot do that now." ) : Judge( target, actable, verb );
 		if ( outcome.Ok ) outcome = actable.Perform( this, verb );
-		HostRecord( $"verb.{verb.Id}", subject, outcome.Ok, ("target", target.GameObject.Name), ("reason", outcome.Code.ToString()) );
+		HostRecord( JournalKinds.Verb( verb.Id ), subject, outcome.Ok, ("target", target.GameObject.Name), ("reason", outcome.Code.ToString()) );
 		if ( !outcome.Ok ) Chat.Tell( caller, outcome.Message );
 	}
 
@@ -299,8 +299,39 @@ public sealed partial class Player
 		// "I am next to it" counts for nothing.
 		var nearest = target.GameObject.GetBounds().ClosestPoint( HostPosition );
 		if ( nearest.Distance( HostPosition ) > actable.Reach ) return Result.Fail( ErrorCode.Denied, "You are too far away." );
+		if ( !HostCanReach( target ) ) return Result.Fail( ErrorCode.Denied, "You cannot reach it from here." );
 		if ( verb.Requires is { } capability && !HostCan( capability ) )
 			return Result.Fail( ErrorCode.Denied, "You have nothing that lets you do that." );
 		return Result.Success();
+	}
+
+	/// <summary>Eye height above where a character stands, as the host reckons it.</summary>
+	public const float EyeHeight = 64f;
+
+	/// <summary>
+	/// Host: whether a hand could get to the target from where the character is believed to stand: a
+	/// line from its eyes to the target, to its nearest part or its middle, that nothing solid crosses.
+	/// Being near a crate through a wall, or a person through a shut door, is not being able to touch
+	/// them. The target's own parts, people, and things lying about are not in the way.
+	/// </summary>
+	private bool HostCanReach( Component target )
+	{
+		var eye = HostPosition + Vector3.Up * EyeHeight;
+		var bounds = target.GameObject.GetBounds();
+		// Aimed a little inside the nearest point, so a trace that ends on the target's face is not
+		// stopped by the floor it stands on or the frame it hangs in.
+		return Clear( eye, Vector3.Lerp( bounds.ClosestPoint( eye ), bounds.Center, 0.1f ), target ) || Clear( eye, bounds.Center, target );
+	}
+
+	private bool Clear( Vector3 from, Vector3 to, Component target )
+	{
+		var trace = Scene.Trace.Ray( from, to )
+			.WithoutTags( "player", "item", "corpse", "sleeper" )
+			.IgnoreGameObjectHierarchy( GameObject )
+			.IgnoreGameObjectHierarchy( target.GameObject )
+			.Run();
+		if ( !trace.Hit || trace.StartedSolid ) return true;
+		// A door still swinging is no wall, as for walking.
+		return trace.GameObject?.GetComponentInParent<Door>() is { IsSwinging: true };
 	}
 }

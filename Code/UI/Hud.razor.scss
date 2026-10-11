@@ -165,6 +165,17 @@ Hud {
 			border-color: #e7c98a;
 		}
 
+		// Picked up: the pile stays where it was, faint, while a copy follows the mouse.
+		&.lifted {
+			opacity: 0.35;
+		}
+
+		&.ghost {
+			pointer-events: none;
+			z-index: 100;
+			opacity: 0.85;
+		}
+
 		// What tells two of a thing apart: a key's cut, a radio's dial. Small enough for one cell.
 		.detail {
 			font-size: 10px;
@@ -178,6 +189,30 @@ Hud {
 			font-weight: 700;
 			color: #ffffff;
 		}
+	}
+}
+
+// A key as the player has it bound, drawn by the engine: a keyboard key or a controller button.
+.prompt {
+	flex-direction: row;
+	align-items: center;
+	margin-top: 4px;
+
+	.glyph {
+		height: 24px;
+		margin-right: 6px;
+		margin-left: 6px;
+	}
+}
+
+.tip {
+	align-items: center;
+	font-weight: 600;
+
+	i {
+		font-family: Material Icons;
+		font-size: 20px;
+		margin-right: 8px;
 	}
 }
 

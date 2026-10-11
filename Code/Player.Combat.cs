@@ -63,7 +63,7 @@ public sealed partial class Player
 		var character = _character!;
 		if ( IsIncapable )
 		{
-			HostRecord( "combat.attack", ok: false, data: ("reason", IsDown ? "down" : "restrained") );
+			HostRecord( JournalKinds.CombatAttack, ok: false, data: ("reason", IsDown ? "down" : "restrained") );
 			return;
 		}
 		// An aim that is not a number would poison every trace and position it touched.
@@ -74,8 +74,14 @@ public sealed partial class Player
 		}
 		var weapon = HostHeld is { } held ? ItemDefinition.Find( held.Definition ) : null;
 		if ( weapon is { Damage: <= 0 } ) weapon = null;
-		// A swing still under way is not a new one. Holding the button down is not worth a line each time.
-		if ( _sinceAttack < (weapon?.Cooldown ?? UnarmedCooldown) ) return;
+		// A swing still under way is not a new one. It is on record all the same, as a refusal: a test
+		// that fires faster than the weapon allows, or a client that does, shows up in the journal. Holding
+		// the button down is written as a count, not a line each time.
+		if ( _sinceAttack < (weapon?.Cooldown ?? UnarmedCooldown) )
+		{
+			game.HostRefuse( caller, JournalKinds.CombatAttack, null, ("weapon", weapon?.ResourceName ?? "unarmed"), ("reason", "cooldown") );
+			return;
+		}
 		_sinceAttack = 0;
 
 		if ( weapon?.Ammo is { } ammo )
@@ -84,7 +90,7 @@ public sealed partial class Player
 			var round = character.Inventory.Items.FirstOrDefault( value => value.Definition == ammo.ResourcePath );
 			if ( round is null )
 			{
-				HostRecord( "combat.attack", ok: false, data: new[] { ("weapon", weapon.ResourceName), ("reason", "empty") } );
+				HostRecord( JournalKinds.CombatAttack, ok: false, data: new[] { ("weapon", weapon.ResourceName), ("reason", "empty") } );
 				Chat.Tell( caller, "Click. It is empty." );
 				return;
 			}
@@ -103,7 +109,7 @@ public sealed partial class Player
 		var struck = victim?._character?.HolderLabel ?? lying?.HostCharacter?.HolderLabel;
 		var damage = weapon?.Damage ?? UnarmedDamage;
 		// A miss is an attack all the same: it is on record, with nothing hit.
-		HostRecord( "combat.attack", struck, data: new[] { ("weapon", weapon?.ResourceName ?? "unarmed"), ("damage", damage.ToString()), ("hit", struck is null ? "nothing" : "person") } );
+		HostRecord( JournalKinds.CombatAttack, struck, data: new[] { ("weapon", weapon?.ResourceName ?? "unarmed"), ("damage", damage.ToString()), ("hit", struck is null ? "nothing" : "person") } );
 		victim?.HostDamage( damage, this, weapon?.Title ?? "fists" );
 		lying?.HostDamage( damage, this, weapon?.Title ?? "fists" );
 	}
@@ -120,7 +126,7 @@ public sealed partial class Player
 		if ( harm == Harm.Downed )
 		{
 			HostClose();
-			HostRecord( "character.downed", by?._character?.HolderLabel, data: new[] { ("cause", cause) } );
+			HostRecord( JournalKinds.CharacterDowned, by?._character?.HolderLabel, data: new[] { ("cause", cause) } );
 			if ( Network.Owner is { } owner ) Chat.Tell( owner, "You are down. Someone may help you up, or not." );
 		}
 		HostSyncVitals();
@@ -167,7 +173,7 @@ public sealed partial class Player
 	/// </summary>
 	internal static bool HostDie( GameManager game, CharacterData character, Vector3 at, string look, string cause, CharacterData? by )
 	{
-		HostRecordAt( "character.death", Actor.Of( character ), at, by?.HolderLabel, data: new[] { ("cause", cause), ("policy", game.Death.ToString()) } );
+		HostRecordAt( JournalKinds.CharacterDeath, Actor.Of( character ), at, by?.HolderLabel, data: new[] { ("cause", cause), ("policy", game.Death.ToString()) } );
 		var permanent = game.Death == DeathPolicy.Permanent;
 		var actor = Actor.Of( character );
 		if ( permanent )

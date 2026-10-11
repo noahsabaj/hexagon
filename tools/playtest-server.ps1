@@ -250,7 +250,15 @@ try {
     Teleport 2 'Jane Roe' 300 -150
     [void](Send 1 'say|/r standing right here')
     Expect 'beside him she hears a man talking into a radio, whatever hers is tuned to' { Send 2 'state' } 'John Doe radios "standing right here"'
+    # Something put down out of sight is not sent, and nor is what it is: every client is told a new
+    # object exists, so what it is waits until the network sends it only to those who can see it.
+    Expect 'with sight narrowed, he cannot see her' (Send 0 'sight|30') 'sight=30'
     [void](Send 2 'drop|0')
+    [void](Poll { Send 2 'state' } 'items=\[\] ')
+    Start-Sleep -Seconds 4
+    Expect 'what she dropped out of his sight never reached him' (Send 1 'state') 'ground=\[\] '
+    Expect 'once she is in sight' (Send 0 "sight|$sight") "sight=$sight"
+    Expect 'he is sent what lies there' { Send 1 'state' } 'ground=\[Radio\] '
 
     Write-Host '==> Handing over takes two' -ForegroundColor Cyan
     Teleport 2 'Jane Roe' 300 -150
@@ -332,7 +340,8 @@ try {
     $journal = Poll { Send 0 'journal' } '(?<!\S)character\.death=1(?!\S)'
     Expect 'the death is on record' $journal '(?<!\S)character\.death=1(?!\S)'
     Expect 'and the title she held went with her' $journal '(?<!\S)door\.release=1(?!\S)'
-    [void](Poll { Send 1 'state' } 'bodies=1 ')
+    # He is beside her, so he sees her body as she falls, not once everyone else may be sent it.
+    Expect 'he sees her body at once' (Poll { Send 1 'state' } 'bodies=1 ' 2) 'bodies=1 '
     [void](Send 1 'act|corpse.search')
     Expect 'what she carried is on her body' { Send 1 'state' } 'bodies=1 .*open=\[Body: Water\]'
     [void](Send 1 'close')

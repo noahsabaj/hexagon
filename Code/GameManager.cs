@@ -94,6 +94,11 @@ public sealed class GameManager : Component, Component.INetworkListener
 		// Counted from when the city opened, not from when the program started.
 		_sinceAutosave = 0;
 		Log.Info( $"Hexagon host ready: {Roster.Count} characters, {World.Doors.Count} saved doors." );
+		// The engine's own text chat reaches everyone in the session, by account name, from anywhere.
+		// Speech here reaches only those in range, in character, so a game that leaves it on has a way
+		// around both.
+		if ( Sandbox.Platform.Chat.Enabled )
+			Log.Warning( "The engine's platform chat is on for this game. It reaches every player by account name, whatever the distance; turn it off in the project's settings." );
 	}
 
 	protected override void OnFixedUpdate()
@@ -144,7 +149,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 			connection.CanDestroyObjects = false;
 		}
 
-		Journal?.Record( "connection.join", new Actor( (long)connection.SteamId.ValueUnsigned, Name: connection.DisplayName ) );
+		Journal?.Record( JournalKinds.ConnectionJoin, new Actor( (long)connection.SteamId.ValueUnsigned, Name: connection.DisplayName ) );
 		var spawn = FindSpawn();
 		// Every client is sent every object's name, so a player's own name never goes in one.
 		var pawn = new GameObject( true, "Player" );
@@ -164,7 +169,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 	void INetworkListener.OnDisconnected( Connection connection )
 	{
 		_budgets.Remove( connection.Id );
-		Journal?.Record( "connection.leave", new Actor( (long)connection.SteamId.ValueUnsigned, Name: connection.DisplayName ) );
+		Journal?.Record( JournalKinds.ConnectionLeave, new Actor( (long)connection.SteamId.ValueUnsigned, Name: connection.DisplayName ) );
 		foreach ( var player in Scene.GetAllComponents<Player>().Where( value => value.Network.Owner == connection ).ToArray() )
 		{
 			// Leaving is not a way out of being down or bound: the character stays where it is.
