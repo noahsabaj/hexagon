@@ -20,9 +20,13 @@ public sealed class MovementAudit
 	/// <summary>Claims are judged over windows at least this long, so network jitter averages out.</summary>
 	public const double Window = 0.25;
 
-	/// <summary>Downward acceleration and the speed it stops at, in the engine's units.</summary>
-	public const float Gravity = 850f;
+	/// <summary>The engine's own downward acceleration, for a world that sets none of its own.</summary>
+	public const float DefaultGravity = 850f;
+	/// <summary>The speed a fall stops gaining at, in the engine's units.</summary>
 	public const float TerminalSpeed = 3500f;
+
+	/// <summary>Downward acceleration, as the scene's physics has it, so a fall is judged by the world it is in.</summary>
+	public float Gravity { get; set; } = DefaultGravity;
 
 	private readonly float _slack;
 	private bool _started;

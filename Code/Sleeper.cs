@@ -12,26 +12,31 @@ namespace Hexagon;
 /// A character left in the city by a player who went while it was down or bound. Leaving is not a
 /// way out of a scene: the character stays where it was, keeps bleeding, and can be helped up,
 /// searched, released or finished like anyone else in that state. It is the host's object, sent
-/// only to clients near enough to see it, and its player picks up from here on coming back.
+/// only to clients near enough to see it (see <see cref="Reveal"/>), and its player picks up from
+/// here on coming back.
 /// </summary>
 [Title( "Hexagon Sleeper" ), Category( "Hexagon" ), Icon( "bedtime" )]
 public sealed class Sleeper : Component, Component.IPressable, Component.INetworkVisible, IVerbTarget
 {
-	/// <summary>
-	/// Every client is told a new object exists, and is sent it for a moment before the network
-	/// stops sending it to those who cannot see it. What the character looks like waits that long.
-	/// </summary>
-	public const float ShowAfterSeconds = 3f;
-
 	[Sync( SyncFlags.FromHost )] public Guid CharacterId { get; set; }
-	[Sync( SyncFlags.FromHost )] public bool IsShown { get; set; }
-	[Sync( SyncFlags.FromHost )] public string CharacterDescription { get; set; } = string.Empty;
-	[Sync( SyncFlags.FromHost )] public string Look { get; set; } = string.Empty;
 	[Sync( SyncFlags.FromHost )] public bool IsDown { get; set; }
 	[Sync( SyncFlags.FromHost )] public bool IsRestrained { get; set; }
+	// Who it looks like, sent to all it is sent to once the reveal's hold is over.
+	[Sync( SyncFlags.FromHost )] public bool IsShown { get; set; }
+	[Sync( SyncFlags.FromHost )] public string ShownDescription { get; set; } = string.Empty;
+	[Sync( SyncFlags.FromHost )] public string ShownLook { get; set; } = string.Empty;
+
+	// Who it looks like, as this client was told at once because it could see the place.
+	private string? _toldDescription;
+	private string? _toldLook;
+
+	/// <summary>Whether this client knows who is lying here, and shows them.</summary>
+	public bool IsRevealed => IsShown || _toldLook is not null;
+	public string CharacterDescription => IsShown ? ShownDescription : _toldDescription ?? string.Empty;
+	public string Look => IsShown ? ShownLook : _toldLook ?? string.Empty;
 
 	private RealTimeSince _sinceLeft;
-	private string? _shownLook;
+	private string? _dressedIn;
 	private bool? _shownDown;
 
 	/// <summary>Host: the character lying, or standing bound, here.</summary>
@@ -55,10 +60,11 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 		var sleeper = body.AddComponent<Sleeper>();
 		sleeper.CharacterId = character.Id;
 		sleeper.HostSync( character );
-		// Only the host knows where everyone is, so it alone decides which clients are sent this.
-		var options = NetworkSpawnOptions.Default;
-		options.AlwaysTransmit = false;
-		body.NetworkSpawn( options );
+		body.NetworkSpawn( Reveal.Options );
+		// Whoever can see the place sees who it is at once; everyone else learns it later, if they come near.
+		var (description, look) = (character.Description, LookOf( character ));
+		sleeper.Tell( description, look );
+		using ( Rpc.FilterInclude( Reveal.Witnesses( at ) ) ) sleeper.TellWitnesses( description, look );
 		return sleeper;
 	}
 
@@ -86,9 +92,18 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 		IsDown = character.IsDown;
 		IsRestrained = character.IsRestrained;
 		if ( !IsShown ) return;
-		CharacterDescription = character.Description;
-		Look = LookOf( character );
+		ShownDescription = character.Description;
+		ShownLook = LookOf( character );
 	}
+
+	private void Tell( string description, string look )
+	{
+		_toldDescription = description;
+		_toldLook = look;
+	}
+
+	[Rpc.Broadcast( NetFlags.HostOnly | NetFlags.Reliable )]
+	private void TellWitnesses( string description, string look ) => Tell( description, look );
 
 	private static string LookOf( CharacterData character ) => Looks.Of( FactionDefinition.Find( character.Faction ) );
 
@@ -103,7 +118,7 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 			GameObject.Destroy();
 			return;
 		}
-		if ( !IsShown && _sinceLeft > ShowAfterSeconds )
+		if ( !IsShown && _sinceLeft > Reveal.HoldSeconds )
 		{
 			IsShown = true;
 			HostSync( character );
@@ -123,11 +138,11 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 	protected override void OnUpdate()
 	{
 		if ( GetComponentInChildren<SkinnedModelRenderer>( true ) is not { } renderer ) return;
-		renderer.Enabled = IsShown;
+		renderer.Enabled = IsRevealed;
 		// A dedicated server draws nobody, so it dresses nobody either, as with players.
-		if ( _shownLook != Look && !Application.IsDedicatedServer )
+		if ( _dressedIn != Look && !Application.IsDedicatedServer )
 		{
-			_shownLook = Look;
+			_dressedIn = Look;
 			Looks.Apply( renderer, Look );
 		}
 		if ( _shownDown == IsDown || GetComponent<BoxCollider>() is not { } collider ) return;
@@ -140,10 +155,9 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 	}
 
 	/// <summary>Host: a client is sent this only while its own character is near enough to see it.</summary>
-	bool INetworkVisible.IsVisibleToConnection( Connection connection, in BBox worldBounds ) =>
-		!Networking.IsHost || connection.IsHost || GameManager.Instance?.Sees( connection, WorldPosition ) == true;
+	bool INetworkVisible.IsVisibleToConnection( Connection connection, in BBox worldBounds ) => Reveal.IsVisibleTo( connection, WorldPosition );
 
-	bool IPressable.CanPress( IPressable.Event e ) => IsShown;
+	bool IPressable.CanPress( IPressable.Event e ) => IsRevealed;
 
 	bool IPressable.Press( IPressable.Event e )
 	{
@@ -152,7 +166,7 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 	}
 
 	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) =>
-		Player.Local is null || !IsShown ? null : new IPressable.Tooltip( Player.Local.LabelFor( this ), "person", CharacterDescription );
+		Player.Local is null || !IsRevealed ? null : new IPressable.Tooltip( Player.Local.LabelFor( this ), "person", CharacterDescription );
 
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
@@ -160,7 +174,7 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 			return Result.Fail( ErrorCode.NotFound, "There is nobody there." );
 		switch ( verb.Id )
 		{
-			case Player.ReviveVerb:
+			case VerbIds.PersonRevive:
 			{
 				var revived = Vitals.Revive( character );
 				if ( !revived.Ok ) return revived;
@@ -168,10 +182,10 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 				HostRefresh( character );
 				return revived;
 			}
-			case Player.SearchVerb:
+			case VerbIds.PersonSearch:
 				actor.HostOpen( this, character, "Belongings", onlyWhile: () => !GameObject.IsDestroyed && (character.IsDown || character.IsRestrained) );
 				return Result.Success();
-			case Player.ReleaseVerb:
+			case VerbIds.PersonRelease:
 			{
 				if ( !character.IsRestrained ) return Result.Fail( ErrorCode.Conflict, "Their hands are not bound." );
 				character.IsRestrained = false;
@@ -179,7 +193,7 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 				HostRefresh( character );
 				return Result.Success();
 			}
-			case Player.FinishVerb:
+			case VerbIds.PersonFinish:
 			{
 				var can = Vitals.CanFinish( character );
 				if ( can.Ok ) Player.HostDie( game, character, WorldPosition, LookOf( character ), "finished", other );
@@ -199,7 +213,7 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 		if ( harm == Harm.Downed ) character.Equipped = null;
 		roster.Save( character );
 		if ( harm == Harm.Downed )
-			Player.HostRecordAt( "character.downed", Actor.Of( character ), WorldPosition, by.HostCharacter?.HolderLabel, data: new[] { ("cause", cause) } );
+			Player.HostRecordAt( JournalKinds.CharacterDowned, Actor.Of( character ), WorldPosition, by.HostCharacter?.HolderLabel, data: new[] { ("cause", cause) } );
 		HostRefresh( character );
 	}
 }

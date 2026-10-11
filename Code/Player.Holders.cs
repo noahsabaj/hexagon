@@ -140,11 +140,11 @@ public sealed partial class Player
 		var definition = ItemDefinition.Find( stack.Definition );
 		Result outcome;
 		if ( IsIncapable ) outcome = Result.Fail( ErrorCode.Denied, "You cannot do that now." );
-		else if ( verbId == "item.drop" ) outcome = Drop( game, stack );
-		else if ( verbId == "item.use" && definition is { Consumable: true } ) outcome = Consume( game, stack, definition );
-		else if ( verbId == "item.equip" ) outcome = Equip( game, stack );
+		else if ( verbId == VerbIds.ItemDrop ) outcome = Drop( game, stack );
+		else if ( verbId == VerbIds.ItemUse && definition is { Consumable: true } ) outcome = Consume( game, stack, definition );
+		else if ( verbId == VerbIds.ItemEquip ) outcome = Equip( game, stack );
 		else outcome = Result.Fail( ErrorCode.Invalid, "That cannot be done with it." );
-		HostRecord( $"verb.{verbId}", $"item:{itemId:N}", outcome.Ok, ("definition", stack.Definition), ("reason", outcome.Code.ToString()) );
+		HostRecord( JournalKinds.Verb( verbId ), $"item:{itemId:N}", outcome.Ok, ("definition", stack.Definition), ("reason", outcome.Code.ToString()) );
 		if ( !outcome.Ok ) Chat.Tell( caller, outcome.Message );
 	}
 
@@ -162,7 +162,7 @@ public sealed partial class Player
 			game.Roster!.Save( _character! );
 			SendPrivateState();
 		}
-		HostRecord( "verb.item.tune", $"item:{itemId:N}", tuned.Ok, ("frequency", tuned.Ok ? tuned.Value : frequency), ("reason", tuned.Code.ToString()) );
+		HostRecord( JournalKinds.Verb( VerbIds.ItemTune ), $"item:{itemId:N}", tuned.Ok, ("frequency", tuned.Ok ? tuned.Value : frequency), ("reason", tuned.Code.ToString()) );
 		if ( !tuned.Ok ) Chat.Tell( caller, tuned.Message );
 	}
 

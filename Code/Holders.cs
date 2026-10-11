@@ -51,7 +51,7 @@ public sealed class Container : Component, Component.IPressable, IVerbTarget
 
 	private bool _joined;
 
-	public IReadOnlyList<Verb> Verbs { get; } = new[] { new Verb( "container.open", "Open" ) };
+	public IReadOnlyList<Verb> Verbs { get; } = new[] { new Verb( VerbIds.ContainerOpen, "Open" ) };
 
 	protected override void OnUpdate()
 	{
@@ -62,7 +62,7 @@ public sealed class Container : Component, Component.IPressable, IVerbTarget
 
 	bool IPressable.Press( IPressable.Event e )
 	{
-		Player.Local?.RequestAct( this, "container.open" );
+		Player.Local?.RequestAct( this, VerbIds.ContainerOpen );
 		return true;
 	}
 
@@ -98,23 +98,44 @@ public sealed class Container : Component, Component.IPressable, IVerbTarget
 /// <summary>
 /// What a character carried, left where it fell. It is a holder like a crate, put into the world at
 /// run time like a dropped item, and it goes once it has been emptied, or once staff restore the
-/// character, who gets up here with whatever is still on it.
+/// character, who gets up here with whatever is still on it. It is sent only to clients near enough
+/// to see it, and what it looks like only as <see cref="Reveal"/> allows.
 /// </summary>
 [Title( "Hexagon Corpse" ), Category( "Hexagon" ), Icon( "airline_seat_flat" )]
-public sealed class Corpse : Component, Component.IPressable, IVerbTarget
+public sealed class Corpse : Component, Component.IPressable, Component.INetworkVisible, IVerbTarget
 {
-	private static readonly Verb Search = new( "corpse.search", "Search" );
+	private static readonly Verb Search = new( VerbIds.CorpseSearch, "Search" );
 
 	public Guid HolderId { get; private set; }
 	public IReadOnlyList<Verb> Verbs { get; } = new[] { Search };
 
-	[Sync( SyncFlags.FromHost )] public string Look { get; set; } = string.Empty;
-	private string? _shownLook;
+	// What it looks like, sent to all it is sent to once the reveal's hold is over.
+	[Sync( SyncFlags.FromHost )] public bool IsShown { get; set; }
+	[Sync( SyncFlags.FromHost )] public string ShownLook { get; set; } = string.Empty;
+	// What it looks like, as this client was told at once because it could see the place.
+	private string? _toldLook;
+	private string? _dressedIn;
+	private RealTimeSince _sinceSpawned;
+
+	/// <summary>Whether this client knows what the body looks like, and shows it.</summary>
+	public bool IsRevealed => IsShown || _toldLook is not null;
+	public string Look => IsShown ? ShownLook : _toldLook ?? string.Empty;
+
+	protected override void OnAwake() => _sinceSpawned = 0;
+
+	protected override void OnFixedUpdate()
+	{
+		if ( !Networking.IsHost || IsShown || _sinceSpawned < Reveal.HoldSeconds ) return;
+		IsShown = true;
+		ShownLook = _toldLook ?? string.Empty;
+	}
 
 	protected override void OnUpdate()
 	{
-		if ( _shownLook == Look || GetComponentInChildren<SkinnedModelRenderer>() is not { } renderer ) return;
-		_shownLook = Look;
+		if ( GetComponentInChildren<SkinnedModelRenderer>( true ) is not { } renderer ) return;
+		renderer.Enabled = IsRevealed;
+		if ( !IsRevealed || _dressedIn == Look ) return;
+		_dressedIn = Look;
 		Looks.Apply( renderer, Look );
 	}
 
@@ -129,16 +150,26 @@ public sealed class Corpse : Component, Component.IPressable, IVerbTarget
 		figure.LocalRotation = Rotation.From( -90, 0, 0 );
 		var renderer = figure.AddComponent<SkinnedModelRenderer>();
 		renderer.Model = Model.Load( Looks.DefaultBody );
+		renderer.Enabled = false;
 		var collider = body.AddComponent<BoxCollider>();
 		collider.Scale = new Vector3( 76, 28, 20 );
 		collider.Center = new Vector3( -36, 0, 2 );
 		collider.Static = true;
 		var corpse = body.AddComponent<Corpse>();
 		corpse.HolderId = holder.Id;
-		corpse.Look = holder.Look ?? string.Empty;
-		body.NetworkSpawn();
+		body.NetworkSpawn( Reveal.Options );
+		var look = holder.Look ?? string.Empty;
+		corpse.Tell( look );
+		using ( Rpc.FilterInclude( Reveal.Witnesses( body.WorldPosition ) ) ) corpse.TellWitnesses( look );
 		return corpse;
 	}
+
+	private void Tell( string look ) => _toldLook = look;
+
+	[Rpc.Broadcast( NetFlags.HostOnly | NetFlags.Reliable )]
+	private void TellWitnesses( string look ) => Tell( look );
+
+	bool INetworkVisible.IsVisibleToConnection( Connection connection, in BBox worldBounds ) => Reveal.IsVisibleTo( connection, WorldPosition );
 
 	/// <summary>Host: an emptied body is removed, along with its holder.</summary>
 	public static void RemoveIfEmpty( IHolder holder )
@@ -149,7 +180,7 @@ public sealed class Corpse : Component, Component.IPressable, IVerbTarget
 			corpse.GameObject.Destroy();
 	}
 
-	bool IPressable.CanPress( IPressable.Event e ) => true;
+	bool IPressable.CanPress( IPressable.Event e ) => IsRevealed;
 
 	bool IPressable.Press( IPressable.Event e )
 	{
@@ -157,7 +188,8 @@ public sealed class Corpse : Component, Component.IPressable, IVerbTarget
 		return true;
 	}
 
-	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) => new IPressable.Tooltip( "Search the body", "airline_seat_flat", string.Empty );
+	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) =>
+		IsRevealed ? new IPressable.Tooltip( "Search the body", "airline_seat_flat", string.Empty ) : null;
 
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
@@ -169,19 +201,30 @@ public sealed class Corpse : Component, Component.IPressable, IVerbTarget
 
 /// <summary>
 /// An item lying in the world. It is a holder with one thing in it, so dropping and picking up are
-/// ordinary transfers and the item is the same object, with the same id, before and after. Anyone
-/// can see what it is; that is appearance.
+/// ordinary transfers and the item is the same object, with the same id, before and after. Whoever
+/// can see it can see what it is; that is appearance. It is sent only to clients near enough to see
+/// it, and what it is only as <see cref="Reveal"/> allows, so each machine gives it its model and its
+/// shape itself, once it knows.
 /// </summary>
 [Title( "Hexagon World Item" ), Category( "Hexagon" ), Icon( "category" )]
-public sealed class WorldItem : Component, Component.IPressable, IVerbTarget
+public sealed class WorldItem : Component, Component.IPressable, Component.INetworkVisible, IVerbTarget
 {
-	private static readonly Verb Take = new( "item.take", "Pick up" );
+	private static readonly Verb Take = new( VerbIds.ItemTake, "Pick up" );
 
-	[Sync( SyncFlags.FromHost )] public string DefinitionPath { get; set; } = string.Empty;
+	// What it is, sent to all it is sent to once the reveal's hold is over.
+	[Sync( SyncFlags.FromHost )] public bool IsShown { get; set; }
+	[Sync( SyncFlags.FromHost )] public string ShownDefinition { get; set; } = string.Empty;
+	// What it is, as this client was told at once because it could see the place.
+	private string? _toldDefinition;
+	private string? _builtFor;
+	private RealTimeSince _sinceSpawned;
 
 	/// <summary>Host: the holder this object stands for.</summary>
 	public Guid HolderId { get; private set; }
 
+	/// <summary>Whether this client knows what is lying here, and shows it.</summary>
+	public bool IsRevealed => IsShown || _toldDefinition is not null;
+	public string DefinitionPath => IsShown ? ShownDefinition : _toldDefinition ?? string.Empty;
 	public ItemDefinition? Definition => ItemDefinition.Find( DefinitionPath );
 	public IReadOnlyList<Verb> Verbs { get; } = new[] { Take };
 
@@ -189,25 +232,59 @@ public sealed class WorldItem : Component, Component.IPressable, IVerbTarget
 	public static WorldItem? Spawn( HolderData holder )
 	{
 		if ( holder.Inventory.Items.FirstOrDefault() is not { } stack || holder.Position is not { Length: 3 } at ) return null;
-		var definition = ItemDefinition.Find( stack.Definition );
-		var item = new GameObject( true, $"Item - {definition?.Title ?? "Unknown"}" );
+		// Named for nothing it holds: every client is sent every object's name.
+		var item = new GameObject( true, "Item" );
 		item.WorldPosition = new Vector3( at[0], at[1], at[2] );
 		item.Tags.Add( "item" );
-		var renderer = Looks.Show( item, definition, 0.2f );
-		var collider = item.AddComponent<BoxCollider>();
-		// Big enough to look at and press, whatever the model.
+		var component = item.AddComponent<WorldItem>();
+		component.HolderId = holder.Id;
+		item.NetworkSpawn( Reveal.Options );
+		component.Tell( stack.Definition );
+		using ( Rpc.FilterInclude( Reveal.Witnesses( item.WorldPosition ) ) ) component.TellWitnesses( stack.Definition );
+		return component;
+	}
+
+	private void Tell( string definition )
+	{
+		_toldDefinition = definition;
+		Build();
+	}
+
+	[Rpc.Broadcast( NetFlags.HostOnly | NetFlags.Reliable )]
+	private void TellWitnesses( string definition ) => Tell( definition );
+
+	protected override void OnAwake() => _sinceSpawned = 0;
+
+	protected override void OnFixedUpdate()
+	{
+		if ( !Networking.IsHost || IsShown || _sinceSpawned < Reveal.HoldSeconds ) return;
+		IsShown = true;
+		ShownDefinition = _toldDefinition ?? string.Empty;
+	}
+
+	protected override void OnUpdate() => Build();
+
+	/// <summary>
+	/// Gives the item, on this machine alone, its model and something to look at and press, once this
+	/// machine knows what it is. Big enough to see and press, whatever the model.
+	/// </summary>
+	private void Build()
+	{
+		if ( !IsRevealed || _builtFor == DefinitionPath ) return;
+		_builtFor = DefinitionPath;
+		var shape = new GameObject( GameObject, true, "Shape" ) { NetworkMode = NetworkMode.Never };
+		var definition = Definition;
+		var renderer = Looks.Show( shape, definition, 0.2f );
+		var collider = shape.AddComponent<BoxCollider>();
 		var bounds = renderer.Model.Bounds;
 		collider.Center = bounds.Center;
 		collider.Scale = definition?.WorldModel is null ? new Vector3( 50, 50, 50 ) : Vector3.Max( bounds.Size, new Vector3( 12, 12, 12 ) );
 		collider.Static = true;
-		var component = item.AddComponent<WorldItem>();
-		component.HolderId = holder.Id;
-		component.DefinitionPath = stack.Definition;
-		item.NetworkSpawn();
-		return component;
 	}
 
-	bool IPressable.CanPress( IPressable.Event e ) => true;
+	bool INetworkVisible.IsVisibleToConnection( Connection connection, in BBox worldBounds ) => Reveal.IsVisibleTo( connection, WorldPosition );
+
+	bool IPressable.CanPress( IPressable.Event e ) => IsRevealed;
 
 	bool IPressable.Press( IPressable.Event e )
 	{
@@ -216,7 +293,7 @@ public sealed class WorldItem : Component, Component.IPressable, IVerbTarget
 	}
 
 	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) =>
-		new IPressable.Tooltip( $"Pick up {Definition?.Title ?? "item"}", "category", Definition?.Description ?? string.Empty );
+		IsRevealed ? new IPressable.Tooltip( $"Pick up {Definition?.Title ?? "item"}", "category", Definition?.Description ?? string.Empty ) : null;
 
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{

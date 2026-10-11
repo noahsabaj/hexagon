@@ -63,7 +63,7 @@ public sealed class Transfers
 			? Result<ItemStack>.Fail( ErrorCode.Invalid, "The count must be positive." )
 			: Add( to.Inventory, new ItemStack { Id = Guid.NewGuid(), Definition = definition, Width = width, Height = height, Max = Math.Max( 1, max ), Pattern = pattern }, count );
 		var data = new[] { ("source", source), ("item", placed.Ok ? placed.Value.Id.ToString( "N" ) : string.Empty), ("definition", definition), ("count", count.ToString()) };
-		_journal.Record( "item.issue", by, to.HolderLabel, placed.Ok, data: pattern is null ? data : data.Append( ("pattern", pattern) ).ToArray() );
+		_journal.Record( JournalKinds.ItemIssue, by, to.HolderLabel, placed.Ok, data: pattern is null ? data : data.Append( ("pattern", pattern) ).ToArray() );
 		return placed;
 	}
 
@@ -81,7 +81,7 @@ public sealed class Transfers
 		// Place first: if it does not all fit, nothing has changed.
 		var placed = Add( to.Inventory, Like( item, count == item.Count ? item.Id : Guid.NewGuid() ), count );
 		if ( placed.Ok ) Take( from, item, count );
-		_journal.Record( "item.move", by, to.HolderLabel, placed.Ok,
+		_journal.Record( JournalKinds.ItemMove, by, to.HolderLabel, placed.Ok,
 			data: new[] { ("from", from.HolderLabel), ("item", itemId.ToString( "N" )), ("definition", item.Definition), ("count", count.ToString()),
 				("into", placed.Ok ? placed.Value.Id.ToString( "N" ) : string.Empty) } );
 		return placed.ToResult();
@@ -111,7 +111,7 @@ public sealed class Transfers
 			kept.Y = item.Y;
 			to.Inventory.Items.Add( kept );
 			from.Inventory.Items.Remove( item );
-			_journal.Record( "item.move", by, to.HolderLabel,
+			_journal.Record( JournalKinds.ItemMove, by, to.HolderLabel,
 				data: new[] { ("from", from.HolderLabel), ("item", item.Id.ToString( "N" )), ("definition", item.Definition), ("count", item.Count.ToString()),
 					("into", kept.Id.ToString( "N" )) } );
 		}
@@ -126,7 +126,7 @@ public sealed class Transfers
 		if ( count == 0 ) count = item.Count;
 		if ( count < 1 || count > item.Count ) return Result.Fail( ErrorCode.Invalid, "There are not that many." );
 		Take( from, item, count );
-		_journal.Record( "item.destroy", by, from.HolderLabel,
+		_journal.Record( JournalKinds.ItemDestroy, by, from.HolderLabel,
 			data: new[] { ("sink", sink), ("item", itemId.ToString( "N" )), ("definition", item.Definition), ("count", count.ToString()) } );
 		return Result.Success();
 	}
@@ -141,7 +141,7 @@ public sealed class Transfers
 		part.Count = count;
 		var placed = Place( holder.Inventory, part );
 		if ( placed.Ok ) item.Count -= count;
-		_journal.Record( "item.split", by, holder.HolderLabel, placed.Ok,
+		_journal.Record( JournalKinds.ItemSplit, by, holder.HolderLabel, placed.Ok,
 			data: new[] { ("item", itemId.ToString( "N" )), ("definition", item.Definition), ("count", count.ToString()), ("into", part.Id.ToString( "N" )) } );
 		return placed;
 	}
@@ -156,7 +156,7 @@ public sealed class Transfers
 		if ( count < 1 ) return Result.Fail( ErrorCode.Conflict, "Those do not go together." );
 		into.Count += count;
 		Take( holder, item, count );
-		_journal.Record( "item.merge", by, holder.HolderLabel,
+		_journal.Record( JournalKinds.ItemMerge, by, holder.HolderLabel,
 			data: new[] { ("item", itemId.ToString( "N" )), ("definition", item.Definition), ("count", count.ToString()), ("into", intoId.ToString( "N" )) } );
 		return Result.Success();
 	}

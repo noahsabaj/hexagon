@@ -151,9 +151,10 @@ public static class DevCommands
 	}
 
 	/// <summary>
-	/// Set by the first command a test sends. From then on this client takes no input from the
-	/// keyboard or mouse: its window is real and has focus, so anyone touching the machine would
-	/// otherwise walk a test character about, which a journal once showed happening.
+	/// Set by the first command a test sends that is let run. From then on, until the session ends,
+	/// this client takes no input from the keyboard or mouse: its window is real and has focus, so
+	/// anyone touching the machine would otherwise walk a test character about, which a journal once
+	/// showed happening. A refused command sets nothing, so no server can take a player's keys.
 	/// </summary>
 	public static bool Driven { get; private set; }
 
@@ -161,10 +162,20 @@ public static class DevCommands
 	public static bool CameraHeld => HeldCamera is not null;
 	public static Transform? HeldCamera { get; private set; }
 
+	/// <summary>
+	/// A new session starts undriven. Statics outlive a session in the editor, so without this a test
+	/// played in an open editor would leave whoever plays next without their keys or their camera.
+	/// </summary>
+	public static void Reset()
+	{
+		Driven = false;
+		HeldCamera = null;
+	}
+
 	public static string Run( string[] args )
 	{
-		Driven = true;
 		if ( !Game.IsEditor && !Enabled ) return "refused: not a dev session";
+		Driven = true;
 		if ( args[0] == "who" )
 			return $"local={Player.Local is not null} connection={Connection.Local?.DisplayName} host={Networking.IsHost} active={Networking.IsActive} scene={Game.ActiveScene?.Name} pawns=[" +
 				string.Join( ", ", Game.ActiveScene?.GetAllComponents<Player>().Select( value =>
@@ -310,7 +321,7 @@ public static class DevCommands
 				case "pickup":
 					var lying = Game.ActiveScene.GetAllComponents<WorldItem>().FirstOrDefault( value => value.Definition?.Title == args[1] );
 					if ( lying is null ) return "nothing like that on the ground";
-					player.RequestAct( lying, "item.take" );
+					player.RequestAct( lying, VerbIds.ItemTake );
 					return "sent pickup";
 				case "open":
 					var container = Game.ActiveScene.GetAllComponents<Container>().FirstOrDefault( value => value.GameObject.Name == args[1] );
@@ -334,18 +345,18 @@ public static class DevCommands
 					// A verb on the nearest other character, on someone left lying where they were, or on a body.
 					Component? subject = args[1].StartsWith( "corpse." )
 						? Game.ActiveScene.GetAllComponents<Corpse>().FirstOrDefault()
-						: Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsShown ) );
+						: Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed ) );
 					if ( subject is null ) return "nobody there";
 					player.RequestAct( subject, args[1] );
 					return $"sent {args[1]}";
 				case "attack":
-					Component? foe = Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsShown ) );
+					Component? foe = Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed ) );
 					player.RequestAttack( foe is null ? Vector3.Forward : foe.WorldPosition - player.WorldPosition );
 					return "sent attack";
 				case "equip":
 					var inHand = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
 					if ( inHand is null ) return "no such item";
-					player.RequestItemAct( inHand.Id, "item.equip" );
+					player.RequestItemAct( inHand.Id, VerbIds.ItemEquip );
 					return "sent equip";
 				case "offer":
 					// offer|<item index>|<count> offers some of a pile to the nearest other character.
@@ -370,7 +381,7 @@ public static class DevCommands
 				case "introduce":
 					var stranger = Nearest( player, Others( player ) );
 					if ( stranger is null ) return "nobody to meet";
-					player.RequestAct( stranger, "person.introduce" );
+					player.RequestAct( stranger, VerbIds.PersonIntroduce );
 					return "sent introduce";
 				case "proxies":
 					// What this client was told about everyone else. Names and factions must be empty.
@@ -395,7 +406,7 @@ public static class DevCommands
 					return "moved";
 				case "sleepers":
 					// Where everyone left lying, or standing bound, is, as this client was shown them.
-					return string.Join( " ", Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsShown )
+					return string.Join( " ", Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed )
 						.Select( value => $"{value.WorldPosition.x:0},{value.WorldPosition.y:0},{(value.IsDown ? "down" : "bound")}" ) );
 				case "state":
 					return $"has={player.HasCharacter} name='{player.CharacterName}' faction='{player.Faction?.Title}' " +
@@ -403,12 +414,12 @@ public static class DevCommands
 						$"items=[{string.Join( ", ", player.Inventory?.Items.Select( value => $"{Pile( value )}@{value.X},{value.Y}" ) ?? Array.Empty<string>() )}] " +
 						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked},swinging={value.IsSwinging}" ) )}] " +
 						$"owned=[{string.Join( ", ", player.OwnedDoors.Select( value => value.Name ) )}] offer='{player.OfferText}' " +
-						$"health={player.Health} down={player.IsDown} restrained={player.IsRestrained} held='{ItemDefinition.Find( player.HeldItemPath )?.Title}' bodies={Game.ActiveScene.GetAllComponents<Corpse>().Count()} " +
+						$"health={player.Health} down={player.IsDown} restrained={player.IsRestrained} held='{ItemDefinition.Find( player.HeldItemPath )?.Title}' bodies={Game.ActiveScene.GetAllComponents<Corpse>().Count( value => value.IsRevealed )} " +
 						$"staff={player.IsStaff} said=[{string.Join( " / ", player.StaffLines.TakeLast( 4 ) )}] " +
 						$"known=[{string.Join( ", ", player.Known.Values.OrderBy( value => value ) )}] " +
 						$"open=[{player.OpenTitle}: {string.Join( ", ", player.OpenInventory?.Items.Select( Pile ) ?? Array.Empty<string>() )}] " +
-						$"ground=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<WorldItem>().Select( value => value.Definition?.Title ).OrderBy( value => value ) )}] " +
-						$"sleepers={Game.ActiveScene.GetAllComponents<Sleeper>().Count( value => value.IsShown )} pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";
+						$"ground=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<WorldItem>().Where( value => value.IsRevealed ).Select( value => value.Definition?.Title ).OrderBy( value => value ) )}] " +
+						$"sleepers={Game.ActiveScene.GetAllComponents<Sleeper>().Count( value => value.IsRevealed )} pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";
 				default:
 					return $"unknown command '{args[0]}'";
 			}

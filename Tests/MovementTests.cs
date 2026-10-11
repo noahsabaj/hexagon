@@ -42,7 +42,7 @@ public sealed class MovementTests
 		while ( height > 0 )
 		{
 			now += MovementAudit.Window;
-			speed += MovementAudit.Gravity * (float)MovementAudit.Window;
+			speed += falling.Gravity * (float)MovementAudit.Window;
 			height = System.MathF.Max( 0, height - speed * (float)MovementAudit.Window );
 			Assert.IsTrue( falling.Observe( new Vector3( 0, 0, height ), now, Speed ), $"falling past {height}" );
 		}
@@ -53,6 +53,21 @@ public sealed class MovementTests
 		Assert.AreEqual( 400f, cheat.Position.Z );
 		// After a refusal the host puts the character back, and a drop is then expected. Whether a floor
 		// is in the way of that drop is something only the engine can see: Player traces for it.
+	}
+
+	[TestMethod]
+	public void AFallIsJudgedByTheWorldsOwnGravity()
+	{
+		// What falls freely under the engine's gravity falls too fast for a world with a third of it.
+		var earthly = new MovementAudit();
+		var light = new MovementAudit { Gravity = MovementAudit.DefaultGravity / 3f };
+		earthly.Reset( new Vector3( 0, 0, 400 ), 0, 0 );
+		light.Reset( new Vector3( 0, 0, 400 ), 0, 0 );
+		var seconds = (float)MovementAudit.Window * 2;
+		var drop = 0.5f * MovementAudit.DefaultGravity * seconds * seconds;
+		var landed = new Vector3( 0, 0, 400 - drop );
+		Assert.IsTrue( earthly.Observe( landed, seconds, Speed ), "a free fall under the engine's gravity" );
+		Assert.IsFalse( light.Observe( landed, seconds, Speed ), "the same drop where things fall slower" );
 	}
 
 	[TestMethod]

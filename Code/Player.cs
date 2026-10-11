@@ -144,6 +144,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 			Local = this;
 			// Statics outlive a session in the editor, so a new one starts with a clean log.
 			Chat.Clear();
+			Dev.DevCommands.Reset();
 			Dev.DevCommands.Announce();
 		}
 		ApplyPresence();
@@ -192,6 +193,10 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	/// <summary>Owner: the thing being looked at, if characters can act on it.</summary>
 	public Component? HoveredTarget => Controller?.Hovered?.GetComponent<IVerbTarget>() as Component;
 
+	/// <summary>Owner: what the engine's controller says about the thing being looked at: what it is, an icon, a line about it.</summary>
+	public IPressable.Tooltip? HoveredTooltip =>
+		HoveredTarget is IPressable target && Controller is { } controller ? controller.Tooltips.FirstOrDefault( value => value.Pressable == target ) is { Title: not null } tip ? tip : null : null;
+
 	protected override void OnFixedUpdate()
 	{
 		if ( !Networking.IsHost ) return;
@@ -214,6 +219,8 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	private void HostAuditMovement( PlayerController controller )
 	{
 		var limit = MathF.Max( controller.RunSpeed, controller.WalkSpeed ) * SpeedTolerance;
+		// A fall is judged by the gravity the world has, which a scene may set, not by the engine's default.
+		_movement.Gravity = MathF.Abs( Scene.PhysicsWorld.Gravity.z );
 		var claimed = WorldPosition;
 		var believed = HostPosition;
 		// Each claim is traced from the one before, so the path is checked the way it was walked.
@@ -227,7 +234,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 			_lastClaim = claimed;
 			return;
 		}
-		HostRecord( "movement.implausible", ok: false, data: new[] { ("claimed", $"{claimed.x:0},{claimed.y:0},{claimed.z:0}"), ("reason", wall ? "wall" : "speed") } );
+		HostRecord( JournalKinds.MovementImplausible, ok: false, data: new[] { ("claimed", $"{claimed.x:0},{claimed.y:0},{claimed.z:0}"), ("reason", wall ? "wall" : "speed") } );
 		// Back to where it was believed to be before this claim, which the audit may already have taken.
 		HostTeleport( believed );
 	}
@@ -372,16 +379,16 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		if ( !Networking.IsHost || game?.Roster is null || caller is null ) return false;
 		if ( !game.HostSpend( caller ) )
 		{
-			if ( game.HostRefuse( caller, "request.limited", null, ("request", request) ) ) Chat.Tell( caller, "You are doing that too fast." );
+			if ( game.HostRefuse( caller, JournalKinds.RequestLimited, null, ("request", request) ) ) Chat.Tell( caller, "You are doing that too fast." );
 			return false;
 		}
 		if ( caller != Network.Owner )
 		{
-			game.HostRefuse( caller, "request.forged", _character?.HolderLabel ?? $"Player:{GameObject.Id:N}", ("request", request) );
+			game.HostRefuse( caller, JournalKinds.RequestForged, _character?.HolderLabel ?? $"Player:{GameObject.Id:N}", ("request", request) );
 			return false;
 		}
 		if ( !needsCharacter || _character is not null ) return true;
-		if ( game.HostRefuse( caller, "request.invalid", null, ("request", request), ("reason", "no character") ) ) Chat.Tell( caller, "Enter the city first." );
+		if ( game.HostRefuse( caller, JournalKinds.RequestInvalid, null, ("request", request), ("reason", "no character") ) ) Chat.Tell( caller, "Enter the city first." );
 		return false;
 	}
 
@@ -392,7 +399,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		var data = value is null
 			? new[] { ("request", request), ("reason", reason) }
 			: new[] { ("request", request), ("reason", reason), ("value", Clip( value )) };
-		game.HostRefuse( owner, "request.invalid", null, data );
+		game.HostRefuse( owner, JournalKinds.RequestInvalid, null, data );
 	}
 
 	/// <summary>Host: the stack, if this character has it. Asking after one it does not have is refused on the record.</summary>
