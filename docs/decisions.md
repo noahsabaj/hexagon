@@ -335,7 +335,23 @@ menu, and a person does.)
 - The server numbers its clients in the order they join, and the two-client test started both at
   once. They joined in either order, so stopping "the second" process, to leave a character bound,
   once stopped the other player instead, and nobody was left standing there. The clients now start
-  one after the other. (2026-10-11)
+  one after the other. (2026-10-11) (Changed the same day: each client is started with its number,
+  `+hexagon_dev_client`, and tells the host once its player exists, so the two start together again
+  and may join in either order. Marking that convar as user info, for the engine to pass on, was
+  tried first: it is set while the game's code loads, and from a client that started quickly the
+  number never reached the host.)
+- Most of a play test was s&box starting. With RenderDoc's folder on the PATH, the engine loads
+  RenderDoc into every game client and the editor, and every native library it then loads while
+  starting is slow: a client took two to four minutes to reach its menu, and 13 seconds without it.
+  A trace showed every font-loading thread waiting in the engine's lookup of SkiaSharp's library.
+  The scripts now start s&box with RenderDoc's folder left out of its PATH; a dedicated server
+  never loads it. A minimized client was slow as well: its window never presented a frame, and
+  each frame waited for that, so it ran at a few frames a second. The test clients now run with
+  `-nowindow`, a window that is never shown. The editor test no longer sleeps 0.7 seconds after
+  every command: it waits for that command's reply, and sends at most four a second, which is all
+  the host accepts from anyone (sent faster, requests were refused and the run failed). The
+  two-client test went from about ten minutes to under three, the editor test from about five to
+  under two and a half. (2026-10-11)
 
 ## 2026-10-10: A change to several documents is saved as one
 

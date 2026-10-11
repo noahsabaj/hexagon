@@ -34,6 +34,7 @@ $http.DefaultRequestHeaders.Accept.ParseAdd('application/json, text/event-stream
 $script:requestId = 0
 $script:failures = 0
 $script:nonce = 0
+$script:lastSent = [DateTime]::MinValue
 $script:lastProblem = 'none'
 $script:replayed = $false
 
@@ -60,6 +61,8 @@ function Invoke-Tool([string] $Name, $Arguments = @{}) {
 
 # Saves what the game camera sees, so a person (or the model running this) can look at it.
 function Snapshot([string] $Name) {
+    # The HUD lays out a panel a frame after it opens, and a cue fades in; the picture waits for both.
+    Start-Sleep -Seconds 1
     try {
         $reply = Invoke-Editor 'tools/call' ([ordered]@{ name = 'call_tool'; arguments = [ordered]@{ name = 'camera_screenshot'; arguments = @{} } })
         $image = $reply.result.content | Where-Object { $_.type -eq 'image' } | Select-Object -First 1
@@ -91,10 +94,16 @@ function Wait-Built {
 
 # Sends one driver command and returns what the game reported back through the console.
 function Send([string] $Command) {
+    # The host lets a connection ask four things a second, after a short burst, and refuses the rest.
+    # A test is held to that like any player.
+    $wait = 250 - ([DateTime]::UtcNow - $script:lastSent).TotalMilliseconds
+    if ($wait -gt 0) { Start-Sleep -Milliseconds ([int] $wait) }
+    $script:lastSent = [DateTime]::UtcNow
     # The editor skips a property write that does not change the value, so a repeated command would
     # never run. A trailing nonce makes every write distinct; the driver ignores extra arguments.
     $script:nonce++
-    $write = [ordered]@{ id = $hud; type = 'DevDriver'; properties = @{ Command = "$Command|#$($script:nonce)" } }
+    $tagged = "$Command|#$($script:nonce)"
+    $write = [ordered]@{ id = $hud; type = 'DevDriver'; properties = @{ Command = $tagged } }
     try { [void](Invoke-Tool 'set_component' $write) }
     catch {
         # Swapping the code in, the editor briefly cannot describe the driver, and fails while checking
@@ -107,10 +116,20 @@ function Send([string] $Command) {
         Wait-Built
         [void](Invoke-Tool 'set_component' $write)
     }
-    Start-Sleep -Milliseconds 700
-    $lines = (Invoke-Tool 'read_console' @{ limit = 40; filter = '[dev]' }) -split "`n" | Where-Object { $_ -match '\[dev\]' }
-    # The editor ends each console line with CRLF, and only the LF is split on.
-    return "$(($lines | Select-Object -Last 1) -replace '^.*?=> ', '')".TrimEnd()
+    # The driver runs the command as it is set and logs what happened, and the editor takes one call
+    # a frame, so the reply is normally there at the first look. It is found by its tag, never by
+    # being the latest line.
+    $marker = "[dev] $tagged => "
+    $until = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $line = (Invoke-Tool 'read_console' @{ limit = 40; filter = '[dev]' }) -split "`n" | Where-Object { $_.Contains($marker) } | Select-Object -Last 1
+        if ($line) {
+            # The editor ends each console line with CRLF, and only the LF is split on.
+            return $line.Substring($line.IndexOf($marker) + $marker.Length).TrimEnd()
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $until)
+    return 'no reply'
 }
 
 function Expect([string] $What, [string] $State, [string] $Pattern) {
@@ -162,8 +181,11 @@ function Start-Play {
 }
 
 Write-Host "==> Starting the editor (data folder '$dataRoot')" -ForegroundColor Cyan
+# RenderDoc, when it is on the PATH, is loaded into the editor, and with it every native library
+# the engine loads while starting is slow. The editor is started without it.
+$pathWithoutRenderDoc = ($env:Path -split ';' | Where-Object { $_ -and -not (Test-Path -LiteralPath (Join-Path $_ 'renderdoc.dll')) }) -join ';'
 $editor = Start-Process -FilePath $sboxDev -WorkingDirectory $SboxRoot -PassThru -WindowStyle Hidden `
-    -ArgumentList "-project `"$manifest`" +hexagon_data_root $dataRoot"
+    -Environment @{ Path = $pathWithoutRenderDoc } -ArgumentList "-project `"$manifest`" +hexagon_data_root $dataRoot"
 $script:deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
 try {
     Wait-Until 'the editor control endpoint' {
