@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Hexagon.Logic;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -74,6 +75,24 @@ public sealed class RulesTests
 		Assert.IsTrue( limiter.TryTake( 1000 ) && limiter.TryTake( 1000 ) && limiter.TryTake( 1000 ) );
 		Assert.IsFalse( limiter.TryTake( 1000 ), "a long idle never banks more than the burst" );
 	}
+	[TestMethod]
+	public void AFloodOfFreeRefusalsIsJournaledOnceASecondWithACount()
+	{
+		var throttle = new RefusalThrottle( interval: 1.0 );
+		Assert.IsTrue( throttle.Admit( 7, "request.forged", 0.0, out var held ) );
+		Assert.AreEqual( 0, held );
+		for ( var index = 1; index <= 9; index++ ) Assert.IsFalse( throttle.Admit( 7, "request.forged", index * 0.1 - 0.05, out _ ) );
+		Assert.IsTrue( throttle.Admit( 8, "request.forged", 0.5, out _ ), "each caller is counted apart" );
+		Assert.IsTrue( throttle.Admit( 7, "request.limited", 0.5, out _ ), "and each kind" );
+
+		Assert.IsTrue( throttle.Admit( 7, "request.forged", 1.0, out held ) );
+		Assert.AreEqual( 9, held, "the next entry says how many were held back" );
+		Assert.IsFalse( throttle.Admit( 7, "request.forged", 1.2, out _ ) );
+		Assert.IsEmpty( throttle.Due( 1.5 ), "still within the interval" );
+		CollectionAssert.AreEqual( new[] { (7L, "request.forged", 1) }, throttle.Due( 2.5 ).ToArray(), "a flood that stopped is still counted" );
+		Assert.IsEmpty( throttle.Due( 10 ), "once" );
+	}
+
 	[TestMethod]
 	public void TwoRadiosEitherMatchOrDoNotAndAVoiceHasNoFace()
 	{

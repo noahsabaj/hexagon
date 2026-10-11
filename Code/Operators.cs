@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Hexagon.Logic;
 using Sandbox;
@@ -10,26 +11,33 @@ namespace Hexagon;
 
 /// <summary>
 /// What the people who run a city can do. There is one set of commands and two ways in: the server
-/// console, and a staff account typing the same line in game. Either way the command is journaled
-/// with who gave it, so staff are on the record like everyone else, and reading the journal is
-/// itself an entry in it. Staff status is granted only from the console: it cannot be given away,
-/// or taken, from inside the game.
+/// console, and a staff account typing the same line in game. Either way the line is journaled
+/// with who gave it before it runs, so staff are on the record like everyone else, and reading the
+/// journal is itself an entry in it. Staff status is granted only from the console: it cannot be
+/// given away, or taken, from inside the game. A character is named in full, and need not be in
+/// the city unless the command moves or hurts it.
 /// </summary>
 public static class Operators
 {
-	public const string Help = "whitelist <steamid> <faction> | unwhitelist <steamid> <faction> | give \"<name>\" <item> [count] | " +
-		"teleport \"<name>\" <x> <y> <z> | bring \"<name>\" | goto \"<name>\" | hurt \"<name>\" <amount> | revive \"<name>\" | " +
-		"payday | who | journal [text] [count]";
+	public const string Help = "whitelist <steamid> <faction> | unwhitelist <steamid> <faction> | give \"<name>\" <item|tokens> [count] | " +
+		"take \"<name>\" <item|tokens> [count] | move \"<from>\" \"<to>\" <item|tokens> [count] | " +
+		"teleport \"<name>\" <x> <y> <z> | bring \"<name>\" | goto \"<name>\" | hurt \"<name>\" <amount> | revive \"<name>\" | release \"<name>\" | " +
+		"faction \"<name>\" <faction> | door [\"<door>\"] <open|close|lock|unlock|release> | door | payday | who | journal [text] [count] [days]";
 
 	[ConCmd( "hexagon_whitelist" )] public static void Whitelist( string steamId, string faction ) => FromConsole( "whitelist", steamId, faction );
 	[ConCmd( "hexagon_unwhitelist" )] public static void Unwhitelist( string steamId, string faction ) => FromConsole( "unwhitelist", steamId, faction );
-	[ConCmd( "hexagon_give" )] public static void Give( string characterName, string item, int count = 1 ) => FromConsole( "give", characterName, item, count.ToString() );
-	[ConCmd( "hexagon_teleport" )] public static void Teleport( string characterName, float x, float y, float z ) => FromConsole( "teleport", characterName, x.ToString(), y.ToString(), z.ToString() );
-	[ConCmd( "hexagon_hurt" )] public static void Hurt( string characterName, int amount ) => FromConsole( "hurt", characterName, amount.ToString() );
+	[ConCmd( "hexagon_give" )] public static void Give( string characterName, string item, int count = 0 ) => FromConsole( "give", characterName, item, Count( count ) );
+	[ConCmd( "hexagon_take" )] public static void Take( string characterName, string item, int count = 0 ) => FromConsole( "take", characterName, item, Count( count ) );
+	[ConCmd( "hexagon_move" )] public static void MoveBetween( string from, string to, string item, int count = 0 ) => FromConsole( "move", from, to, item, Count( count ) );
+	[ConCmd( "hexagon_teleport" )] public static void Teleport( string characterName, float x, float y, float z ) => FromConsole( "teleport", characterName, Number( x ), Number( y ), Number( z ) );
+	[ConCmd( "hexagon_hurt" )] public static void Hurt( string characterName, int amount ) => FromConsole( "hurt", characterName, Count( amount ) );
 	[ConCmd( "hexagon_revive" )] public static void Revive( string characterName ) => FromConsole( "revive", characterName );
+	[ConCmd( "hexagon_release" )] public static void Release( string characterName ) => FromConsole( "release", characterName );
+	[ConCmd( "hexagon_faction" )] public static void SetFaction( string characterName, string faction ) => FromConsole( "faction", characterName, faction );
+	[ConCmd( "hexagon_door" )] public static void OperateDoor( string door, string action ) => FromConsole( "door", door, action );
 	[ConCmd( "hexagon_payday" )] public static void Payday() => FromConsole( "payday" );
 	[ConCmd( "hexagon_who" )] public static void Who() => FromConsole( "who" );
-	[ConCmd( "hexagon_journal" )] public static void Journal( string text = "", int count = 20 ) => FromConsole( "journal", text, count.ToString() );
+	[ConCmd( "hexagon_journal" )] public static void Journal( string text = "", int count = 0, int days = 0 ) => FromConsole( "journal", text, Count( count ), Count( days ) );
 
 	/// <summary>Console only, deliberately: who is staff is decided by whoever owns the server.</summary>
 	[ConCmd( "hexagon_staff" )]
@@ -49,11 +57,25 @@ public static class Operators
 		Log.Info( $"{id} is {(account.IsStaff ? "now" : "no longer")} staff." );
 	}
 
+	/// <summary>An optional number left out is an empty word, so the command uses its own default.</summary>
+	private static string Count( int value ) => value > 0 ? value.ToString( CultureInfo.InvariantCulture ) : string.Empty;
+
+	private static string Number( float value ) => value.ToString( CultureInfo.InvariantCulture );
+
 	private static void FromConsole( params string[] words )
 	{
 		if ( !TryHost( out var game ) ) return;
+		var length = words.Length;
+		while ( length > 0 && words[length - 1].Length == 0 ) length--;
+		words = words[..length];
+		// Whoever has the console is on the record too.
+		game.Journal!.Record( "staff.command", Actor.Console, data: ("line", Line( words )) );
 		foreach ( var line in Execute( game, Actor.Console, null, words ) ) Log.Info( line );
 	}
+
+	/// <summary>The words as they would be typed, quoted where they need to be.</summary>
+	private static string Line( string[] words ) =>
+		string.Join( " ", words.Select( word => word.Length == 0 || word.Contains( ' ' ) ? $"\"{word}\"" : word ) );
 
 	/// <summary>Splits a typed line into words, keeping a "quoted name" as one.</summary>
 	public static string[] Words( string line )
@@ -80,9 +102,13 @@ public static class Operators
 	{
 		if ( words.Length == 0 ) return new[] { Help };
 		var journal = game.Journal!;
+		var roster = game.Roster!;
 		string Word( int index ) => index < words.Length ? words[index] : string.Empty;
-		Player? Find( string name ) => game.Scene.GetAllComponents<Player>()
-			.FirstOrDefault( value => value.HostCharacter?.Name.Equals( name, StringComparison.OrdinalIgnoreCase ) == true );
+		bool IsTokens( string word ) => word.Equals( "tokens", StringComparison.OrdinalIgnoreCase );
+		// Anyone with a character, in the city or not.
+		CharacterData? Character( string name ) => name.Length == 0 ? null : roster.Named( name );
+		// Moving someone, or hurting them, needs them in the city.
+		Player? Find( string name ) => Character( name ) is { } character ? Player.HostLoaded( character.Id ) : null;
 
 		switch ( words[0].ToLowerInvariant() )
 		{
@@ -90,35 +116,98 @@ public static class Operators
 			case "unwhitelist":
 			{
 				if ( !long.TryParse( Word( 1 ), out var id ) || id <= 0 ) return new[] { $"Usage: {words[0]} <steamid64> <faction>" };
-				var faction = FactionDefinition.All.FirstOrDefault( value => value.ResourceName.Equals( Word( 2 ), StringComparison.OrdinalIgnoreCase ) );
-				if ( faction is null ) return new[] { $"No faction named '{Word( 2 )}'. Known: {string.Join( ", ", FactionDefinition.All.Select( value => value.ResourceName ) )}" };
+				if ( Faction( Word( 2 ) ) is not { } faction ) return new[] { NoFaction( Word( 2 ) ) };
 				var account = game.Account( id );
 				var adding = words[0].Equals( "whitelist", StringComparison.OrdinalIgnoreCase );
 				account.Whitelists.Remove( faction.ResourcePath );
 				if ( adding ) account.Whitelists.Add( faction.ResourcePath );
 				game.SaveAccount( account );
 				journal.Record( $"operator.{words[0].ToLowerInvariant()}", by, $"account:{id}", data: ("faction", faction.ResourceName) );
-				return new[] { $"{id} may {(adding ? "now" : "no longer")} create {faction.Title} characters." };
+				var reply = new List<string> { $"{id} may {(adding ? "now" : "no longer")} create {faction.Title} characters." };
+				if ( adding ) return reply;
+				// A whitelist taken away takes the faction's characters out of the city with it.
+				foreach ( var player in game.Scene.GetAllComponents<Player>().Where( value => value.HostCharacter is { } held && held.SteamId == id && held.Faction == faction.ResourcePath ).ToArray() )
+				{
+					reply.Add( $"{player.HostCharacter!.Name} was sent back to the menu." );
+					player.HostSendToMenu( $"You are no longer whitelisted for {faction.Title}." );
+				}
+				return reply;
 			}
 			case "give":
 			{
-				var definition = ResourceLibrary.GetAll<ItemDefinition>().FirstOrDefault( value => value.ResourceName.Equals( Word( 2 ), StringComparison.OrdinalIgnoreCase ) );
-				if ( Find( Word( 1 ) ) is not { } target || definition is null ) return new[] { "Usage: give \"<character name>\" <item> [count]. The character must be in the city." };
-				var count = int.TryParse( Word( 3 ), out var asked ) ? Math.Clamp( asked, 1, 100 ) : 1;
+				if ( Character( Word( 1 ) ) is not { } target ) return new[] { "Usage: give \"<character name>\" <item|tokens> [count]." };
 				// An operator's gift is new matter entering the world, so it comes from a named source.
-				var given = target.HostIssue( Sources.Operator, definition, by, count );
-				return new[] { given.Ok ? $"Gave {(count > 1 ? $"{count} " : string.Empty)}{definition.Title} to {target.HostCharacter!.Name}." : given.Message };
+				if ( IsTokens( Word( 2 ) ) )
+				{
+					if ( !long.TryParse( Word( 3 ), out var amount ) || amount <= 0 ) return new[] { "Usage: give \"<character name>\" tokens <amount>." };
+					var paid = game.Transfers!.IssueTokens( Sources.Operator, target, amount, by );
+					if ( paid.Ok ) Changed( game, target );
+					return new[] { paid.Ok ? $"Gave {amount} tokens to {target.Name}." : paid.Message };
+				}
+				if ( Item( Word( 2 ) ) is not { } definition ) return new[] { $"No item named '{Word( 2 )}'." };
+				var count = int.TryParse( Word( 3 ), out var asked ) ? Math.Clamp( asked, 1, 100 ) : 1;
+				var given = definition.IssueTo( game.Transfers!, Sources.Operator, target, by, count );
+				if ( given.Ok ) Changed( game, target );
+				return new[] { given.Ok ? $"Gave {(count > 1 ? $"{count} " : string.Empty)}{definition.Title} to {target.Name}." : given.Message };
+			}
+			case "take":
+			{
+				// Out of the world on the record, as when staff undo something that should not have happened.
+				if ( Character( Word( 1 ) ) is not { } target ) return new[] { "Usage: take \"<character name>\" <item|tokens> [count]." };
+				if ( IsTokens( Word( 2 ) ) )
+				{
+					var amount = long.TryParse( Word( 3 ), out var asked ) ? asked : target.Tokens;
+					var taken = game.Transfers!.DestroyTokens( Sinks.Operator, target, amount, by );
+					if ( taken.Ok ) Changed( game, target );
+					return new[] { taken.Ok ? $"Took {amount} tokens from {target.Name}." : taken.Message };
+				}
+				if ( Item( Word( 2 ) ) is not { } definition ) return new[] { $"No item named '{Word( 2 )}'." };
+				var removed = Remove( Word( 3 ), target, definition, ( pile, count ) => game.Transfers!.Destroy( Sinks.Operator, target, pile.Id, by, count ) );
+				if ( removed == 0 ) return new[] { $"{target.Name} has no {definition.Title}." };
+				Changed( game, target );
+				return new[] { $"Took {removed} {definition.Title} from {target.Name}." };
+			}
+			case "move":
+			{
+				// Settling a dispute: what was taken goes back where it came from, by the same transfers as anything else.
+				if ( Character( Word( 1 ) ) is not { } from || Character( Word( 2 ) ) is not { } to || from == to )
+					return new[] { "Usage: move \"<from character>\" \"<to character>\" <item|tokens> [count]." };
+				string done;
+				if ( IsTokens( Word( 3 ) ) )
+				{
+					var amount = long.TryParse( Word( 4 ), out var asked ) ? asked : from.Tokens;
+					var moved = game.Transfers!.MoveTokens( from, to, amount, by );
+					if ( !moved.Ok ) return new[] { moved.Message };
+					done = $"Moved {amount} tokens from {from.Name} to {to.Name}.";
+				}
+				else
+				{
+					if ( Item( Word( 3 ) ) is not { } definition ) return new[] { $"No item named '{Word( 3 )}'." };
+					var failed = string.Empty;
+					var count = Remove( Word( 4 ), from, definition, ( pile, some ) =>
+					{
+						var moved = game.Transfers!.Move( from, to, pile.Id, by, some );
+						if ( !moved.Ok ) failed = moved.Message;
+						return moved;
+					} );
+					if ( count == 0 ) return new[] { failed.Length > 0 ? failed : $"{from.Name} has no {definition.Title}." };
+					done = $"Moved {count} {definition.Title} from {from.Name} to {to.Name}.{(failed.Length > 0 ? $" The rest did not fit: {failed}" : string.Empty)}";
+				}
+				game.SaveTogether( from, to );
+				Player.HostRefresh( from );
+				Player.HostRefresh( to );
+				return new[] { done };
 			}
 			case "teleport":
 			{
-				if ( Find( Word( 1 ) ) is not { } target || !float.TryParse( Word( 2 ), out var x ) || !float.TryParse( Word( 3 ), out var y ) || !float.TryParse( Word( 4 ), out var z ) )
+				if ( Find( Word( 1 ) ) is not { } target || !Coordinate( Word( 2 ), out var x ) || !Coordinate( Word( 3 ), out var y ) || !Coordinate( Word( 4 ), out var z ) )
 					return new[] { "Usage: teleport \"<character name>\" <x> <y> <z>. The character must be in the city." };
 				return new[] { Move( journal, by, target, new Vector3( x, y, z ) ) };
 			}
 			case "bring":
 			case "goto":
 			{
-				if ( Find( Word( 1 ) ) is not { } target || asker is null ) return new[] { $"Usage, in game only: {words[0]} \"<character name>\"." };
+				if ( Find( Word( 1 ) ) is not { } target || asker is null ) return new[] { $"Usage, in game only: {words[0]} \"<character name>\". The character must be in the city." };
 				return new[] { words[0].Equals( "bring", StringComparison.OrdinalIgnoreCase )
 					? Move( journal, by, target, asker.HostPosition + Vector3.Up * 4f )
 					: Move( journal, by, asker, target.HostPosition + Vector3.Up * 4f ) };
@@ -133,27 +222,141 @@ public static class Operators
 			}
 			case "revive":
 			{
-				if ( Find( Word( 1 ) ) is not { } target ) return new[] { "Usage: revive \"<character name>\". The character must be in the city." };
-				journal.Record( "operator.revive", by, target.HostCharacter!.HolderLabel );
-				var revived = target.HostRevive();
-				return new[] { revived.Ok ? $"Helped {target.HostCharacter.Name} up." : revived.Message };
+				if ( Character( Word( 1 ) ) is not { } character ) return new[] { "Usage: revive \"<character name>\"." };
+				journal.Record( "operator.revive", by, character.HolderLabel );
+				var revived = Player.HostLoaded( character.Id ) is { } loaded ? loaded.HostRevive() : Vitals.Revive( character );
+				if ( revived.Ok ) Changed( game, character );
+				return new[] { revived.Ok ? $"Helped {character.Name} up." : revived.Message };
+			}
+			case "release":
+			{
+				if ( Character( Word( 1 ) ) is not { } character ) return new[] { "Usage: release \"<character name>\"." };
+				if ( !character.IsRestrained ) return new[] { $"{character.Name}'s hands are not bound." };
+				journal.Record( "operator.release", by, character.HolderLabel );
+				if ( Player.HostLoaded( character.Id ) is { } loaded ) loaded.HostRelease();
+				else
+				{
+					character.IsRestrained = false;
+					Changed( game, character );
+				}
+				return new[] { $"Freed {character.Name}'s hands." };
+			}
+			case "faction":
+			{
+				if ( Character( Word( 1 ) ) is not { } character ) return new[] { "Usage: faction \"<character name>\" <faction>." };
+				if ( Faction( Word( 2 ) ) is not { } faction ) return new[] { NoFaction( Word( 2 ) ) };
+				var was = FactionDefinition.Find( character.Faction )?.ResourceName ?? character.Faction;
+				character.Faction = faction.ResourcePath;
+				journal.Record( "operator.faction", by, character.HolderLabel, data: new[] { ("from", was), ("to", faction.ResourceName) } );
+				Changed( game, character );
+				var reply = new List<string> { $"{character.Name} is now {faction.Title}." };
+				if ( faction.RequiresWhitelist && !game.Account( character.SteamId ).Whitelists.Contains( faction.ResourcePath ) )
+					reply.Add( $"Their account is not whitelisted for {faction.Title}, so once they leave they cannot come back as {character.Name} until it is." );
+				return reply;
+			}
+			case "door":
+			{
+				var doors = game.Scene.GetAllComponents<Door>().ToArray();
+				// Alone, it lists them: in game there is no other way to learn what a door is called.
+				if ( words.Length == 1 )
+					return doors.Length == 0 ? new[] { "There are no doors." } : doors.Select( value => value.HostDescribe( id => roster.Find( id )?.Name ) ).ToArray();
+				var door = doors.FirstOrDefault( value => value.GameObject.Name.Equals( Word( 1 ), StringComparison.OrdinalIgnoreCase ) );
+				var action = Word( 2 );
+				// In game, a door left unnamed is the one beside the staff member.
+				if ( door is null && words.Length == 2 && asker is not null )
+				{
+					door = doors.Select( value => (Door: value, Distance: value.GameObject.GetBounds().ClosestPoint( asker.HostPosition ).Distance( asker.HostPosition )) )
+						.Where( value => value.Distance <= Door.Reach ).OrderBy( value => value.Distance ).Select( value => value.Door ).FirstOrDefault();
+					action = Word( 1 );
+					if ( door is null ) return new[] { "No door is within reach. Stand beside one, or name it; door alone lists them." };
+				}
+				if ( door is null ) return new[] { $"Usage: door [\"<door>\"] <open|close|lock|unlock|release>. No door is named '{Word( 1 )}'; door alone lists them." };
+				action = action.ToLowerInvariant();
+				var done = door.HostOperate( action, by );
+				if ( !done.Ok ) return new[] { done.Message };
+				journal.Record( "operator.door", by, $"Door:{door.GameObject.Id:N}", data: ("action", action) );
+				return new[] { $"{door.GameObject.Name}: {action}." };
 			}
 			case "payday":
 				return new[] { $"Paid {game.PayWages( by )} characters." };
 			case "who":
+			{
 				// The one place a real name is shown to someone who was never told it. It is staff only, and on the record.
-				return game.Scene.GetAllComponents<Player>().Where( value => value.Network.Owner is not null ).Select( value =>
+				var reply = game.Scene.GetAllComponents<Player>().Where( value => value.Network.Owner is not null ).Select( value =>
 					$"{value.Network.Owner!.DisplayName} [{value.Network.Owner.SteamId.ValueUnsigned}] is {value.HostCharacter?.Name ?? "in the menu"}" +
-					(value.HostCharacter is null ? string.Empty : $" at {value.HostPosition.x:0},{value.HostPosition.y:0},{value.HostPosition.z:0}") ).ToArray();
+					(value.HostCharacter is null ? string.Empty : $" at {value.HostPosition.x:0},{value.HostPosition.y:0},{value.HostPosition.z:0}") ).ToList();
+				foreach ( var sleeper in game.Scene.GetAllComponents<Sleeper>() )
+				{
+					if ( sleeper.HostCharacter is not { } character ) continue;
+					var at = sleeper.WorldPosition;
+					reply.Add( $"[{character.SteamId}] is away; {character.Name} is {(character.IsDown ? "down" : "bound")} at {at.x:0},{at.y:0},{at.z:0}" );
+				}
+				return reply;
+			}
 			case "journal":
 			{
-				var count = int.TryParse( Word( 2 ), out var asked ) ? Math.Clamp( asked, 1, 50 ) : 20;
-				var found = journal.Search( DateTimeOffset.UtcNow, Word( 1 ), count );
-				return found.Count == 0 ? new[] { "Nothing in today's journal matches." } : found.Select( value => value.Describe() ).ToArray();
+				var count = int.TryParse( Word( 2 ), out var asked ) && asked > 0 ? Math.Min( asked, 50 ) : 20;
+				var days = int.TryParse( Word( 3 ), out var back ) && back > 0 ? Math.Min( back, 14 ) : 2;
+				var now = DateTimeOffset.UtcNow;
+				var found = journal.Search( now, Word( 1 ), count, days );
+				if ( found.Count == 0 ) return new[] { $"Nothing in the journal's last {days} days matches." };
+				// Times are UTC. Once the answer is not all from today, each day is named.
+				var reply = new List<string>();
+				var onlyToday = found.All( entry => entry.At.UtcDateTime.Date == now.UtcDateTime.Date );
+				DateTime? day = null;
+				foreach ( var entry in found )
+				{
+					if ( !onlyToday && entry.At.UtcDateTime.Date != day )
+					{
+						day = entry.At.UtcDateTime.Date;
+						reply.Add( $"{day:yyyy-MM-dd} (UTC)" );
+					}
+					reply.Add( entry.Describe() );
+				}
+				return reply;
 			}
 			default:
 				return new[] { Help };
 		}
+	}
+
+	private static FactionDefinition? Faction( string name ) =>
+		FactionDefinition.All.FirstOrDefault( value => value.ResourceName.Equals( name, StringComparison.OrdinalIgnoreCase ) );
+
+	private static string NoFaction( string name ) =>
+		$"No faction named '{name}'. Known: {string.Join( ", ", FactionDefinition.All.Select( value => value.ResourceName ) )}";
+
+	private static ItemDefinition? Item( string name ) =>
+		ResourceLibrary.GetAll<ItemDefinition>().FirstOrDefault( value => value.ResourceName.Equals( name, StringComparison.OrdinalIgnoreCase ) );
+
+	private static bool Coordinate( string text, out float value ) =>
+		float.TryParse( text, NumberStyles.Float, CultureInfo.InvariantCulture, out value ) && float.IsFinite( value );
+
+	/// <summary>
+	/// Takes up to the asked number of an item from a character, pile by pile, all of them when none
+	/// is asked. Returns how many went. Whatever left the hand is no longer held.
+	/// </summary>
+	private static int Remove( string asked, CharacterData from, ItemDefinition definition, Func<ItemStack, int, Result> take )
+	{
+		var piles = from.Inventory.Items.Where( item => item.Definition == definition.ResourcePath ).ToArray();
+		var wanted = int.TryParse( asked, out var count ) && count > 0 ? count : piles.Sum( pile => pile.Count );
+		var removed = 0;
+		foreach ( var pile in piles )
+		{
+			if ( removed >= wanted ) break;
+			var some = Math.Min( wanted - removed, pile.Count );
+			if ( !take( pile, some ).Ok ) break;
+			removed += some;
+		}
+		if ( from.Equipped is { } held && from.Inventory.Items.All( item => item.Id != held ) ) from.Equipped = null;
+		return removed;
+	}
+
+	/// <summary>Host: a character staff changed is saved, and whoever can see it is shown the change.</summary>
+	private static void Changed( GameManager game, CharacterData character )
+	{
+		game.Roster!.Save( character );
+		Player.HostRefresh( character );
 	}
 
 	private static string Move( Journal journal, Actor by, Player target, Vector3 to )

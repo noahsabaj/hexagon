@@ -18,3 +18,5 @@ jobs:
         with:
           global-json-file: global.json
       - run: dotnet test Tests/Hexagon.Tests.csproj --nologo
+      # The name confusables table is generated: it must be exactly what the pinned Unicode data makes.
+      - run: pwsh ./tools/generate-confusables.ps1 -Check

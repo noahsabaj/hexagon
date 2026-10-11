@@ -55,7 +55,10 @@ public sealed partial class Player
 		return _openTarget!.GameObject.GetBounds().ClosestPoint( HostPosition ).Distance( HostPosition ) <= reach;
 	}
 
-	/// <summary>Host: everyone looking into this holder sees the change, and the owner of a character sees their own.</summary>
+	/// <summary>
+	/// Host: everyone looking into this holder sees the change, the owner of a character sees their
+	/// own, and someone left lying where they were shows what was done to them.
+	/// </summary>
 	internal static void HostRefresh( IHolder holder )
 	{
 		foreach ( var player in Game.ActiveScene.GetAllComponents<Player>() )
@@ -64,23 +67,16 @@ public sealed partial class Player
 			if ( !ReferenceEquals( player._open, holder ) || player.Network.Owner is not { } owner ) continue;
 			using ( Rpc.FilterInclude( owner ) ) player.ReceiveOpenHolder( player._openTarget, player._openTitle, JsonSerializer.Serialize( holder.Inventory ), holder.Tokens );
 		}
+		if ( holder is CharacterData character ) Sleeper.HostRefresh( character );
 	}
 
-	internal static void HostSaveHolder( IHolder holder )
-	{
-		if ( GameManager.Instance is not { } game ) return;
-		if ( holder is CharacterData character ) game.Roster?.Save( character );
-		else if ( holder is HolderData data ) game.Holders?.Save( data );
-	}
-
-	/// <summary>Host: moves one item between two holders, saves the giver first, and tells everyone who can see either.</summary>
+	/// <summary>Host: moves one item between two holders, saves both as one change, and tells everyone who can see either.</summary>
 	internal Result HostMove( IHolder from, IHolder to, Guid itemId )
 	{
-		if ( _character is null || GameManager.Instance?.Transfers is not { } transfers ) return Result.Fail( ErrorCode.Internal, "The city is not ready." );
+		if ( _character is null || GameManager.Instance is not { Transfers: { } transfers } game ) return Result.Fail( ErrorCode.Internal, "The city is not ready." );
 		var moved = transfers.Move( from, to, itemId, Actor.Of( _character ) );
 		if ( !moved.Ok ) return moved;
-		HostSaveHolder( from );
-		HostSaveHolder( to );
+		game.SaveTogether( from, to );
 		HostRefresh( from );
 		HostRefresh( to );
 		return moved;
@@ -101,20 +97,29 @@ public sealed partial class Player
 	}
 
 	[Rpc.Host]
-	public void RequestTake( Guid itemId ) => Exchange( itemId, taking: true );
+	public void RequestTake( Guid itemId ) => Exchange( nameof( RequestTake ), itemId, taking: true );
 
 	[Rpc.Host]
-	public void RequestPut( Guid itemId ) => Exchange( itemId, taking: false );
+	public void RequestPut( Guid itemId ) => Exchange( nameof( RequestPut ), itemId, taking: false );
 
-	private void Exchange( Guid itemId, bool taking )
+	private void Exchange( string request, Guid itemId, bool taking )
 	{
-		if ( !Authorize( out var caller, out _ ) || _character is null ) return;
+		if ( !Authorize( request, out var caller, out _ ) || _character is null ) return;
 		if ( !HostOpenIsValid() )
 		{
+			HostInvalid( request, "closed" );
 			HostClose();
 			return;
 		}
 		var open = _open!;
+		if ( !(taking ? open : _character).Inventory.Items.Any( value => value.Id == itemId ) )
+		{
+			// Someone else took it first, or it was never there. Either way the client is shown what is.
+			HostInvalid( request, "item", itemId.ToString( "N" ) );
+			HostRefresh( open );
+			Chat.Tell( caller, "That is not there any more." );
+			return;
+		}
 		var moved = _openTarget is Vendor vendor
 			? HostTrade( vendor, open, itemId, buying: taking ) // one at a time: a pile is not a price
 			: taking ? HostMove( open, _character, itemId ) : HostMove( _character, open, itemId );
@@ -132,9 +137,15 @@ public sealed partial class Player
 		if ( buying ) sold = Trade.Sell( transfers, till, _character!, itemId, vendor.SellPrice( definition ), Actor.Of( _character! ) );
 		else if ( vendor.BuyPrice( definition ) is { } offer ) sold = Trade.Sell( transfers, _character!, till, itemId, offer, Actor.Of( _character! ) );
 		else sold = Result.Fail( ErrorCode.Denied, "They do not deal in that." );
-		if ( !sold.Ok ) return sold;
-		HostSaveHolder( from );
-		HostSaveHolder( buying ? _character! : till );
+		if ( !sold.Ok )
+		{
+			// A sale refused for want of room is also on record as the move that failed; one refused on price moved nothing.
+			HostRecord( buying ? "trade.buy" : "trade.sell", till.HolderLabel, ok: false,
+				("item", definition?.ResourceName ?? itemId.ToString( "N" )), ("reason", sold.Code.ToString()) );
+			return sold;
+		}
+		// Each side of a sale gives something, so neither can be saved first: both are saved as one change.
+		GameManager.Instance.SaveTogether( till, _character! );
 		HostRefresh( till );
 		HostRefresh( _character! );
 		return sold;
@@ -144,7 +155,7 @@ public sealed partial class Player
 	[Rpc.Host]
 	public void RequestPay( Player recipient, long amount )
 	{
-		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
+		if ( !Authorize( nameof( RequestPay ), out var caller, out var game ) || _character is null ) return;
 		Result paid;
 		if ( IsIncapable ) paid = Result.Fail( ErrorCode.Denied, "You cannot do that now." );
 		else if ( !recipient.IsValid() || recipient == this || recipient._character is not { } other ) paid = Result.Fail( ErrorCode.NotFound, "There is nobody there." );
@@ -154,8 +165,7 @@ public sealed partial class Player
 			paid = game.Transfers!.MoveTokens( _character, other, amount, Actor.Of( _character ) );
 			if ( paid.Ok )
 			{
-				HostSaveHolder( _character );
-				HostSaveHolder( other );
+				game.SaveTogether( _character, other );
 				HostRefresh( _character );
 				HostRefresh( other );
 				if ( recipient.Network.Owner is { } owner ) Chat.Tell( owner, $"{Recognition.Label( other, _character )} hands you {amount} tokens." );
@@ -169,26 +179,25 @@ public sealed partial class Player
 	[Rpc.Host]
 	public void RequestTakeTokens()
 	{
-		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
+		if ( !Authorize( nameof( RequestTakeTokens ), out var caller, out var game ) || _character is null ) return;
 		if ( !HostOpenIsValid() )
 		{
+			HostInvalid( nameof( RequestTakeTokens ), "closed" );
 			HostClose();
 			return;
 		}
 		var open = _open!;
-		if ( _openTarget is Vendor )
-		{
-			Chat.Tell( caller, "The till is not yours." );
-			return;
-		}
-		var taken = game.Transfers!.MoveTokens( open, _character, open.Tokens, Actor.Of( _character ) );
+		var amount = open.Tokens;
+		var taken = _openTarget is Vendor
+			? Result.Fail( ErrorCode.Denied, "The till is not yours." )
+			: game.Transfers!.MoveTokens( open, _character, amount, Actor.Of( _character ) );
+		HostRecord( "verb.tokens.take", open.HolderLabel, taken.Ok, ("amount", amount.ToString()), ("reason", taken.Code.ToString()) );
 		if ( !taken.Ok )
 		{
 			Chat.Tell( caller, taken.Message );
 			return;
 		}
-		HostSaveHolder( open );
-		HostSaveHolder( _character );
+		game.SaveTogether( open, _character );
 		HostRefresh( open );
 		HostRefresh( _character );
 		Corpse.RemoveIfEmpty( open );
@@ -197,15 +206,14 @@ public sealed partial class Player
 	[Rpc.Host]
 	public void RequestCloseHolder()
 	{
-		if ( Authorize( out _, out _ ) ) HostClose();
+		if ( Authorize( nameof( RequestCloseHolder ), out _, out _, needsCharacter: false ) ) HostClose();
 	}
 
 	/// <summary>What a character does with something it holds. Judged and journaled like any other act.</summary>
 	[Rpc.Host]
 	public void RequestItemAct( Guid itemId, string verbId )
 	{
-		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
-		if ( _character.Inventory.Items.FirstOrDefault( value => value.Id == itemId ) is not { } stack ) return;
+		if ( !Authorize( nameof( RequestItemAct ), out var caller, out var game ) || HostItem( nameof( RequestItemAct ), itemId ) is not { } stack ) return;
 		var definition = ItemDefinition.Find( stack.Definition );
 		Result outcome;
 		if ( IsIncapable ) outcome = Result.Fail( ErrorCode.Denied, "You cannot do that now." );
@@ -221,15 +229,14 @@ public sealed partial class Player
 	[Rpc.Host]
 	public void RequestTune( Guid itemId, string frequency )
 	{
-		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
-		if ( _character.Inventory.Items.FirstOrDefault( value => value.Id == itemId ) is not { } stack ) return;
+		if ( !Authorize( nameof( RequestTune ), out var caller, out var game ) || HostItem( nameof( RequestTune ), itemId ) is not { } stack ) return;
 		var tuned = IsIncapable ? Result<string>.Fail( ErrorCode.Denied, "You cannot do that now." )
 			: ItemDefinition.Find( stack.Definition ) is not { IsRadio: true } ? Result<string>.Fail( ErrorCode.Invalid, "That is not a radio." )
 			: ChatRules.Frequency( frequency );
 		if ( tuned.Ok )
 		{
 			stack.Frequency = tuned.Value;
-			game.Roster!.Save( _character );
+			game.Roster!.Save( _character! );
 			SendPrivateState();
 		}
 		HostRecord( "verb.item.tune", $"item:{itemId:N}", tuned.Ok, ("frequency", tuned.Ok ? tuned.Value : frequency), ("reason", tuned.Code.ToString()) );

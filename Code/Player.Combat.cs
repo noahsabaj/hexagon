@@ -36,7 +36,8 @@ public sealed partial class Player
 	public bool IsIncapable => IsDown || IsRestrained;
 
 	private RealTimeSince _sinceAttack;
-	private RealTimeSince _sinceDown;
+	// The faction whose look the body has on, so staff moving a character to another one changes what is seen.
+	private string? _dressedAs;
 
 	private ItemStack? HostHeld => _character?.Equipped is { } id ? _character.Inventory.Items.FirstOrDefault( value => value.Id == id ) : null;
 
@@ -46,29 +47,46 @@ public sealed partial class Player
 		IsDown = _character?.IsDown ?? false;
 		IsRestrained = _character?.IsRestrained ?? false;
 		HeldItemPath = HostHeld?.Definition ?? string.Empty;
+		var faction = _character?.Faction;
+		if ( faction == _dressedAs ) return;
+		_dressedAs = faction;
+		Look = faction is null ? string.Empty : Looks.Of( FactionDefinition.Find( faction ) );
 	}
 
 	[Rpc.Host]
 	public void RequestAttack( Vector3 aim )
 	{
-		if ( !Authorize( out var caller, out var game ) || _character is null || IsIncapable ) return;
+		if ( !Authorize( nameof( RequestAttack ), out var caller, out var game ) ) return;
+		var character = _character!;
+		if ( IsIncapable )
+		{
+			HostRecord( "combat.attack", ok: false, data: ("reason", IsDown ? "down" : "restrained") );
+			return;
+		}
+		// An aim that is not a number would poison every trace and position it touched.
+		if ( !float.IsFinite( aim.x ) || !float.IsFinite( aim.y ) || !float.IsFinite( aim.z ) )
+		{
+			HostInvalid( nameof( RequestAttack ), "aim" );
+			return;
+		}
 		var weapon = HostHeld is { } held ? ItemDefinition.Find( held.Definition ) : null;
 		if ( weapon is { Damage: <= 0 } ) weapon = null;
+		// A swing still under way is not a new one. Holding the button down is not worth a line each time.
 		if ( _sinceAttack < (weapon?.Cooldown ?? UnarmedCooldown) ) return;
 		_sinceAttack = 0;
 
 		if ( weapon?.Ammo is { } ammo )
 		{
 			// A shot is a round leaving the world, like anything else that is used up.
-			var round = _character.Inventory.Items.FirstOrDefault( value => value.Definition == ammo.ResourcePath );
+			var round = character.Inventory.Items.FirstOrDefault( value => value.Definition == ammo.ResourcePath );
 			if ( round is null )
 			{
 				HostRecord( "combat.attack", ok: false, data: new[] { ("weapon", weapon.ResourceName), ("reason", "empty") } );
 				Chat.Tell( caller, "Click. It is empty." );
 				return;
 			}
-			game.Transfers!.Destroy( Sinks.Consumed, _character, round.Id, Actor.Of( _character ), count: 1 );
-			game.Roster!.Save( _character );
+			game.Transfers!.Destroy( Sinks.Consumed, character, round.Id, Actor.Of( character ), count: 1 );
+			game.Roster!.Save( character );
 			SendPrivateState();
 		}
 
@@ -76,12 +94,15 @@ public sealed partial class Player
 		var from = HostPosition + Vector3.Up * 60f;
 		var direction = aim.IsNearZeroLength ? Vector3.Forward : aim.Normal;
 		var trace = Scene.Trace.Ray( from, from + direction * (weapon?.Range ?? UnarmedRange) ).IgnoreGameObjectHierarchy( GameObject ).Run();
-		var victim = trace.Hit ? trace.GameObject?.Root.GetComponent<Player>() : null;
-		if ( victim?._character is null ) victim = null;
+		var hit = trace.Hit ? trace.GameObject?.Root : null;
+		var victim = hit?.GetComponent<Player>() is { _character: not null } person ? person : null;
+		var lying = victim is null ? hit?.GetComponent<Sleeper>() : null;
+		var struck = victim?._character?.HolderLabel ?? lying?.HostCharacter?.HolderLabel;
 		var damage = weapon?.Damage ?? UnarmedDamage;
-		HostRecord( "combat.attack", victim?._character!.HolderLabel, victim is not null,
-			("weapon", weapon?.ResourceName ?? "unarmed"), ("damage", damage.ToString()) );
+		// A miss is an attack all the same: it is on record, with nothing hit.
+		HostRecord( "combat.attack", struck, data: new[] { ("weapon", weapon?.ResourceName ?? "unarmed"), ("damage", damage.ToString()), ("hit", struck is null ? "nothing" : "person") } );
 		victim?.HostDamage( damage, this, weapon?.Title ?? "fists" );
+		lying?.HostDamage( damage, this, weapon?.Title ?? "fists" );
 	}
 
 	/// <summary>Host: harms this character. Harm alone never kills; at nothing it goes down.</summary>
@@ -90,11 +111,11 @@ public sealed partial class Player
 		if ( !Networking.IsHost || _character is null ) return;
 		var harm = Vitals.Damage( _character, amount );
 		if ( harm == Harm.None ) return;
-		GameManager.Instance?.Roster?.Save( _character );
+		// Whoever goes down lets go of what was in hand, and stays down, where they fell, after a restart.
+		if ( harm == Harm.Downed ) _character.Equipped = null;
+		HostSave();
 		if ( harm == Harm.Downed )
 		{
-			_sinceDown = 0;
-			_character.Equipped = null;
 			HostClose();
 			HostRecord( "character.downed", by?._character?.HolderLabel, data: new[] { ("cause", cause) } );
 			if ( Network.Owner is { } owner ) Chat.Tell( owner, "You are down. Someone may help you up, or not." );
@@ -119,49 +140,75 @@ public sealed partial class Player
 	public void HostDie( string cause, Player? by )
 	{
 		if ( !Networking.IsHost || _character is not { } character || GameManager.Instance is not { } game ) return;
-		HostRecord( "character.death", by?._character?.HolderLabel, data: new[] { ("cause", cause), ("policy", game.Death.ToString()) } );
 		HostClose();
-		if ( game.DeathDropsBelongings && (character.Inventory.Items.Count > 0 || character.Tokens > 0) ) HostLeaveBody( game, character );
-
-		if ( game.Death == DeathPolicy.Permanent )
+		if ( HostDie( game, character, HostPosition, Look, cause, by?._character ) )
 		{
 			var owner = Network.Owner;
+			// Gone from the roster, so nothing is left lying where it fell but the body.
 			HostUnload();
-			game.Transfers!.DestroyAll( Sinks.CharacterDeleted, character, Actor.Of( character ) );
-			game.Roster!.Delete( character.SteamId, character.Id );
 			if ( owner is null ) return;
 			SendCharacterList( owner, game );
 			Chat.Tell( owner, $"{character.Name} has died." );
 			return;
 		}
-
-		Vitals.Restore( character );
-		character.Equipped = null;
-		game.Roster!.Save( character );
-		HostTeleport( game.FindSpawn().Position );
+		HostTeleport( character.Position is { Length: 3 } at ? new Vector3( at[0], at[1], at[2] ) : game.FindSpawn().Position );
 		HostSyncVitals();
 		SendPrivateState();
 		if ( Network.Owner is { } waking ) Chat.Tell( waking, "You wake somewhere else, with nothing." );
 	}
 
-	/// <summary>What the character carried stays where it fell, in a holder like any other.</summary>
-	private void HostLeaveBody( GameManager game, CharacterData character )
+	/// <summary>
+	/// Host: a character dies, whether in the city or left lying where its player went. What it
+	/// carried stays where it fell, and the rest is the game manager's policy. True when the
+	/// character is gone for good; otherwise it is whole again, saved at a spawn point.
+	/// </summary>
+	internal static bool HostDie( GameManager game, CharacterData character, Vector3 at, string look, string cause, CharacterData? by )
 	{
-		var at = HostPosition;
+		HostRecordAt( "character.death", Actor.Of( character ), at, by?.HolderLabel, data: new[] { ("cause", cause), ("policy", game.Death.ToString()) } );
+		character.Equipped = null;
+		if ( game.DeathDropsBelongings && (character.Inventory.Items.Count > 0 || character.Tokens > 0) ) LeaveBody( game, character, at, look );
+
+		if ( game.Death == DeathPolicy.Permanent )
+		{
+			var actor = Actor.Of( character );
+			game.Transfers!.DestroyAll( Sinks.CharacterDeleted, character, actor );
+			Door.HostReleaseOwnedBy( character.Id, actor );
+			game.Roster!.Delete( character.SteamId, character.Id );
+			Sleeper.HostRefresh( character );
+			// Its player may be in the menu on another connection, looking at a list with it on.
+			foreach ( var player in Game.ActiveScene.GetAllComponents<Player>().Where( value => value._character is null ).ToArray() )
+				if ( player.Network.Owner is { } owner && SteamIdOf( owner ) == character.SteamId ) player.SendCharacterList( owner, game );
+			return true;
+		}
+
+		Vitals.Restore( character );
+		var spawn = game.FindSpawn().Position;
+		character.Position = new[] { spawn.x, spawn.y, spawn.z };
+		game.Roster!.Save( character );
+		Sleeper.HostRefresh( character );
+		return false;
+	}
+
+	/// <summary>
+	/// What the character carried stays where it fell, in a holder like any other. The body is the
+	/// size of the inventory and every pile keeps its place, so all of it goes: nothing is left on
+	/// someone who has died.
+	/// </summary>
+	private static void LeaveBody( GameManager game, CharacterData character, Vector3 at, string look )
+	{
 		var body = game.Holders!.GetOrCreate( Guid.NewGuid(), HolderKinds.Corpse, "Body", character.Inventory.Width, character.Inventory.Height );
 		body.Position = new[] { at.x, at.y, at.z };
-		body.Look = Look;
-		var actor = Actor.Of( character );
-		foreach ( var item in character.Inventory.Items.ToArray() ) game.Transfers!.Move( character, body, item.Id, actor );
-		if ( character.Tokens > 0 ) game.Transfers!.MoveTokens( character, body, character.Tokens, actor );
-		game.Roster!.Save( character );
-		game.Holders.Save( body );
+		body.Look = look;
+		var moved = game.Transfers!.MoveAll( character, body, Actor.Of( character ) );
+		if ( !moved.Ok ) Log.Warning( $"[death] {character.HolderLabel} kept some of what it carried: {moved.Message}" );
+		game.SaveTogether( character, body );
 		Corpse.Spawn( body );
 	}
 
+	/// <summary>Host: time passes for someone who is down. Bleeding out is the game manager's policy.</summary>
 	private void HostVitalsTick( GameManager game )
 	{
-		if ( _character is not { IsDown: true } || game.DownedSeconds <= 0 || _sinceDown < game.DownedSeconds ) return;
+		if ( _character is not { IsDown: true } character || !Vitals.Bleed( character, Time.Delta, game.DownedSeconds ) ) return;
 		if ( game.BleedOutKills ) HostDie( "bled out", null );
 		else HostRevive();
 	}

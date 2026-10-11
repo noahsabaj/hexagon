@@ -14,14 +14,15 @@ public sealed record CharacterSummary( Guid Id, string Name, string Faction );
 
 /// <summary>
 /// One connection's presence in the city. Movement is the engine's <see cref="PlayerController"/>,
-/// simulated by the owner. Only what another character could see is replicated to everyone through
-/// <c>[Sync]</c>: that someone is there, and what they look like. A name or a faction is knowledge,
-/// not appearance, so it reaches its owner alone by owner-only RPC and a client cannot list who is
-/// in the city. A client changes nothing directly: it calls a <c>[Rpc.Host]</c> request, and the
-/// host decides.
+/// simulated by the owner. Only what another character could see is replicated through
+/// <c>[Sync]</c>: that someone is there, and what they look like. It is sent only to clients whose
+/// own character is near enough to see it, by where the host believes both are. A name or a
+/// faction is knowledge, not appearance, so it reaches its owner alone by owner-only RPC and a client
+/// cannot list who is in the city. A client changes nothing directly: it calls a <c>[Rpc.Host]</c>
+/// request, and the host decides.
 /// </summary>
 [Title( "Hexagon Player" ), Category( "Hexagon" ), Icon( "person" )]
-public sealed partial class Player : Component, Component.IPressable, IVerbTarget
+public sealed partial class Player : Component, Component.IPressable, Component.INetworkVisible, IVerbTarget
 {
 	/// <summary>The pawn this client controls, or null before it has spawned.</summary>
 	public static Player? Local { get; private set; }
@@ -30,6 +31,12 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 	[Sync( SyncFlags.FromHost )] public string CharacterDescription { get; set; } = string.Empty;
 	/// <summary>A face: the same person is the same id tomorrow. It says nothing about who they are.</summary>
 	[Sync( SyncFlags.FromHost )] public Guid CharacterId { get; set; }
+	/// <summary>
+	/// The host's heartbeat. A client is only sent someone while they are in sight, and the host
+	/// cannot tell a client to drop a pawn another client owns, so a client that stops hearing this
+	/// knows the person has gone out of sight.
+	/// </summary>
+	[Sync( SyncFlags.FromHost )] public int Pulse { get; set; }
 
 	// Owner-side copies of private state. Empty on every other client.
 	public string CharacterName { get; private set; } = string.Empty;
@@ -41,6 +48,11 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 	/// <summary>Owner: how this client's character would refer to someone it can see.</summary>
 	public string LabelFor( Player other ) =>
 		other == this ? CharacterName : Known.TryGetValue( other.CharacterId, out var name ) ? name : Recognition.Stranger( other.CharacterDescription );
+
+	/// <summary>Owner: how this client's character would refer to someone left lying, or bound, where they were.</summary>
+	public string LabelFor( Sleeper other ) =>
+		Known.TryGetValue( other.CharacterId, out var name ) ? name : Recognition.Stranger( other.CharacterDescription );
+
 	public IReadOnlyList<CharacterSummary> Characters { get; private set; } = Array.Empty<CharacterSummary>();
 	public InventoryData? Inventory { get; private set; }
 	public long Tokens { get; private set; }
@@ -50,8 +62,13 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 
 	// Host-side.
 	private CharacterData? _character;
-	private readonly RateLimiter _requests = new( capacity: 12, refillPerSecond: 4 );
 	private readonly MovementAudit _movement = new();
+	// The last claim the host believed, which the next one is traced from.
+	private Vector3? _lastClaim;
+
+	// Client-side: when the heartbeat last changed.
+	private int _seenPulse = -1;
+	private RealTimeSince _sincePulse;
 
 	/// <summary>
 	/// Host: where the host believes this character is. The owner simulates movement, so
@@ -61,6 +78,15 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 
 	/// <summary>How much faster than a run a claim may be before it is disbelieved.</summary>
 	public const float SpeedTolerance = 1.5f;
+
+	/// <summary>Seconds without a heartbeat before a client takes someone to be out of sight.</summary>
+	public const float PulseTimeout = 2f;
+
+	/// <summary>
+	/// Whether this client is to show the person: they have a character, and, if they are someone
+	/// else, the host is still sending them.
+	/// </summary>
+	public bool IsPresent => HasCharacter && (!IsProxy || Networking.IsHost || _sincePulse < PulseTimeout);
 
 	/// <summary>Builds the pawn on the host, before it is network-spawned, so clients receive it whole.</summary>
 	public static void Compose( GameObject pawn )
@@ -97,6 +123,8 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 
 	protected override void OnDestroy()
 	{
+		// The pawn going, with its connection or with the city, is the last chance to keep where it stood.
+		HostSave();
 		if ( Local == this ) Local = null;
 	}
 
@@ -108,6 +136,11 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 
 	protected override void OnUpdate()
 	{
+		if ( Pulse != _seenPulse )
+		{
+			_seenPulse = Pulse;
+			_sincePulse = 0;
+		}
 		ApplyPresence();
 		ApplyAppearance();
 		if ( IsProxy || !HasCharacter || Dev.DevCommands.Driven ) return;
@@ -115,7 +148,7 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 		// from a menu, by name: nothing that costs tokens or binds someone hangs off a bare number key.
 		if ( UiBusy ) return;
 		if ( HoveredTarget is IVerbTarget { Verbs.Count: > 1 } && Input.Pressed( MenuAction ) ) MenuTarget = HoveredTarget;
-		if ( Input.Pressed( "Attack1" ) && Controller is { } controller ) RequestAttack( controller.EyeAngles.Forward );
+		if ( Input.Pressed( "Attack1" ) && !IsIncapable && Controller is { } controller ) RequestAttack( controller.EyeAngles.Forward );
 	}
 
 	/// <summary>Owner: set by the HUD while a panel has the cursor, so a click in a menu is not a punch.</summary>
@@ -132,19 +165,57 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 
 	protected override void OnFixedUpdate()
 	{
-		if ( !Networking.IsHost || _character is null || Controller is not { } controller ) return;
-		var limit = MathF.Max( controller.RunSpeed, controller.WalkSpeed ) * SpeedTolerance;
+		if ( !Networking.IsHost ) return;
+		Pulse = (int)(Time.Now * 2f);
+		if ( _character is null || Controller is not { } controller || GameManager.Instance is not { } game ) return;
 		if ( _open is not null && !HostOpenIsValid() ) HostClose();
-		HostVitalsTick( GameManager.Instance! );
+		HostVitalsTick( game );
+		// Bleeding out may have ended the character for good.
+		if ( _character is null ) return;
+		HostAuditMovement( controller );
+	}
+
+	/// <summary>
+	/// Host: the owner says where it is, and the host decides whether to believe it. A claim must be
+	/// reachable at the character's speed, and the way to it must be open: a claim on the far side of
+	/// a wall, a shut door or a floor is a path no body could take, at any speed.
+	/// </summary>
+	private void HostAuditMovement( PlayerController controller )
+	{
+		var limit = MathF.Max( controller.RunSpeed, controller.WalkSpeed ) * SpeedTolerance;
 		var claimed = WorldPosition;
-		// The audit knows speeds, not walls. A claim well below where the character was believed to be
-		// must have a clear way down to it, or it passed through a floor.
-		var believedChest = HostPosition + Vector3.Up * 36f;
-		var throughFloor = claimed.z < HostPosition.z - 48f &&
-			Scene.Trace.Ray( believedChest, claimed + Vector3.Up * 36f ).WithoutTags( "player", "item", "corpse", "container", "vendor" ).Run().Hit;
-		if ( !throughFloor && _movement.Observe( claimed, Time.Now, limit ) ) return;
-		HostRecord( "movement.implausible", ok: false, data: ("claimed", $"{claimed.x:0},{claimed.y:0},{claimed.z:0}") );
-		HostTeleport( HostPosition );
+		var believed = HostPosition;
+		// Each claim is traced from the one before, so the path is checked the way it was walked.
+		var from = _movement.Settling ? believed : _lastClaim ?? believed;
+		var believable = _movement.Observe( claimed, Time.Now, limit );
+		// Still on its way to where the host put it: its claims are from the old place, and are not a path.
+		if ( believable && _movement.Settling ) return;
+		var wall = believable && from.Distance( claimed ) > 1f && HostBlocked( from, claimed );
+		if ( believable && !wall )
+		{
+			_lastClaim = claimed;
+			return;
+		}
+		HostRecord( "movement.implausible", ok: false, data: new[] { ("claimed", $"{claimed.x:0},{claimed.y:0},{claimed.z:0}"), ("reason", wall ? "wall" : "speed") } );
+		// Back to where it was believed to be before this claim, which the audit may already have taken.
+		HostTeleport( believed );
+	}
+
+	/// <summary>
+	/// Host: whether anything solid to a body lies between two claims, at knee height so a step does
+	/// not count. Other people, things lying about and a door still swinging are not walls.
+	/// </summary>
+	private bool HostBlocked( Vector3 from, Vector3 to )
+	{
+		var knee = Vector3.Up * 24f;
+		var trace = Scene.Trace.Ray( from + knee, to + knee )
+			.WithCollisionRules( "player" )
+			.WithoutTags( "player", "item", "corpse", "sleeper" )
+			.IgnoreGameObjectHierarchy( GameObject )
+			.IgnoreDynamic()
+			.Run();
+		if ( !trace.Hit || trace.StartedSolid ) return false;
+		return trace.GameObject?.GetComponentInParent<Door>() is not { IsSwinging: true };
 	}
 
 	/// <summary>Host: puts the character somewhere. The owner simulates movement, so it is told to move itself.</summary>
@@ -153,8 +224,20 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 		if ( !Networking.IsHost ) return;
 		// The host's belief moves whether or not there is anyone to tell.
 		_movement.Reset( position, Time.Now );
+		_lastClaim = null;
 		if ( Network.Owner is not { } owner ) return;
 		using ( Rpc.FilterInclude( owner ) ) ReceiveTeleport( position );
+	}
+
+	/// <summary>
+	/// Host: a client is sent this pawn only while its own character is in the city and near enough
+	/// to see it, by where the host believes both are, so no claim of the client's widens what it sees.
+	/// </summary>
+	bool INetworkVisible.IsVisibleToConnection( Connection connection, in BBox worldBounds )
+	{
+		// The owner always has its own pawn, and the host everything. An owner is asked too, about the host.
+		if ( !Networking.IsHost || connection.IsHost || connection == Network.Owner ) return true;
+		return _character is not null && GameManager.Instance?.Sees( connection, HostPosition ) == true;
 	}
 
 	private PlayerController? Controller => GetComponent<PlayerController>( true );
@@ -190,16 +273,22 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 		renderer.Set( "holdtype", (int)(held?.HoldType ?? Sandbox.Citizen.CitizenAnimationHelper.HoldTypes.None) );
 	}
 
-	/// <summary>A connection without a character is in the menu: no body in the world, no movement.</summary>
+	/// <summary>
+	/// A connection without a character is in the menu: no body in the world, no movement. Someone
+	/// who has gone out of sight is not left standing, unseen and solid, where they were last seen.
+	/// </summary>
 	private void ApplyPresence()
 	{
 		if ( Controller is not { } controller ) return;
+		var present = IsPresent;
 		if ( controller.Renderer.IsValid() )
 		{
-			controller.Renderer.GameObject.Enabled = HasCharacter;
+			controller.Renderer.GameObject.Enabled = present;
 			// Someone who is down lies down. It is crude, and it is visible from across the street.
 			controller.Renderer.GameObject.LocalRotation = IsDown ? Rotation.From( -90, 0, 0 ) : Rotation.Identity;
 		}
+		// Another's body is moved by the network, not by physics, so it can lose its colliders safely.
+		if ( IsProxy && controller.ColliderObject.IsValid() ) controller.ColliderObject.Enabled = present;
 		if ( IsProxy ) return;
 		// A driven test client acts as though nobody is at the keyboard, but still stands, falls and is pushed.
 		if ( Dev.DevCommands.Driven ) Input.Suppressed = true;
@@ -210,20 +299,63 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 	}
 
 	/// <summary>
-	/// Every host request starts here. The caller must own this pawn, so one player cannot act as
-	/// another, and must be within its request budget.
+	/// Every host request starts here. Whoever sent it pays for it from their own budget, whichever
+	/// pawn it names; it must name their own pawn, so one player cannot act as another; and most
+	/// requests need a character in the city. Each refusal is journaled, as a run of them is how a
+	/// cheat shows up, but a flood of them is written as a count.
 	/// </summary>
-	private bool Authorize( out Connection caller, out GameManager game )
+	private bool Authorize( string request, out Connection caller, out GameManager game, bool needsCharacter = true )
 	{
 		caller = Rpc.Caller;
 		game = GameManager.Instance!;
-		if ( !Networking.IsHost || game?.Roster is null || caller is null || caller != Network.Owner ) return false;
-		if ( _requests.TryTake( RealTime.Now ) ) return true;
-		Chat.Tell( caller, "You are doing that too fast." );
+		if ( !Networking.IsHost || game?.Roster is null || caller is null ) return false;
+		if ( !game.HostSpend( caller ) )
+		{
+			if ( game.HostRefuse( caller, "request.limited", null, ("request", request) ) ) Chat.Tell( caller, "You are doing that too fast." );
+			return false;
+		}
+		if ( caller != Network.Owner )
+		{
+			game.HostRefuse( caller, "request.forged", _character?.HolderLabel ?? $"Player:{GameObject.Id:N}", ("request", request) );
+			return false;
+		}
+		if ( !needsCharacter || _character is not null ) return true;
+		if ( game.HostRefuse( caller, "request.invalid", null, ("request", request), ("reason", "no character") ) ) Chat.Tell( caller, "Enter the city first." );
 		return false;
 	}
 
-	private static long SteamIdOf( Connection connection ) => (long)connection.SteamId.ValueUnsigned;
+	/// <summary>Host: a request no honest client would make, such as for an item it does not have. Refused on the record.</summary>
+	private void HostInvalid( string request, string reason, string? value = null )
+	{
+		if ( GameManager.Instance is not { } game || Network.Owner is not { } owner ) return;
+		var data = value is null
+			? new[] { ("request", request), ("reason", reason) }
+			: new[] { ("request", request), ("reason", reason), ("value", Clip( value )) };
+		game.HostRefuse( owner, "request.invalid", null, data );
+	}
+
+	/// <summary>Host: the stack, if this character has it. Asking after one it does not have is refused on the record.</summary>
+	private ItemStack? HostItem( string request, Guid itemId )
+	{
+		var stack = _character?.Inventory.Items.FirstOrDefault( value => value.Id == itemId );
+		if ( stack is null ) HostInvalid( request, "item", itemId.ToString( "N" ) );
+		return stack;
+	}
+
+	/// <summary>Whatever a client sent is kept short before it is written down.</summary>
+	private static string Clip( string text ) => text.Length <= 64 ? text : text[..64] + "...";
+
+	internal static long SteamIdOf( Connection connection ) => (long)connection.SteamId.ValueUnsigned;
+
+	/// <summary>Host: who is behind a connection: its character in the city, or else the account.</summary>
+	internal static Actor HostActorOf( Connection connection ) =>
+		Game.ActiveScene?.GetAllComponents<Player>().FirstOrDefault( value => value.Network.Owner == connection && value._character is not null )?._character is { } character
+			? Actor.Of( character )
+			: new Actor( SteamIdOf( connection ), Name: connection.DisplayName );
+
+	/// <summary>Host: the pawn this character is in the city in, on whichever connection.</summary>
+	internal static Player? HostLoaded( Guid characterId ) =>
+		Game.ActiveScene?.GetAllComponents<Player>().FirstOrDefault( value => value._character?.Id == characterId );
 
 	/// <summary>Host: writes the loaded character, including where it stands.</summary>
 	public void HostSave()
@@ -261,26 +393,41 @@ public sealed partial class Player : Component, Component.IPressable, IVerbTarge
 	/// <summary>Host: writes what this character just did to the journal, with where and who was near enough to see.</summary>
 	public void HostRecord( string kind, string? subject = null, bool ok = true, params (string Key, string Value)[] data )
 	{
-		if ( !Networking.IsHost || GameManager.Instance?.Journal is not { } journal ) return;
-		var by = _character is not null ? Actor.Of( _character ) : new Actor( Network.Owner is { } owner ? SteamIdOf( owner ) : 0 );
-		var witnesses = _character is null
-			? Array.Empty<Guid>()
-			: Scene.GetAllComponents<Player>()
-				.Where( other => other != this && other._character is not null && other.HostPosition.Distance( HostPosition ) <= WitnessRange )
-				.Select( other => other._character!.Id ).ToArray();
-		var at = HostPosition;
-		journal.Record( kind, by, subject, ok, new[] { at.x, at.y, at.z }, witnesses, data );
+		if ( !Networking.IsHost ) return;
+		var by = _character is not null
+			? Actor.Of( _character )
+			: Network.Owner is { } owner ? new Actor( SteamIdOf( owner ), Name: owner.DisplayName ) : Actor.Console;
+		// Someone in the menu is nowhere, and nobody saw them.
+		HostRecordAt( kind, by, _character is not null ? HostPosition : null, subject, ok, data );
 	}
+
+	/// <summary>Host: writes an act done at a place to the journal, with every character near enough to have seen it.</summary>
+	internal static void HostRecordAt( string kind, Actor by, Vector3? at, string? subject = null, bool ok = true, params (string Key, string Value)[] data )
+	{
+		if ( !Networking.IsHost || GameManager.Instance?.Journal is not { } journal ) return;
+		var witnesses = at is { } place ? HostWitnesses( place, by.Character ) : Array.Empty<Guid>();
+		journal.Record( kind, by, subject, ok, at is { } where ? new[] { where.x, where.y, where.z } : null, witnesses, data );
+	}
+
+	private static Guid[] HostWitnesses( Vector3 at, Guid? except ) =>
+		Game.ActiveScene.GetAllComponents<Player>()
+			.Where( other => other._character is not null && other._character.Id != except && other.HostPosition.Distance( at ) <= WitnessRange )
+			.Select( other => other._character!.Id ).ToArray();
 
 	/// <summary>How near a character must be to count as having seen an act: the range of ordinary speech.</summary>
 	public const float WitnessRange = 300f;
 
 	private void SendCharacterList( Connection caller, GameManager game )
 	{
-		var summaries = game.Roster!.OwnedBy( SteamIdOf( caller ) )
-			.Select( value => new CharacterSummary( value.Id, value.Name, FactionDefinition.Find( value.Faction )?.Title ?? value.Faction ) )
-			.ToArray();
-		using ( Rpc.FilterInclude( caller ) ) ReceiveCharacters( JsonSerializer.Serialize( summaries ) );
+		// The list is the menu, and a client takes it as leaving whoever it was. A player in the city
+		// is sent it when they leave, whatever they asked of the menu meanwhile.
+		if ( _character is null )
+		{
+			var summaries = game.Roster!.OwnedBy( SteamIdOf( caller ) )
+				.Select( value => new CharacterSummary( value.Id, value.Name, FactionDefinition.Find( value.Faction )?.Title ?? value.Faction ) )
+				.ToArray();
+			using ( Rpc.FilterInclude( caller ) ) ReceiveCharacters( JsonSerializer.Serialize( summaries ) );
+		}
 		HostSendAccount();
 	}
 

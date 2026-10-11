@@ -70,12 +70,17 @@ function Start-Server([string] $DataFolder) {
     $start.WorkingDirectory = $SboxRoot
     $start.Arguments = "+game `"$manifest`" +net_allow_local 1 +hexagon_data_root $DataFolder +hexagon_dev 1"
     $start.RedirectStandardOutput = $true
+    # Errors are written to the other stream, and are what the last check most needs to see.
+    $start.RedirectStandardError = $true
     $start.UseShellExecute = $false
     $script:server = [System.Diagnostics.Process]::Start($start)
-    $null = Register-ObjectEvent -InputObject $script:server -EventName OutputDataReceived -MessageData $log -Action {
-        if ($null -ne $EventArgs.Data) { Add-Content -LiteralPath $Event.MessageData -Value $EventArgs.Data }
+    foreach ($stream in 'OutputDataReceived', 'ErrorDataReceived') {
+        $null = Register-ObjectEvent -InputObject $script:server -EventName $stream -MessageData $log -Action {
+            if ($null -ne $EventArgs.Data) { Add-Content -LiteralPath $Event.MessageData -Value $EventArgs.Data }
+        }
     }
     $script:server.BeginOutputReadLine()
+    $script:server.BeginErrorReadLine()
     $announced = "\[dev\] inbox at .*$([regex]::Escape($DataFolder))[\\/]"
     Wait-Until 'the server' { (Read-Log) -match $announced }
     $script:inbox = ((Read-Log) -match $announced | Select-Object -Last 1) -replace '^.*inbox at ', ''
@@ -237,10 +242,23 @@ try {
     [void](Send 1 'take|0')
     Expect 'emptied, the body is gone, and nothing was created or lost' (Send 1 'state') 'tokens=200 .*bodies=0'
 
-    Write-Host '==> Leaving' -ForegroundColor Cyan
+    Write-Host '==> Leaving does not end a scene' -ForegroundColor Cyan
+    [void](Send 0 'console|hexagon_teleport "Jane Roe" 300 -150 60')
+    [void](Send 0 'console|hexagon_give "John Doe" zip_tie')
+    Start-Sleep -Seconds 2
+    [void](Send 1 'act|person.restrain')
+    Start-Sleep -Seconds 1
+    Expect 'he binds her again' (Send 2 'state') 'restrained=True'
     Stop-Process -Id $clients[1].Id -Force
     Wait-Until 'the server to notice the disconnect' { (Send 0 'journal') -match 'connection\.leave=1' }
     Expect 'the player who left is gone from the other client' (Send 1 'proxies') '^[^A-Za-z]*$'
+    # What someone left behind looks like is sent once the network has stopped sending it to those too far away.
+    Start-Sleep -Seconds 4
+    Expect 'but the character she left bound is still standing there, and he is sent it' (Send 1 'sleepers') '^\d+,-?\d+,bound$'
+    Expect 'he can free her' (Send 1 'act|person.release') '^sent person\.release$'
+    Start-Sleep -Seconds 1
+    Expect 'and then nobody is left there' (Send 1 'state') 'sleepers=0 '
+    Expect 'freeing someone whose player has gone is on record like any other' (Send 0 'journal|verb.person.release') "ok=True actor='John Doe' .*target=Sleeper"
     Expect 'both joins and both entries are on record' (Send 0 'journal') 'connection\.join=2 .*city\.enter=2'
 
     Write-Host '==> A copy taken while the server runs is a working backup' -ForegroundColor Cyan

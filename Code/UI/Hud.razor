@@ -25,16 +25,28 @@
 								<div class="name">@character.Name</div>
 								<div class="muted">@character.Faction</div>
 							</div>
-							<button class="primary" onclick=@(() => player.RequestEnterCity( character.Id ))>Enter</button>
-							<button onclick=@(() => player.RequestDeleteCharacter( character.Id ))>Delete</button>
+							@if ( PendingDelete == character.Id )
+							{
+								<button class="danger" onclick=@(() => ConfirmDelete( character.Id ))>Delete for good</button>
+								<button onclick=@(() => PendingDelete = null)>Keep</button>
+							}
+							else
+							{
+								<button class="primary" onclick=@(() => player.RequestEnterCity( character.Id ))>Enter</button>
+								<button onclick=@(() => PendingDelete = character.Id)>Delete</button>
+							}
 						</div>
+						@if ( PendingDelete == character.Id )
+						{
+							<div class="muted">Deleting @character.Name cannot be undone. Everything they carry leaves the world with them.</div>
+						}
 					}
 					@if ( player.Characters.Count == 0 )
 					{
 						<div class="muted">You have no characters yet.</div>
 					}
 					<div class="actions">
-						<button class="primary" onclick=@(() => Creating = true)>Create a character</button>
+						<button class="primary" onclick=@(() => { Creating = true; PendingDelete = null; })>Create a character</button>
 					</div>
 				}
 				else
@@ -55,7 +67,7 @@
 					</div>
 					<div class="actions">
 						<button class="primary" onclick=@SubmitCharacter>Create</button>
-						<button onclick=@(() => Creating = false)>Back</button>
+						<button onclick=@CancelCharacter>Back</button>
 					</div>
 				}
 				@foreach ( var notice in Chat.Lines.Where( value => value.IsNotice && value.Age < 8f ).TakeLast( 2 ) )
@@ -77,10 +89,17 @@
 		@if ( !Player.UiBusy && player.HoveredTarget is IVerbTarget hovered && hovered.Verbs.Count > 0 )
 		{
 			<div class="verbs">
-				<div class="line">[@Key( "Use" )] @hovered.Verbs[0].Title</div>
-				@if ( hovered.Verbs.Count > 1 )
+				@if ( hovered.UseOpensMenu )
 				{
-					<div class="line muted">[@Key( Player.MenuAction )] More: @string.Join( ", ", hovered.Verbs.Skip( 1 ).Select( value => value.Title ) )</div>
+					<div class="line">[@Key( "Use" )] Choose: @string.Join( ", ", hovered.Verbs.Select( value => value.Title ) )</div>
+				}
+				else
+				{
+					<div class="line">[@Key( "Use" )] @hovered.Verbs[0].Title</div>
+					@if ( hovered.Verbs.Count > 1 )
+					{
+						<div class="line muted">[@Key( Player.MenuAction )] More: @string.Join( ", ", hovered.Verbs.Skip( 1 ).Select( value => value.Title ) )</div>
+					}
 				}
 			</div>
 		}
@@ -89,7 +108,7 @@
 		{
 			<div class="center">
 				<div class="card menu">
-					<h1>@(player.MenuTarget is Player person ? player.LabelFor( person ) : player.MenuTarget.GameObject.Name)</h1>
+					<h1>@MenuTitle( player )</h1>
 					@foreach ( var (verb, index) in offered.Verbs.Select( ( value, index ) => (value, index) ) )
 					{
 						<button class="@(index == 0 ? "primary" : "")" onclick=@(() => Choose( verb ))>@(index + 1). @verb.Title</button>
@@ -266,6 +285,9 @@
 @code
 {
 	private bool Creating { get; set; }
+	// The list's length when a character was asked for. The form keeps what was typed until the list grows.
+	private int? _createdFrom;
+	private Guid? PendingDelete { get; set; }
 	private string NewName { get; set; } = string.Empty;
 	private string NewDescription { get; set; } = string.Empty;
 	private string NewFaction { get; set; } = string.Empty;
@@ -284,6 +306,13 @@
 
 	protected override void OnUpdate()
 	{
+		if ( _createdFrom is { } before && Player.Local is { } local && local.Characters.Count > before )
+		{
+			_createdFrom = null;
+			Creating = false;
+			NewName = string.Empty;
+			NewDescription = string.Empty;
+		}
 		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || Player.Local?.OpenInventory is not null || Player.Local?.MenuTarget is not null || Player.Local is not { HasCharacter: true };
 		if ( Player.Local is not { HasCharacter: true } )
 		{
@@ -334,6 +363,15 @@
 		if ( !ChatOpen && Input.Pressed( "Score" ) && Player.Local.IsStaff ) StaffOpen = !StaffOpen;
 	}
 
+	/// <summary>What the menu calls its target: a person by the name this character knows them by, if any.</summary>
+	private static string MenuTitle( Player player ) => player.MenuTarget switch
+	{
+		Player person => player.LabelFor( person ),
+		Sleeper sleeper => player.LabelFor( sleeper ),
+		{ } other => other.GameObject.Name,
+		_ => string.Empty
+	};
+
 	private void Choose( Verb verb )
 	{
 		if ( Player.Local is not { MenuTarget: { } target } player ) return;
@@ -352,7 +390,9 @@
 		// "/pay 20" hands tokens to whoever is being looked at. It is an act, not speech.
 		if ( text.StartsWith( "/pay ", StringComparison.OrdinalIgnoreCase ) )
 		{
-			if ( long.TryParse( text[5..].Trim(), out var amount ) && player.HoveredTarget is Player payee ) player.RequestPay( payee, amount );
+			if ( !long.TryParse( text[5..].Trim(), out var amount ) || amount <= 0 ) Chat.Note( "Pay how much? For example, /pay 20." );
+			else if ( player.HoveredTarget is not Player payee ) Chat.Note( "Look at whoever you are paying." );
+			else player.RequestPay( payee, amount );
 			return;
 		}
 		player.RequestSay( text );
@@ -373,10 +413,22 @@
 
 	private void SubmitCharacter()
 	{
-		Player.Local?.RequestCreateCharacter( NewName, NewDescription, NewFaction );
+		if ( Player.Local is not { } player ) return;
+		// Cleared once the character exists. A refused name is corrected, not typed again.
+		_createdFrom = player.Characters.Count;
+		player.RequestCreateCharacter( NewName, NewDescription, NewFaction );
+	}
+
+	private void CancelCharacter()
+	{
 		Creating = false;
-		NewName = string.Empty;
-		NewDescription = string.Empty;
+		_createdFrom = null;
+	}
+
+	private void ConfirmDelete( Guid characterId )
+	{
+		PendingDelete = null;
+		Player.Local?.RequestDeleteCharacter( characterId );
 	}
 
 	private void ClickCell( int x, int y )
@@ -427,6 +479,7 @@
 	protected override int BuildHash() => HashCode.Combine(
 		HashCode.Combine( Player.Local, Player.Local?.HasCharacter, Player.Local?.PrivateVersion, Player.Local?.CharacterName ),
 		HashCode.Combine( Chat.Version, ChatOpen, InventoryOpen, Selected, Creating, NewFaction, StaffOpen, Player.Local?.MenuTarget ),
+		HashCode.Combine( PendingDelete, _createdFrom, Player.Local?.Characters.Count ),
 		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.IsDown, Player.Local?.IsRestrained, (Player.Local?.HoveredTarget as Player)?.IsDown, (Player.Local?.HoveredTarget as Player)?.IsRestrained ),
 		// Lines and notices fade, so the panel must rebuild as time passes.
 		(int)RealTime.Now );

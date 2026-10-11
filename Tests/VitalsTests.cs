@@ -40,6 +40,29 @@ public sealed class VitalsTests
 	}
 
 	[TestMethod]
+	public void TimeDownCarriesOverLeavingAndCountsOnlyWhileTheCityRuns()
+	{
+		var files = new MemoryFiles();
+		var roster = new CharacterRoster( new DocumentStore( files ) );
+		var character = roster.Create( 1, "John Doe", "A tired resident of the city.", "citizen", default ).Value;
+		Assert.IsFalse( Vitals.Bleed( character, 100, 180 ), "someone standing does not bleed" );
+		Assert.AreEqual( 0, character.SecondsDown );
+		Vitals.Damage( character, 100 );
+		Assert.IsFalse( Vitals.Bleed( character, 120, 180 ) );
+		roster.Save( character );
+
+		// The player leaves and the server restarts. Coming back does not start the clock again.
+		var returned = new CharacterRoster( new DocumentStore( files.Reboot() ) ).Find( character.Id )!;
+		Assert.AreEqual( 120, returned.SecondsDown );
+		Assert.IsFalse( Vitals.Bleed( returned, 59, 180 ) );
+		Assert.IsTrue( Vitals.Bleed( returned, 1, 180 ), "three minutes down in all" );
+		Assert.IsFalse( Vitals.Bleed( returned, 1000, 0 ), "with no limit it waits for someone to act" );
+
+		Assert.IsTrue( Vitals.Revive( returned ).Ok );
+		Assert.AreEqual( 0, returned.SecondsDown, "the next fall starts from nothing" );
+	}
+
+	[TestMethod]
 	public void ACharacterWhoLeftWhileDownIsStillDownWhenItReturns()
 	{
 		var files = new MemoryFiles();

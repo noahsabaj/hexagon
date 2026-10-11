@@ -13,6 +13,9 @@ internal sealed class MemoryFiles : IFileStore
 	/// <summary>When set, the write with this 1-based index is torn and every later operation throws.</summary>
 	public int? CrashOnWrite { get; set; }
 	public int Writes { get; private set; }
+	/// <summary>When set, power is lost just before the delete with this 1-based index, which never happens.</summary>
+	public int? CrashOnDelete { get; set; }
+	public int Deletes { get; private set; }
 	private bool _dead;
 
 	public bool Exists( string path ) => Files.ContainsKey( path );
@@ -50,6 +53,12 @@ internal sealed class MemoryFiles : IFileStore
 	public void Delete( string path )
 	{
 		if ( _dead ) throw new InvalidOperationException( "Power is off." );
+		Deletes++;
+		if ( CrashOnDelete == Deletes )
+		{
+			_dead = true;
+			throw new InvalidOperationException( "Power lost before a delete." );
+		}
 		Files.Remove( path );
 	}
 

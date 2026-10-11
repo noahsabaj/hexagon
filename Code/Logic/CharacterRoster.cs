@@ -34,6 +34,13 @@ public sealed class CharacterRoster
 
 	public CharacterData? Find( Guid id ) => _characters.TryGetValue( id, out var character ) ? character : null;
 
+	/// <summary>The character with exactly this name, ignoring case, for staff who know who they mean.</summary>
+	public CharacterData? Named( string name ) =>
+		_characters.Values.FirstOrDefault( value => value.Name.Equals( name.Trim(), StringComparison.OrdinalIgnoreCase ) );
+
+	/// <summary>Whether this is a character of the roster, and not one deleted since it was loaded.</summary>
+	public bool Contains( CharacterData character ) => _characters.TryGetValue( character.Id, out var held ) && ReferenceEquals( held, character );
+
 	public IReadOnlyList<CharacterData> OwnedBy( long steamId ) =>
 		_characters.Values.Where( value => value.SteamId == steamId ).OrderBy( value => value.CreatedAt ).ToArray();
 
@@ -59,14 +66,22 @@ public sealed class CharacterRoster
 			Faction = faction,
 			CreatedAt = now
 		};
-		_store.Save( Path( character.Id ), character );
+		_store.Save( PathOf( character.Id ), character );
 		_characters[character.Id] = character;
 		_nameKeys[key] = character.Id;
 		return Result<CharacterData>.Success( character );
 	}
 
-	/// <summary>Writes the character's current state. Call after every change the player should keep.</summary>
-	public void Save( CharacterData character ) => _store.Save( Path( character.Id ), character );
+	/// <summary>
+	/// Writes the character's current state. Call after every change the player should keep. A
+	/// character deleted while something still held it is not written back: false, and nothing saved.
+	/// </summary>
+	public bool Save( CharacterData character )
+	{
+		if ( !Contains( character ) ) return false;
+		_store.Save( PathOf( character.Id ), character );
+		return true;
+	}
 
 	/// <summary>The caller empties the character through <see cref="Transfers.DestroyAll"/> first.</summary>
 	public Result Delete( long steamId, Guid id )
@@ -74,11 +89,12 @@ public sealed class CharacterRoster
 		// Same answer for "not yours" and "does not exist", so ids cannot be probed.
 		if ( Find( id ) is not { } character || character.SteamId != steamId )
 			return Result.Fail( ErrorCode.NotFound, "Character was not found." );
-		_store.Delete( Path( id ) );
+		_store.Delete( PathOf( id ) );
 		_characters.Remove( id );
 		_nameKeys.Remove( NameRules.Key( character.Name ) );
 		return Result.Success();
 	}
 
-	private static string Path( Guid id ) => $"characters/{id:N}.json";
+	/// <summary>Where a character's document is kept, for saving it together with others.</summary>
+	public static string PathOf( Guid id ) => $"characters/{id:N}.json";
 }
