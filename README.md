@@ -4,6 +4,8 @@ A roleplay framework for s&box. Hexagon is a library: it supplies the components
 and tools a serious roleplay server needs, and a game supplies the setting. It is written against
 the engine's own features rather than a layer over them.
 
+Where it is going, and the game it is for, is in [docs/vision.md](docs/vision.md).
+
 It is not a port of NutScript or Helix. Those leave a server's hardest problems to a rulebook:
 metagaming, duplicated items, disputes and staff abuse. Hexagon holds itself to three laws.
 
