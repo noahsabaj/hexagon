@@ -232,20 +232,52 @@ function Start-Play {
     }
 }
 
-Write-Host "==> Starting the editor (data folder '$dataRoot')" -ForegroundColor Cyan
 # RenderDoc, when it is on the PATH, is loaded into the editor, and with it every native library
 # the engine loads while starting is slow. The editor is started without it.
 $pathWithoutRenderDoc = ($env:Path -split ';' | Where-Object { $_ -and -not (Test-Path -LiteralPath (Join-Path $_ 'renderdoc.dll')) }) -join ';'
-$editor = Start-Process -FilePath $sboxDev -WorkingDirectory $SboxRoot -PassThru -WindowStyle Hidden `
-    -Environment @{ Path = $pathWithoutRenderDoc } -ArgumentList "-project `"$manifest`" +hexagon_data_root $dataRoot"
-$script:deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-try {
+function Start-Editor {
+    $script:editor = Start-Process -FilePath $sboxDev -WorkingDirectory $SboxRoot -PassThru -WindowStyle Hidden `
+        -Environment @{ Path = $pathWithoutRenderDoc } -ArgumentList "-project `"$manifest`" +hexagon_data_root $dataRoot"
     Wait-Until 'the editor control endpoint' {
         (Invoke-Editor 'initialize' ([ordered]@{
             protocolVersion = '2025-03-26'; capabilities = @{}; clientInfo = @{ name = 'hexagon-playtest'; version = '1' }
         })).result.protocolVersion
     }
-    Wait-Until 'the game assembly' { (Invoke-Tool 'get_component_type' @{ name = 'DevDriver' }) -match 'Hexagon' }
+}
+
+# The editor opens the scene once the game's code is built, and the code is then in. Now and then
+# the scene opens while the build is still going, and that editor never takes the finished build
+# in, though it reports it built. Its scene stays open, without the game's components, for good.
+# Returns false for an editor in that state, so that it is started again.
+function Wait-GameCode {
+    $stuck = $null
+    while ([DateTime]::UtcNow -lt $script:deadline) {
+        if ($editor.HasExited) { throw "s&box exited with code $($editor.ExitCode) while waiting for the game assembly." }
+        try { if ((Invoke-Tool 'get_component_type' @{ name = 'DevDriver' }) -match 'Hexagon') { return $true } }
+        catch { $script:lastProblem = $_.Exception.Message }
+        $status = try { Invoke-Tool 'editor_status' | ConvertFrom-Json } catch { $null }
+        if ($status -and $status.ActiveScenePath -and -not $status.IsCompiling -and $status.LastCompileSucceeded) {
+            if (-not $stuck) { $stuck = [Diagnostics.Stopwatch]::StartNew() }
+            elseif ($stuck.Elapsed.TotalSeconds -ge 15) { return $false }
+        }
+        else { $stuck = $null }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "Timed out waiting for the game assembly. Last problem: $($script:lastProblem)"
+}
+
+Write-Host "==> Starting the editor (data folder '$dataRoot')" -ForegroundColor Cyan
+$script:deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+$editor = $null
+try {
+    Start-Editor
+    if (-not (Wait-GameCode)) {
+        Write-Host '       the editor opened the scene before the code was built, and never took the code in; starting it again' -ForegroundColor DarkGray
+        Stop-Process -Id $editor.Id -Force
+        $editor.WaitForExit()
+        Start-Editor
+        if (-not (Wait-GameCode)) { throw 'The editor twice opened the scene before the code was built.' }
+    }
 
     Write-Host '==> Characters' -ForegroundColor Cyan
     Start-Play
@@ -563,7 +595,7 @@ try {
     [void](Invoke-Tool 'play_stop')
 }
 finally {
-    if (-not $editor.HasExited) { Stop-Process -Id $editor.Id -Force }
+    if ($editor -and -not $editor.HasExited) { Stop-Process -Id $editor.Id -Force }
     $http.Dispose()
     # A failed run keeps its data, journal included: that is the evidence of what the host decided.
     $kept = Get-ChildItem -LiteralPath (Join-Path $SboxRoot 'data') -Recurse -Directory -Filter $dataRoot -ErrorAction SilentlyContinue
