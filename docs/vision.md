@@ -37,8 +37,11 @@ people learning to build on it.
 - What you carried stays on the body.
 - An account has one living character. After a death, the player can make a new character at once,
   and it enters the city 24 hours after the death.
+- A player can retire their character, though not while it is down or bound. It counts as a death:
+  the character leaves for good, taking what it carries, and the new one waits 24 hours.
 - Staff can restore a character killed by a rule break, an exploit or a bug, on the record. A death
-  within the rules is final.
+  within the rules is final. A restored character gets up where its body lies, with whatever is
+  still on it, and staff move back anything taken.
 - Respawning is a switch for tests and other games, and it is off by default.
 
 ### Conservation: nothing comes from nothing
@@ -48,6 +51,8 @@ people learning to build on it.
 - Raw materials enter the world in two ways. Deliveries arrive at depots by truck and train on a
   schedule: finite, robbable and on the record. Sites in the map, such as mines, farms and forests,
   yield slowly to whoever works them.
+- The world as built can hold goods: a scene's author may stock a crate or a vault. Nothing refills
+  except by delivery or by work.
 - Money is just items. Hexagon has no idea of money: a note or a coin is an item like any other, and
   people decide what counts as money, as cigarettes did in Berlin in 1945. With a gold ingot and a
   press you can strike coins. With paper, ink and a printing press you can print banknotes. Real
@@ -61,7 +66,10 @@ people learning to build on it.
   bought from someone who has it.
 - Property belongs to someone, who sells or rents it. A building nobody has bought belongs to an
   office run by players, such as the housing office, and the money goes into its till. Staff assign
-  some buildings outright.
+  some buildings outright. An owner hands a door over by offering it, like any item.
+- Doors open to keys, not to teams. Every lock has a pattern, and a key fits every lock with its
+  pattern, so all the Interior Ministry's doors can share one while each flat has its own. Owning a
+  door is title only, the right to sell or rent it: locking takes the key, owner or not.
 - Staff can still create items with `give`. It is the one exception, and every use is journaled
   under their name.
 
@@ -82,6 +90,8 @@ people learning to build on it.
 
 - You join a faction such as the Heer by being recruited in the world. A recruiter enlists you in
   person, which issues your papers and uniform. There are no forum applications.
+- A faction is people, not powers. Membership grants no abilities: everything a character can do
+  comes from what they carry. Keys open locks, ties restrain, papers prove who you are.
 - Rank is given by a superior's act, in person. It lives on the character and shows on the uniform.
   Staff appoint the head of each faction once, and everyone below is promoted in the world.
 - Written documents are items: paper you write on (orders, letters, notes), identity papers
