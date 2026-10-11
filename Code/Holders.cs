@@ -24,8 +24,10 @@ internal static class HostScene
 }
 
 /// <summary>
-/// Storage placed in the scene: a crate, a locker, a desk drawer. What is inside is a holder saved
-/// under the scene object's id. Only someone who has opened it is told what it holds.
+/// Storage placed in the scene: a crate, a locker, a safe. What is inside is a holder saved under the
+/// scene object's id. Only someone who has opened it is told what it holds. A scene's author can
+/// stock it, once: what the world is built holding is placed the first time it is opened, and
+/// nothing refills it. One with a lock opens only to a key cut to its pattern.
 /// </summary>
 [Title( "Hexagon Container" ), Category( "Hexagon" ), Icon( "inventory_2" )]
 public sealed class Container : Component, Component.IPressable, IVerbTarget
@@ -33,12 +35,23 @@ public sealed class Container : Component, Component.IPressable, IVerbTarget
 	[Property] public string Title { get; set; } = "Crate";
 	[Property, Range( 1, 10 )] public int Width { get; set; } = 4;
 	[Property, Range( 1, 10 )] public int Height { get; set; } = 4;
-	/// <summary>A capability needed to open it, or empty for anyone.</summary>
-	[Property] public string Requires { get; set; } = string.Empty;
+	/// <summary>What its lock is cut to: only a key cut the same opens it. Empty means it has no lock.</summary>
+	[Property] public string LockPattern { get; set; } = string.Empty;
+	/// <summary>What it holds as the world is built.</summary>
+	[Property] public List<Stocked> Stock { get; set; } = new();
+
+	/// <summary>Some of an item, as a scene's author places it.</summary>
+	public sealed class Stocked
+	{
+		[Property] public ItemDefinition? Item { get; set; }
+		[Property, Range( 1, 100 )] public int Count { get; set; } = 1;
+		/// <summary>For a key, the pattern it is cut to.</summary>
+		[Property] public string Pattern { get; set; } = string.Empty;
+	}
 
 	private bool _joined;
 
-	public IReadOnlyList<Verb> Verbs => new[] { new Verb( "container.open", "Open", Requires.Length == 0 ? null : Requires ) };
+	public IReadOnlyList<Verb> Verbs { get; } = new[] { new Verb( "container.open", "Open" ) };
 
 	protected override void OnUpdate()
 	{
@@ -53,19 +66,39 @@ public sealed class Container : Component, Component.IPressable, IVerbTarget
 		return true;
 	}
 
-	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) => new IPressable.Tooltip( $"Open {Title.ToLowerInvariant()}", "inventory_2", string.Empty );
+	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) =>
+		new IPressable.Tooltip( $"Open {Title.ToLowerInvariant()}", "inventory_2", LockPattern.Length > 0 ? "It locks with a key." : string.Empty );
 
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
-		var holder = GameManager.Instance!.Holders!.GetOrCreate( GameObject.Id, HolderKinds.Container, Title, Width, Height );
-		actor.HostOpen( this, holder, Title );
+		if ( LockPattern.Length > 0 && !actor.HostHasKey( LockPattern ) ) return Result.Fail( ErrorCode.Denied, "It is locked, and you have no key that fits." );
+		actor.HostOpen( this, Holder(), Title );
 		return Result.Success();
+	}
+
+	/// <summary>Host: what it holds, stocked as its author placed it the first time it is asked for.</summary>
+	private HolderData Holder()
+	{
+		var game = GameManager.Instance!;
+		if ( game.Holders!.Find( GameObject.Id ) is { } existing ) return existing;
+		var holder = game.Holders.GetOrCreate( GameObject.Id, HolderKinds.Container, Title, Width, Height );
+		foreach ( var stocked in Stock.Where( value => value.Item.IsValid() ) )
+		{
+			Result<string>? cut = stocked.Pattern.Length == 0 ? null : Keys.Pattern( stocked.Pattern );
+			var placed = cut is { Ok: false } refused
+				? Result<ItemStack>.Fail( refused.Code, refused.Message )
+				: stocked.Item!.IssueTo( game.Transfers!, Sources.Scene, holder, Actor.Console, stocked.Count, cut?.Value );
+			if ( !placed.Ok ) Log.Warning( $"[scene] {GameObject.Name} cannot hold the {stocked.Item!.Title} it is stocked with: {placed.Message}" );
+		}
+		game.Holders.Save( holder );
+		return holder;
 	}
 }
 
 /// <summary>
 /// What a character carried, left where it fell. It is a holder like a crate, put into the world at
-/// run time like a dropped item, and it goes once it has been emptied.
+/// run time like a dropped item, and it goes once it has been emptied, or once staff restore the
+/// character, who gets up here with whatever is still on it.
 /// </summary>
 [Title( "Hexagon Corpse" ), Category( "Hexagon" ), Icon( "airline_seat_flat" )]
 public sealed class Corpse : Component, Component.IPressable, IVerbTarget

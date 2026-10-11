@@ -43,8 +43,8 @@ sandboxed filesystem has no rename, so a write cannot be atomic. `DocumentStore`
 sibling copy first, then the real file, then removes the sibling. A crash at any point leaves at
 least one complete copy, and loading prefers the real file and falls back to the sibling. Tests
 tear each write in turn and reboot. What this gave up was atomicity across documents. (Corrected
-2026-10-10: a sale, a payment, a death and a staff move each change two documents, and saving them
-one after the other could duplicate a thing or lose it. They are now saved as one change; see "A
+2026-10-10: a sale, a payment, a death and a staff move each changed two documents, and saving them
+one after the other could duplicate a thing or lose it. Such changes are now saved as one; see "A
 change to several documents is saved as one".)
 
 ## 2026-09-18: The host trusts the connection and its own measurements, nothing else
@@ -105,7 +105,8 @@ and CI runs it with `-Check`.)
 NutScript and Helix are toolkits for building a gamemode. What actually costs a roleplay server its
 players is metagaming, duplicated items and worthless money, disputes nobody can settle, and staff
 abuse. Those frameworks leave all four to a rulebook and the admins. Hexagon enforces them, and
-every feature is judged against three laws.
+every feature is judged against three laws. (Corrected 2026-10-11: the vision adds a fourth,
+mortality, and puts it first. See "Death is final, and the dead are kept".)
 
 **Perception.** A client receives only what its character could perceive. Chat already reached
 only the connections in range. A character's name and faction were `[Sync]`, so every client held
@@ -121,13 +122,18 @@ an add or a remove. Starting items and tokens are issued from `character.start`,
 from `operator`, and deleting a character sends what it held through `character.deleted`. An item
 that does not stack keeps its id for life; piles are followed by count, as decided later. A holder
 is anything with an inventory and tokens: a character, a crate, a vendor, a body, a dropped item.
-(Corrected: discarding was later removed, and the other holders now exist.)
+(Corrected: discarding was later removed, and the other holders now exist. Corrected 2026-10-11:
+tokens and vendors are gone and money is items, a holder is an inventory alone, and nothing comes
+from `character.start`, because a character arrives with only its clothes. See "Money is items, and
+the game sells nothing".)
 
 **Memory.** Every host decision is journaled: who, what, to what, where, who was near enough to
 see, and whether it was refused. The journal is an append-only file of JSON lines per day. It is
 evidence and never state: nothing is rebuilt from it, the documents stay the truth, and a failed
 journal write never undoes a decision. Operator commands are journaled like everything else. The
-token supply equals the journal's issues minus its destroys, and a test holds it to that.
+token supply equals the journal's issues minus its destroys, and a test holds it to that. (Corrected
+2026-10-11: tokens are gone. The same holds for every item, money included, and a test holds the
+supply of pistol rounds to it.)
 
 ## 2026-09-19: Capabilities and verbs, not faction checks
 
@@ -141,7 +147,10 @@ for conditions such as restraints, are in the rule and win over any grant. (Corr
 every door asked for the same `door.lock`, so a keycard or a uniform locked a door someone had
 bought. A door now names what locks it, `LockRequires`, which defaults to `door.lock`; whoever
 bought it can always lock it. HL2RP's city doors ask for `door.lock.city`, which Civil Protection
-and the keycard grant, and its door for sale asks for nothing, so only the owner locks it.)
+and the keycard grant, and its door for sale asks for nothing, so only the owner locks it.
+Corrected 2026-10-11: a faction grants nothing now, so only what a character carries does, and a
+lock is not a capability at all. It has a pattern, and a key cut to it works it, whoever holds it.
+See "Locks take keys, and a faction grants nothing".)
 
 Everything a character does to something in the world goes through `Player.RequestAct`. A target
 implements `IVerbTarget`: it lists its verbs and carries them out, nothing more. Identity, the rate
@@ -156,7 +165,10 @@ the rest are chosen from a menu, as decided later.
 Whether death is permanent, who may finish a downed character and what is lost are a setting's
 choices. Hexagon supplies the downed state, the deliberate and journaled finishing act, and the
 settings a game chooses its policy with: `Death`, `DeathDropsBelongings`, `DownedSeconds`,
-`BleedOutKills` and `FinishRequires` on the game manager.
+`BleedOutKills` and `FinishRequires` on the game manager. (Corrected 2026-10-11: Hexagon now takes a
+side. Death is permanent unless a game turns respawning on, and `LivingCharacters` and
+`NewLifeHours` say how many lives an account has at once and how long the next one waits. See
+"Death is final, and the dead are kept".)
 
 ## 2026-09-19: Dedicated servers are the target
 
@@ -197,6 +209,8 @@ through every one of them. A character looks into at most one other holder at a 
 holder", and only that character is told what is in it. It closes when the character walks away or
 when the reason it was open ends, such as a searched person being helped up. Discarding was removed:
 things are dropped, used up, or kept. A holder cannot be deleted while anything is in it.
+(Corrected 2026-10-11: there are no vendors, token balances or sales. A holder is an inventory and
+a kind, everything that changes hands goes by `Transfers.Move`, and a container can have a lock.)
 
 ## 2026-09-19: A name is knowledge
 
@@ -238,7 +252,10 @@ been given. A vendor's stock and till are finite: it restocks from its source up
 limit, and can only pay for goods with tokens it holds. Wages go only to characters who are in the
 city and able to act. A sale moves the item first, because that half can still fail for want of
 room, and the price is always the vendor's. The journal is enough to compute the money supply and
-every faucet's rate, which is what an operator needs to keep tokens worth something.
+every faucet's rate, which is what an operator needs to keep tokens worth something. (Corrected
+2026-10-11: all of this is gone. There are no tokens, wages, vendors or starting items; money is
+items, and what enters the world comes from `operator` or `scene`. See "Money is items, and the
+game sells nothing".)
 
 ## 2026-09-19: Staff use the console's commands, as themselves
 
@@ -255,7 +272,9 @@ records a count, so the supply of rounds is the journal's issues minus its destr
 supply of tokens is. A whole pile that lands in a slot of its own keeps its id; part of a pile is a
 new pile. Splitting and merging move nothing between holders and are journaled anyway, because
 "where did the other ten go" is a question a dispute asks. A vendor trades one at a time, at a
-price for one. All of a transfer happens or none of it does.
+price for one. All of a transfer happens or none of it does. (Corrected 2026-10-11: tokens and
+vendors are gone. Money is a pile like any other, and an offer names how many of a pile it hands
+over.)
 
 ## 2026-09-19: A radio is an object with a dial
 
@@ -313,6 +332,10 @@ menu, and a person does.)
   before setting anything. (2026-10-10)
 - A dedicated server writes its errors to its other output stream, which the two-client test did
   not read, so an exception went unseen by its last check. It reads both now. (2026-10-10)
+- The server numbers its clients in the order they join, and the two-client test started both at
+  once. They joined in either order, so stopping "the second" process, to leave a character bound,
+  once stopped the other player instead, and nobody was left standing there. The clients now start
+  one after the other. (2026-10-11)
 
 ## 2026-10-10: A change to several documents is saved as one
 
@@ -321,8 +344,10 @@ menu, and a person does.)
 A crash before the file is complete changes nothing; a crash after it is finished the next time the
 store opens, before anything is read. This is a write-ahead log one change long, which the first
 entries here said there would be none of, but no order of separate saves is safe once each side of a
-change gives something. Sales, payments, a body taking what a character carried, a door being
-bought, a zip tie used on someone, and staff moving things between characters are saved this way.
+change gives something. A hand-over someone accepted, a body taking what a character carried, a
+restored character taking it back, a zip tie used on someone, and staff moving things between
+characters are saved this way. (Corrected 2026-10-11: this listed sales, payments and buying a door,
+which are gone.)
 A character or holder that has been deleted is no longer written back by anything still holding it,
 so it cannot return after a restart. A copy of the data folder taken during such a change can still
 catch one side of it without the other, because copying a folder is not one act.
@@ -336,7 +361,9 @@ When the player returns and enters with that character, they pick up from where 
 the sleeper goes. Whoever is down or bound when the server stops is put back the same way when it
 starts. Someone who leaves on their feet leaves nothing behind: a city of the logged-off would be a
 city of loot. Deleting a character is refused while it is in the city on any connection, or while it
-is down or bound, so a character cannot be deleted out from under a scene either.
+is down or bound, so a character cannot be deleted out from under a scene either. (Corrected
+2026-10-11: only a character that never entered the city can be deleted now. One that has lived ends
+by dying or by retiring, and retiring is refused in the same cases.)
 
 ## 2026-10-10: Sight is a distance
 
@@ -360,21 +387,23 @@ is not a number), is journaled as `request.limited`, `request.forged` or `reques
 was asked. Those three cost a client nothing to cause, so `RefusalThrottle` writes at most one of
 each kind per account per second and counts the rest into the next entry, or into one of its own
 once the flood stops. A refusal a game rule makes is recorded under the kind its success would have
-had, or a kind of its own such as `trade.buy`; only rearranging one's own inventory goes unrecorded,
+had, or a kind of its own such as `movement.implausible`; only rearranging one's own inventory goes unrecorded,
 allowed or not. A swing that misses is not a refusal: `combat.attack` records what it hit, if
 anything.
 
 ## 2026-10-10: Staff can undo what the game cannot
 
-A dispute ends with something put back. `take` sends items or tokens out through the `operator`
+A dispute ends with something put back. `take` sends items out through the `operator`
 sink, `move` carries them from one character to another by the same transfers as anything else,
 `release` frees bound hands, `faction` changes a character's faction, and `door` opens, shuts, locks,
 unlocks or releases a door, or on its own lists the doors with their owners. Commands that name a
 character find it whether or not it is in the city, except `teleport`, `bring`, `goto` and `hurt`,
 which need it there. Lines typed at the server console are journaled too, as the console. Taking a
 whitelist away sends that account's characters of the faction back to the menu, and entering one is
-refused until the whitelist is given back. A character that leaves the world for good, deleted or
-dead under a permanent death policy, releases every door it owned.
+refused until the whitelist is given back. A character that leaves the world for good, deleted,
+retired or dead under a permanent death policy, releases every door it owned. (Corrected
+2026-10-11: tokens are gone, `door` can also assign a door's title, and `restore` undoes a death.
+See "Death is final, and the dead are kept".)
 
 ## 2026-10-10: The journal answers in names
 
@@ -383,18 +412,84 @@ again, so an entry keeps the names of the character it concerns and of each witn
 when it was written. The ids stay the evidence. `journal` searches the last two days by default and
 up to fourteen, naming each day once an answer spans more than one; a day is a UTC day.
 
+## 2026-10-11: Death is final, and the dead are kept
+
+The vision is a game where death costs something, and a character that can come back has nothing to
+lose. `GameManager.Death` is now `Permanent` unless a game turns respawning on, as a test or another
+setting may. A wound still only puts a character down, and dying still takes a deliberate, witnessed
+act, or bleeding out where a game says so. The dead are kept: on the list as dead, under names
+nobody else can take, with what they carried left on the body. An account has `LivingCharacters`
+lives at once, one by default. The next character can be made at once, but enters the city
+`NewLifeHours` after the account's latest death, a day by default, however many are made and
+deleted meanwhile. A character that has lived ends by dying or by being retired, which counts as a
+death: it takes what it carries and starts the wait, and it is refused while the character is in
+the city, down or bound. One that never entered the city never lived, so deleting it frees its name
+and starts no wait. Staff can `restore` a character killed by a rule break, an exploit or a bug. It
+gets up where its body lies, with whatever is still on it, and anything taken from the body is for
+staff to move back. A restore is refused while the account has all the lives it may, so it never
+makes an extra one.
+
+## 2026-10-11: Money is items, and the game sells nothing
+
+Tokens were a number on each character, made from nothing by wages, vendors' floats and starting
+kits, and vendors restocked goods from nothing on a timer. The vision wants everything to come from
+somewhere and go somewhere, so all of that is gone. Money is items like any other: HL2RP's tokens are
+an item that piles up to a hundred, money only because people take them. A new character has only
+its clothes. What enters the world comes from `operator`, staff giving it on the record, or from
+`scene`: a scene's author stocks a container, which is filled the first time someone opens it and
+never refills. It leaves through `consumed`, `operator`, `character.deleted`, `character.retired`,
+or `character.died` when a death leaves no body. `Trade`, `Vendor`, `payday` and `/pay` are removed.
+Deliveries, production and forgery come later.
+
+## 2026-10-11: Locks take keys, and a faction grants nothing
+
+A door that a uniform locks is a door every member of a faction can open, with a permission nobody
+can steal. A door or a container now has a `LockPattern`, and a key item is cut to a pattern when it
+is made, by staff's `give` or by a scene's stock. Any key cut to a lock works it, whoever holds it, so
+a ministry's doors can share one pattern while each flat has its own. A client is told a key's cut,
+a short code derived from the pattern that anyone holding two keys can compare, and never the
+pattern, which would say what the key opens. A faction is now a title, a description, a look and an
+optional whitelist: it grants nothing, and everything a character can do comes from what it carries.
+Owning a door is title only, the right to sell or rent it. Staff assign a title, an owner hands it
+over by offering it, the keys go separately, and a character that leaves the world for good gives
+its titles up.
+
+## 2026-10-11: Handing over takes two
+
+Paying someone was a chat command that moved tokens into whoever was in front of you. Now a
+character offers something, some of a pile or the title to a door, to someone within reach, who
+accepts or refuses. Nothing moves until they accept, and then the host checks again that the giver
+still has it and that both are still there and able. An offer lapses after thirty seconds, or as soon
+as the two part, either is down or bound, or the giver leaves. Every offer, answer and lapse is
+journaled. Slipping something into someone's pockets unasked is a different act, and will be done by
+stealth.
+
+## 2026-10-11: Health shows on the screen, not as a number
+
+In the city the HUD shows prompts and chat. It used to show health and tokens as numbers, but
+nobody knows their health as a number, and money is now in the pocket, as items. Being hurt now
+darkens the edges of sight and drains the colour, more the worse it is, and being down narrows,
+dims and blurs it. These are the engine's own post-processing, not a panel: `HarmCues` keeps two
+global post-process volumes on the client, with the engine's vignette, colour adjustment and blur,
+and moves their weights with the character, so the engine blends them over whatever the game's
+camera already does. The first version left someone down all but blind, because the engine's
+vignette at its defaults covers most of the screen; someone down still sees who comes near, so it
+was eased until the world shows through. Limping, laboured breathing and a cue for bound hands come
+later.
+
 ## What is thin, and known
 
 - Weapons hit by a host ray along the attacker's claimed aim. There is no recoil, spread or cover.
 - The engine ships no weapon models, so HL2RP's pistol is a block held in a pistol stance. Clothing cannot yet be an item.
 - The HUD has been looked at in pictures, not yet played by a person. Drag and drop is not done: items move by select, then click.
 - An in-game whitelist application flow is not built. A radio is not overheard by those beside a listener.
-- Sight is a distance, not a line: a client is sent everyone within `SightRange` of its character, through walls. Doors, crates, vendors, bodies and dropped items are sent to every client wherever its character is.
+- Sight is a distance, not a line: a client is sent everyone within `SightRange` of its character, through walls. Doors, containers, bodies and dropped items are sent to every client wherever its character is.
 - The engine tells every client who is connected, by Steam name, and which connection owns each pawn it is sent. Hexagon keeps character names and factions from clients, but not which account a pawn in view belongs to. Closing that needs the engine.
 - A client whose updates stall while it rounds a corner is pulled back, because the wall check traces the straight line between the places it reported.
 - The city is saved every `AutosaveSeconds` and when its game manager is destroyed. Whether stopping a dedicated server with Ctrl+C destroys it first has not been tried.
 - Unit tests run on a hosted runner on every push, and so does the check that the confusables table is what its generator makes. Both play tests need s&box and stay local.
-- The play tests run both clients as one Steam account, so account-level rules are tested by one account.
+- The play tests run both clients as one Steam account, so account-level rules are tested by one account, and the two-client test allows that account two lives at once.
+- The vision's production, deliveries, recruitment, ranks, documents and player offices are not built. Until they are, things enter the world only from staff and from containers a scene's author stocked.
 
 HL2RP keeps what is about its setting: the scanner, civic records as a view of the journal,
 forcefields and ration dispensers.
@@ -408,5 +503,5 @@ forcefields and ration dispensers.
 5. Recognition.
 6. The downed state, combat and the death pipeline.
 7. Restraints and search.
-8. Commerce: vendors, wages, paying people, buying doors.
+8. Commerce: vendors, wages, paying people, buying doors. (Removed 2026-10-11.)
 9. The staff console over the journal.

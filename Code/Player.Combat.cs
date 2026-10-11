@@ -9,15 +9,18 @@ namespace Hexagon;
 
 public enum DeathPolicy
 {
-	/// <summary>The character wakes at a spawn point, whole, without what it was carrying.</summary>
+	/// <summary>The character wakes at a spawn point, whole, without what it was carrying. For tests, and games that want it.</summary>
 	Respawn,
-	/// <summary>The character is gone for good and its player returns to the menu.</summary>
+	/// <summary>
+	/// The character is dead, and its player returns to the menu. It is kept, dead, so staff can
+	/// restore it if the death broke the rules; nothing else brings it back.
+	/// </summary>
 	Permanent
 }
 
 // Violence and its consequences. Hexagon supplies the pipeline: harm, going down, being helped up
 // or finished, and a body that holds what the character carried. What death means is the game's
-// choice, set on the game manager.
+// choice, set on the game manager, and unless a game says otherwise it is final.
 public sealed partial class Player
 {
 	public const int UnarmedDamage = 8;
@@ -144,7 +147,7 @@ public sealed partial class Player
 		if ( HostDie( game, character, HostPosition, Look, cause, by?._character ) )
 		{
 			var owner = Network.Owner;
-			// Gone from the roster, so nothing is left lying where it fell but the body.
+			// Dead, so nothing is left lying where it fell but the body.
 			HostUnload();
 			if ( owner is null ) return;
 			SendCharacterList( owner, game );
@@ -160,33 +163,68 @@ public sealed partial class Player
 	/// <summary>
 	/// Host: a character dies, whether in the city or left lying where its player went. What it
 	/// carried stays where it fell, and the rest is the game manager's policy. True when the
-	/// character is gone for good; otherwise it is whole again, saved at a spawn point.
+	/// character is dead, kept where it fell; otherwise it is whole again, saved at a spawn point.
 	/// </summary>
 	internal static bool HostDie( GameManager game, CharacterData character, Vector3 at, string look, string cause, CharacterData? by )
 	{
 		HostRecordAt( "character.death", Actor.Of( character ), at, by?.HolderLabel, data: new[] { ("cause", cause), ("policy", game.Death.ToString()) } );
-		character.Equipped = null;
-		if ( game.DeathDropsBelongings && (character.Inventory.Items.Count > 0 || character.Tokens > 0) ) LeaveBody( game, character, at, look );
-
-		if ( game.Death == DeathPolicy.Permanent )
+		var permanent = game.Death == DeathPolicy.Permanent;
+		var actor = Actor.Of( character );
+		if ( permanent )
 		{
-			var actor = Actor.Of( character );
-			game.Transfers!.DestroyAll( Sinks.CharacterDeleted, character, actor );
-			Door.HostReleaseOwnedBy( character.Id, actor );
-			game.Roster!.Delete( character.SteamId, character.Id );
-			Sleeper.HostRefresh( character );
-			// Its player may be in the menu on another connection, looking at a list with it on.
-			foreach ( var player in Game.ActiveScene.GetAllComponents<Player>().Where( value => value._character is null ).ToArray() )
-				if ( player.Network.Owner is { } owner && SteamIdOf( owner ) == character.SteamId ) player.SendCharacterList( owner, game );
-			return true;
+			// Kept where it fell: staff restoring it would have it get up here.
+			character.Position = new[] { at.x, at.y, at.z };
+			Vitals.Die( character, DateTimeOffset.UtcNow );
 		}
-
-		Vitals.Restore( character );
-		var spawn = game.FindSpawn().Position;
-		character.Position = new[] { spawn.x, spawn.y, spawn.z };
+		else
+		{
+			Vitals.Respawn( character );
+			character.Equipped = null;
+			var spawn = game.FindSpawn().Position;
+			character.Position = new[] { spawn.x, spawn.y, spawn.z };
+		}
+		// The body is saved with the death, as one change: a crash keeps both or neither.
+		if ( game.DeathDropsBelongings && character.Inventory.Items.Count > 0 ) LeaveBody( game, character, at, look );
+		if ( permanent )
+		{
+			// Whatever no body took leaves the world on the record, not by vanishing with the character.
+			game.Transfers!.DestroyAll( Sinks.CharacterDied, character, actor );
+			Door.HostReleaseOwnedBy( character.Id, actor );
+		}
 		game.Roster!.Save( character );
 		Sleeper.HostRefresh( character );
-		return false;
+		if ( permanent ) HostResendCharacters( game, character.SteamId );
+		return permanent;
+	}
+
+	/// <summary>
+	/// Host: staff undo a death that broke the rules. The character gets up where its body lies, or
+	/// where it fell if it left none, with whatever is still on the body. Anything already taken from
+	/// it is for staff to move back.
+	/// </summary>
+	internal static Result HostRestore( GameManager game, CharacterData character, Actor by )
+	{
+		var restored = game.Roster!.Restore( character, game.Lives );
+		if ( !restored.Ok ) return restored;
+		if ( game.Holders!.BodyOf( character.Id ) is { } body )
+		{
+			if ( body.Position is { Length: 3 } lying ) character.Position = lying;
+			var taken = game.Transfers!.MoveAll( body, character, by );
+			if ( !taken.Ok ) Log.Warning( $"[restore] {character.HolderLabel} could not take back all of its body: {taken.Message}" );
+			game.SaveTogether( character, body );
+			HostRefresh( body );
+			Corpse.RemoveIfEmpty( body );
+		}
+		else game.Roster.Save( character );
+		HostResendCharacters( game, character.SteamId );
+		return restored;
+	}
+
+	/// <summary>Host: every connection of the account that is in the menu is shown its list as it now is.</summary>
+	internal static void HostResendCharacters( GameManager game, long steamId )
+	{
+		foreach ( var player in Game.ActiveScene.GetAllComponents<Player>().Where( value => value._character is null ).ToArray() )
+			if ( player.Network.Owner is { } owner && SteamIdOf( owner ) == steamId ) player.SendCharacterList( owner, game );
 	}
 
 	/// <summary>
@@ -199,6 +237,7 @@ public sealed partial class Player
 		var body = game.Holders!.GetOrCreate( Guid.NewGuid(), HolderKinds.Corpse, "Body", character.Inventory.Width, character.Inventory.Height );
 		body.Position = new[] { at.x, at.y, at.z };
 		body.Look = look;
+		body.Character = character.Id;
 		var moved = game.Transfers!.MoveAll( character, body, Actor.Of( character ) );
 		if ( !moved.Ok ) Log.Warning( $"[death] {character.HolderLabel} kept some of what it carried: {moved.Message}" );
 		game.SaveTogether( character, body );

@@ -31,13 +31,11 @@ public sealed class GameManager : Component, Component.INetworkListener
 	public WorldData World { get; private set; } = new();
 
 	[Property] public float AutosaveSeconds { get; set; } = 60f;
-	/// <summary>How often factions pay their wage. Zero means never.</summary>
-	[Property] public float WageSeconds { get; set; } = 900f;
 	/// <summary>How far a character sees, in world units. A client is sent nobody farther from its character than this.</summary>
 	[Property] public float SightRange { get; set; } = 4000f;
 
-	/// <summary>What death means in this game. Hexagon supplies the pipeline; this is the policy.</summary>
-	[Property, Group( "Death" )] public DeathPolicy Death { get; set; } = DeathPolicy.Respawn;
+	/// <summary>What death means in this game. Hexagon supplies the pipeline; this is the policy, and death is final unless a game says otherwise.</summary>
+	[Property, Group( "Death" )] public DeathPolicy Death { get; set; } = DeathPolicy.Permanent;
 	/// <summary>Whether a dying character leaves a body holding what it carried.</summary>
 	[Property, Group( "Death" )] public bool DeathDropsBelongings { get; set; } = true;
 	/// <summary>How long a character stays down before it bleeds out. Zero means until someone acts.</summary>
@@ -46,6 +44,13 @@ public sealed class GameManager : Component, Component.INetworkListener
 	[Property, Group( "Death" )] public bool BleedOutKills { get; set; }
 	/// <summary>A capability needed to finish someone who is down, or empty for anyone.</summary>
 	[Property, Group( "Death" )] public string FinishRequires { get; set; } = string.Empty;
+	/// <summary>How many characters an account may have alive at once.</summary>
+	[Property, Group( "Death" ), Range( 1, 10 )] public int LivingCharacters { get; set; } = 1;
+	/// <summary>How long after a death the account's next character may enter the city.</summary>
+	[Property, Group( "Death" )] public float NewLifeHours { get; set; } = 24f;
+
+	/// <summary>The limits on lives that the roster applies.</summary>
+	public LifeRules Lives => new( Math.Max( 1, LivingCharacters ), TimeSpan.FromHours( Math.Max( 0f, NewLifeHours ) ) );
 
 	/// <summary>Host: every connection that is not the host itself, in the order they joined.</summary>
 	public IReadOnlyList<Connection> Clients =>
@@ -60,7 +65,6 @@ public sealed class GameManager : Component, Component.INetworkListener
 	private readonly Dictionary<Guid, Vector3> _eyes = new();
 	private RealTimeSince _sinceAutosave;
 	private bool _worldRestored;
-	private RealTimeSince _sinceWages;
 	private RealTimeSince _sinceRefusals;
 
 	protected override void OnAwake() => Instance = this;
@@ -93,7 +97,6 @@ public sealed class GameManager : Component, Component.INetworkListener
 		Journal.NameOf = id => Roster?.Find( id )?.Name;
 		World = Store.Load<WorldData>( WorldPath ) ?? new WorldData();
 		// Counted from when the city opened, not from when the program started.
-		_sinceWages = 0;
 		_sinceAutosave = 0;
 		Log.Info( $"Hexagon host ready: {Roster.Count} characters, {World.Doors.Count} saved doors." );
 	}
@@ -105,7 +108,6 @@ public sealed class GameManager : Component, Component.INetworkListener
 		if ( !_worldRestored && Networking.IsActive ) RestoreWorld();
 		See();
 		if ( _sinceRefusals > 1f ) ReportRefusals();
-		if ( WageSeconds > 0 && _sinceWages > WageSeconds ) PayWages( Actor.Console );
 		if ( _sinceAutosave < AutosaveSeconds ) return;
 		_sinceAutosave = 0;
 		SaveAll();
@@ -120,7 +122,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 			if ( ground.Inventory.Items.Count == 0 ) Holders.Delete( ground.Id );
 			else WorldItem.Spawn( ground );
 		foreach ( var body in Holders.OfKind( HolderKinds.Corpse ) )
-			if ( body.Inventory.Items.Count == 0 && body.Tokens == 0 ) Holders.Delete( body.Id );
+			if ( body.Inventory.Items.Count == 0 ) Holders.Delete( body.Id );
 			else Corpse.Spawn( body );
 		// Whoever was down or bound when it stopped is still lying, or standing, where they were.
 		foreach ( var character in Roster!.All.Where( value => value.IsDown || value.IsRestrained ).ToArray() )
@@ -227,27 +229,6 @@ public sealed class GameManager : Component, Component.INetworkListener
 			Journal?.Record( kind, new Actor( account ), ok: false, data: ("more", held.ToString()) );
 	}
 
-	/// <summary>
-	/// Host: a wage is a declared faucet. It pays only characters who are in the city and able to work,
-	/// so money enters the world at a rate the journal can show, not for being logged in somewhere.
-	/// </summary>
-	public int PayWages( Actor by )
-	{
-		_sinceWages = 0;
-		var paid = 0;
-		foreach ( var player in Scene.GetAllComponents<Player>() )
-		{
-			if ( player.HostCharacter is not { } character || player.IsIncapable ) continue;
-			if ( FactionDefinition.Find( character.Faction ) is not { Wage: > 0 } faction ) continue;
-			if ( !Transfers!.IssueTokens( Sources.Wage, character, faction.Wage, by ).Ok ) continue;
-			Roster!.Save( character );
-			Player.HostRefresh( character );
-			if ( player.Network.Owner is { } owner ) Chat.Tell( owner, $"You are paid {faction.Wage} tokens." );
-			paid++;
-		}
-		return paid;
-	}
-
 	public Transform FindSpawn()
 	{
 		// A game's own spawn points are where it wants people. A map's are for when it placed none.
@@ -261,8 +242,8 @@ public sealed class GameManager : Component, Component.INetworkListener
 
 	/// <summary>
 	/// Host: saves documents that changed together as one change, so a crash keeps all of it or none:
-	/// both sides of a sale, the price of a door and its deed. A character or holder deleted since it
-	/// changed is left out, as saving it alone would leave it out.
+	/// both sides of a hand-over, a body and what it took from the dead. A character or holder deleted
+	/// since it changed is left out, as saving it alone would leave it out.
 	/// </summary>
 	public void SaveTogether( params object[] documents )
 	{

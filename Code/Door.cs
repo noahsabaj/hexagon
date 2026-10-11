@@ -9,11 +9,12 @@ using Sandbox;
 namespace Hexagon;
 
 /// <summary>
-/// A door anyone can open. Who can lock it is the door's to say: <see cref="LockRequires"/> names a
-/// capability, and whoever bought it can always lock it. It lists its verbs and carries them out;
-/// <see cref="Player.RequestAct"/> judges who may. State is host-written and replicated; the swing
-/// is animated locally on every client. It persists by the scene object's id, which the editor
-/// keeps stable across loads.
+/// A door anyone can open. Locking it takes a key cut to its <see cref="LockPattern"/>, whoever holds
+/// the key: owning a door is title only, the right to sell or rent it, and an owner hands it over by
+/// offering it, like anything else they have. It lists its verbs and carries them out;
+/// <see cref="Player.RequestAct"/> judges who may. State is host-written and replicated; the swing is
+/// animated locally on every client. It persists by the scene object's id, which the editor keeps
+/// stable across loads.
 /// </summary>
 [Title( "Hexagon Door" ), Category( "Hexagon" ), Icon( "door_front" )]
 public sealed class Door : Component, Component.IPressable, IVerbTarget
@@ -24,18 +25,14 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 	[Property] public Angles OpenRotation { get; set; } = new( 0, 90, 0 );
 	[Property] public float SwingSpeed { get; set; } = 6f;
 	[Property] public bool StartsLocked { get; set; }
-	/// <summary>What the door costs to own. Zero means it is not for sale.</summary>
-	[Property] public long Price { get; set; }
 	/// <summary>
-	/// The capability that locks it, such as what a key grants. Empty means only its owner can. A door
-	/// for sale should ask for one that nobody else has, or owning it secures nothing.
+	/// What its lock is cut to. Every key cut the same turns it, so a ministry's doors can share one
+	/// pattern while each flat has its own. Empty means it has no lock.
 	/// </summary>
-	[Property] public string LockRequires { get; set; } = Capability.DoorLock;
+	[Property] public string LockPattern { get; set; } = string.Empty;
 
 	[Sync( SyncFlags.FromHost )] public bool IsOpen { get; set; }
 	[Sync( SyncFlags.FromHost )] public bool IsLocked { get; set; }
-	/// <summary>Whether someone has bought it. Who is not anyone else's business.</summary>
-	[Sync( SyncFlags.FromHost )] public bool IsOwned { get; set; }
 
 	/// <summary>Whether it is still moving. A door on the move pushes people about; nobody walks through it.</summary>
 	public bool IsSwinging { get; private set; }
@@ -67,7 +64,6 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 			IsOpen = saved.IsOpen;
 			IsLocked = saved.IsLocked;
 			_owner = saved.Owner;
-			IsOwned = saved.Owner is not null;
 		}
 		else
 		{
@@ -76,13 +72,15 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 	}
 
 	private static readonly Verb Use = new( "door.use", "Open or close" );
-	// Locking asks for no capability up front: the owner may lock it too, which only the door knows.
+	// Locking asks for no capability up front: what turns a lock is a key, which only the door can judge.
 	private static readonly Verb Lock = new( "door.lock", "Lock or unlock" );
-	private static readonly Verb Buy = new( "door.buy", "Buy" );
 
 	private Guid? _owner;
 
-	public IReadOnlyList<Verb> Verbs => Price > 0 && !IsOwned ? new[] { Use, Lock, Buy } : new[] { Use, Lock };
+	/// <summary>Host: the character who holds its title, if anyone does.</summary>
+	public Guid? HostOwner => _owner;
+
+	public IReadOnlyList<Verb> Verbs => LockPattern.Length > 0 ? new[] { Use, Lock } : new[] { Use };
 	float IVerbTarget.Reach => Reach;
 
 	bool IPressable.CanPress( IPressable.Event e ) => true;
@@ -96,14 +94,13 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) => new IPressable.Tooltip(
 		IsLocked ? "Locked door" : IsOpen ? "Close door" : "Open door",
 		IsLocked ? "lock" : "door_front",
-		Price > 0 && !IsOwned ? $"For sale: {Price} tokens." : "Locking it is in the menu, for those able to." );
+		LockPattern.Length > 0 ? "It locks with a key." : string.Empty );
 
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
-		if ( verb == Buy ) return Purchase( actor );
 		if ( verb == Lock )
 		{
-			if ( !CanLock( actor ) ) return Result.Fail( ErrorCode.Denied, "You have nothing that lets you do that." );
+			if ( !actor.HostHasKey( LockPattern ) ) return Result.Fail( ErrorCode.Denied, "You have no key that fits." );
 			IsLocked = !IsLocked;
 			if ( IsLocked ) IsOpen = false;
 		}
@@ -116,26 +113,7 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 		return Result.Success();
 	}
 
-	private bool CanLock( Player actor ) =>
-		(_owner is not null && _owner == actor.HostCharacter?.Id) || (LockRequires.Length > 0 && actor.HostCan( LockRequires ));
-
-	/// <summary>The price leaves the world through the property sink: it is paid to the city, not to a player.</summary>
-	private Result Purchase( Player actor )
-	{
-		if ( Price <= 0 || IsOwned || actor.HostCharacter is not { } buyer ) return Result.Fail( ErrorCode.Conflict, "It is not for sale." );
-		var game = GameManager.Instance!;
-		var paid = game.Transfers!.DestroyTokens( Sinks.Property, buyer, Price, Actor.Of( buyer ) );
-		if ( !paid.Ok ) return Result.Fail( paid.Code, $"That costs {Price} tokens." );
-		_owner = buyer.Id;
-		IsOwned = true;
-		game.World.Doors[GameObject.Id] = Saved();
-		// The price paid and the deed are one change: a crash keeps both or neither.
-		game.SaveTogether( buyer, game.World );
-		Player.HostRefresh( buyer );
-		return Result.Success();
-	}
-
-	/// <summary>Host: staff work the door directly, whoever owns it and whatever it asks for.</summary>
+	/// <summary>Host: staff work the door directly, whatever key it asks for.</summary>
 	public Result HostOperate( string action, Actor by )
 	{
 		switch ( action )
@@ -159,20 +137,37 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 				HostRelease( by );
 				return Result.Success();
 			default:
-				return Result.Fail( ErrorCode.Invalid, "A door can be opened, closed, locked, unlocked or released." );
+				return Result.Fail( ErrorCode.Invalid, "A door can be opened, closed, locked, unlocked, assigned or released." );
 		}
 		Persist();
 		return Result.Success();
 	}
 
-	/// <summary>Host: nobody owns it any more, and it is for sale again if it ever was.</summary>
+	/// <summary>Host: the title passes to a character, whether staff assign it or its owner's offer is accepted. The keys do not come with it.</summary>
+	public void HostAssign( CharacterData to, Actor by )
+	{
+		if ( GameManager.Instance is not { } game ) return;
+		var was = _owner;
+		_owner = to.Id;
+		Persist();
+		var data = new List<(string, string)> { ("owner", to.Name) };
+		var previous = was is { } from ? game.Roster?.Find( from ) : null;
+		if ( was is { } before ) data.Add( ("from", previous?.Name ?? $"character:{before:N}") );
+		game.Journal?.Record( "door.assign", by, $"Door:{GameObject.Id:N}", data: data.ToArray() );
+		// Each owner is shown the doors it now holds.
+		Player.HostRefresh( to );
+		if ( previous is not null ) Player.HostRefresh( previous );
+	}
+
+	/// <summary>Host: nobody owns it any more. A building nobody owns is for staff, or a player office, to assign.</summary>
 	public void HostRelease( Actor by )
 	{
 		if ( _owner is not { } owner || GameManager.Instance is not { } game ) return;
 		_owner = null;
-		IsOwned = false;
 		Persist();
-		game.Journal?.Record( "door.release", by, $"Door:{GameObject.Id:N}", data: ("owner", game.Roster?.Find( owner )?.Name ?? $"character:{owner:N}") );
+		var was = game.Roster?.Find( owner );
+		game.Journal?.Record( "door.release", by, $"Door:{GameObject.Id:N}", data: ("owner", was?.Name ?? $"character:{owner:N}") );
+		if ( was is not null ) Player.HostRefresh( was );
 	}
 
 	/// <summary>Host: a character that leaves the world for good leaves no deeds behind it.</summary>
@@ -186,10 +181,11 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 		if ( saved.Length > 0 ) game.SaveWorld();
 	}
 
-	/// <summary>Host: one line for staff, saying whether it is open, locked or for sale, and who owns it.</summary>
+	/// <summary>Host: one line for staff, saying whether it is open or locked, what its lock is cut to, and who owns it.</summary>
 	internal string HostDescribe( Func<Guid, string?> nameOf ) =>
 		$"{GameObject.Name}: {(IsOpen ? "open" : "closed")}, {(IsLocked ? "locked" : "unlocked")}" +
-		(_owner is { } owner ? $", owned by {nameOf( owner ) ?? $"character:{owner:N}"}" : Price > 0 ? $", for sale at {Price} tokens" : string.Empty);
+		(LockPattern.Length > 0 ? $", lock cut to {LockPattern}" : ", no lock") +
+		(_owner is { } owner ? $", owned by {nameOf( owner ) ?? $"character:{owner:N}"}" : string.Empty);
 
 	private DoorData Saved() => new() { IsOpen = IsOpen, IsLocked = IsLocked, Owner = _owner };
 

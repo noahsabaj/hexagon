@@ -22,23 +22,28 @@
 					{
 						<div class="row">
 							<div class="grow">
-								<div class="name">@character.Name</div>
-								<div class="muted">@character.Faction</div>
+								<div class="name @(character.IsDead ? "dead" : "")">@character.Name</div>
+								<div class="muted">@Standing( character )</div>
 							</div>
-							@if ( PendingDelete == character.Id )
+							@if ( Pending == character.Id )
 							{
-								<button class="danger" onclick=@(() => ConfirmDelete( character.Id ))>Delete for good</button>
-								<button onclick=@(() => PendingDelete = null)>Keep</button>
+								<button class="danger" onclick=@(() => Confirm( character ))>@(character.Lived ? "Retire for good" : "Delete")</button>
+								<button onclick=@(() => Pending = null)>Keep</button>
 							}
-							else
+							else if ( !character.IsDead )
 							{
-								<button class="primary" onclick=@(() => player.RequestEnterCity( character.Id ))>Enter</button>
-								<button onclick=@(() => PendingDelete = character.Id)>Delete</button>
+								@if ( !character.IsWaiting )
+								{
+									<button class="primary" onclick=@(() => player.RequestEnterCity( character.Id ))>Enter</button>
+								}
+								<button onclick=@(() => Pending = character.Id)>@(character.Lived ? "Retire" : "Delete")</button>
 							}
 						</div>
-						@if ( PendingDelete == character.Id )
+						@if ( Pending == character.Id )
 						{
-							<div class="muted">Deleting @character.Name cannot be undone. Everything they carry leaves the world with them.</div>
+							<div class="muted">@(character.Lived
+								? $"Retiring {character.Name} is a death. They take everything they carry with them, and your next character waits as it would after any death."
+								: $"{character.Name} never entered the city, so deleting them frees the name and costs nothing.")</div>
 						}
 					}
 					@if ( player.Characters.Count == 0 )
@@ -46,7 +51,7 @@
 						<div class="muted">You have no characters yet.</div>
 					}
 					<div class="actions">
-						<button class="primary" onclick=@(() => { Creating = true; PendingDelete = null; })>Create a character</button>
+						<button class="primary" onclick=@(() => { Creating = true; Pending = null; })>Create a character</button>
 					</div>
 				}
 				else
@@ -65,6 +70,7 @@
 							</button>
 						}
 					</div>
+					<div class="muted">A new character arrives with nothing but the clothes they stand in.</div>
 					<div class="actions">
 						<button class="primary" onclick=@SubmitCharacter>Create</button>
 						<button onclick=@CancelCharacter>Back</button>
@@ -79,13 +85,6 @@
 	}
 	else
 	{
-		<div class="identity">
-			<div class="name">@player.CharacterName</div>
-			<div class="muted">@(player.Faction?.Title ?? "Unaffiliated")</div>
-			<div class="muted">@player.Tokens.ToString( "N0" ) tokens</div>
-			<div class="muted">@(player.IsDown ? "Down" : player.IsRestrained ? "Restrained" : $"Health {player.Health}")</div>
-		</div>
-
 		@if ( !Player.UiBusy && player.HoveredTarget is IVerbTarget hovered && hovered.Verbs.Count > 0 )
 		{
 			<div class="verbs">
@@ -104,6 +103,14 @@
 			</div>
 		}
 
+		@if ( player.OfferText.Length > 0 )
+		{
+			<div class="offer">
+				<div class="line">@player.OfferText</div>
+				<div class="line muted">[@Key( "Slot1" )] Accept   [@Key( "Slot2" )] Refuse</div>
+			</div>
+		}
+
 		@if ( player.MenuTarget is IVerbTarget offered )
 		{
 			<div class="center">
@@ -114,6 +121,41 @@
 						<button class="@(index == 0 ? "primary" : "")" onclick=@(() => Choose( verb ))>@(index + 1). @verb.Title</button>
 					}
 					<button onclick=@(() => player.MenuTarget = null)>Never mind</button>
+				</div>
+			</div>
+		}
+
+		@if ( OfferingTo is { } recipient && player.Inventory is { } goods )
+		{
+			<div class="center">
+				<div class="card picker">
+					<h1>Offer to @player.LabelFor( recipient )</h1>
+					@foreach ( var item in goods.Items )
+					{
+						<div class="row">
+							<div class="grow">@Listing( item )</div>
+							@if ( item.Count > 1 )
+							{
+								<button onclick=@(() => Offer( recipient, item, 1 ))>One</button>
+							}
+							<button class="primary" onclick=@(() => Offer( recipient, item, item.Count ))>@(item.Count > 1 ? "All of it" : "Offer")</button>
+						</div>
+					}
+					@foreach ( var door in player.OwnedDoors )
+					{
+						<div class="row">
+							<div class="grow">The title to @door.Name</div>
+							<button class="primary" onclick=@(() => OfferDoor( recipient, door ))>Offer</button>
+						</div>
+					}
+					@if ( goods.Items.Count == 0 && player.OwnedDoors.Count == 0 )
+					{
+						<div class="muted">You have nothing to offer.</div>
+					}
+					<div class="actions">
+						<button onclick=@(() => OfferingTo = null)>Never mind</button>
+					</div>
+					<div class="muted">They are asked first. Nothing changes hands until they accept.</div>
 				</div>
 			</div>
 		}
@@ -169,64 +211,42 @@
 				{
 					<div class="card">
 						<h1>@player.OpenTitle</h1>
-						@if ( player.OpenTarget is Vendor counter )
-						{
-							<div class="pricelist">
-								@foreach ( var item in other.Items )
-								{
-									var goods = ItemDefinition.Find( item.Definition );
-									<div class="row">
-										<div class="grow">
-											<div class="name">@(goods?.Title ?? "Unknown item")</div>
-											<div class="muted">@item.Count in stock</div>
-										</div>
-										<div class="price">@counter.SellPrice( goods ).ToString( "N0" ) tokens</div>
-										<button class="primary" onclick=@(() => player.RequestTake( item.Id ))>Buy one</button>
-									</div>
-								}
-								@if ( other.Items.Count == 0 )
-								{
-									<div class="muted">The shelves are empty.</div>
-								}
-							</div>
-						}
-						else
-						{
-						<div class="grid" style="width: @(other.Width * 68)px; height: @(other.Height * 68)px;">
+						<div class="grid" style="width: @(other.Width * Cell)px; height: @(other.Height * Cell)px;">
 							@foreach ( var item in other.Items )
 							{
+								var found = ItemDefinition.Find( item.Definition );
 								<div class="item"
-									style="left: @(item.X * 68)px; top: @(item.Y * 68)px; width: @(item.Width * 68 - 4)px; height: @(item.Height * 68 - 4)px;"
+									style="left: @(item.X * Cell)px; top: @(item.Y * Cell)px; width: @(item.Width * Cell - 4)px; height: @(item.Height * Cell - 4)px;"
 									onclick=@(() => player.RequestTake( item.Id ))>
-									@(ItemDefinition.Find( item.Definition )?.Title ?? "Unknown item")
+									<div class="title">@(found?.Title ?? "Unknown item")</div>
+									@if ( found is { IsKey: true } )
+									{
+										<div class="detail">@(item.Pattern ?? "blank")</div>
+									}
 									@if ( item.Count > 1 )
 									{
-										<div class="count">@item.Count</div>
+										<div class="count">×@item.Count</div>
 									}
 								</div>
 							}
 						</div>
-						}
 						<div class="actions">
-							@if ( player.OpenTokens > 0 && player.OpenTarget is not Vendor )
-							{
-								<button class="primary" onclick=@(() => player.RequestTakeTokens())>Take @player.OpenTokens.ToString( "N0" ) tokens</button>
-							}
 							<button onclick=@(() => player.RequestCloseHolder())>Close</button>
 						</div>
-						<div class="muted">@(player.OpenTarget is Vendor ? "To sell, select something of yours. It pays what it offers, from its own till." : "Click an item to take it.")</div>
+						<div class="muted">Click an item to take it.</div>
 					</div>
 				}
 				<div class="card">
-					<h1>Inventory</h1>
-					<div class="grid" style="width: @(inventory.Width * 68)px; height: @(inventory.Height * 68)px;">
+					<h1>@player.CharacterName</h1>
+					<div class="muted">@(player.Faction?.Title ?? "Unaffiliated")</div>
+					<div class="grid" style="width: @(inventory.Width * Cell)px; height: @(inventory.Height * Cell)px;">
 						@for ( var y = 0; y < inventory.Height; y++ )
 						{
 							@for ( var x = 0; x < inventory.Width; x++ )
 							{
 								var cellX = x;
 								var cellY = y;
-								<div class="cell" style="left: @(cellX * 68)px; top: @(cellY * 68)px;"
+								<div class="cell" style="left: @(cellX * Cell)px; top: @(cellY * Cell)px;"
 									onclick=@(() => ClickCell( cellX, cellY ))></div>
 							}
 						}
@@ -234,16 +254,20 @@
 						{
 							var definition = ItemDefinition.Find( item.Definition );
 							<div class="item @(item.Id == Selected ? "selected" : "")"
-								style="left: @(item.X * 68)px; top: @(item.Y * 68)px; width: @(item.Width * 68 - 4)px; height: @(item.Height * 68 - 4)px;"
+								style="left: @(item.X * Cell)px; top: @(item.Y * Cell)px; width: @(item.Width * Cell - 4)px; height: @(item.Height * Cell - 4)px;"
 								onclick=@(() => ClickItem( item ))>
-								@(definition?.Title ?? "Unknown item")
-								@if ( item.Count > 1 )
-								{
-									<div class="count">@item.Count</div>
-								}
+								<div class="title">@(definition?.Title ?? "Unknown item")</div>
 								@if ( definition is { IsRadio: true } )
 								{
-									<div class="muted">@(item.Frequency ?? "untuned")</div>
+									<div class="detail">@(item.Frequency ?? "untuned")</div>
+								}
+								@if ( definition is { IsKey: true } )
+								{
+									<div class="detail">@(item.Pattern ?? "blank")</div>
+								}
+								@if ( item.Count > 1 )
+								{
+									<div class="count">×@item.Count</div>
 								}
 							</div>
 						}
@@ -256,12 +280,14 @@
 						</div>
 						<div class="muted">Speak into it with /r. Anyone tuned the same hears you; so does anyone beside you.</div>
 					}
+					@if ( SelectedDefinition is { IsKey: true } )
+					{
+						<div class="muted">A key shows its cut. Keys cut the same open the same locks; which ones, you learn by trying.</div>
+					}
 					<div class="actions">
 						@if ( player.OpenInventory is not null )
 						{
-							<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "put" ))>
-								@(player.OpenTarget is not Vendor buyer ? "Put in" : Selected is null ? "Sell" : buyer.BuyPrice( SelectedDefinition ) is { } offer ? $"Sell one for {offer}" : "Not wanted here")
-							</button>
+							<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "put" ))>Put in</button>
 						}
 						@if ( SelectedDefinition is { Consumable: true } usable )
 						{
@@ -284,10 +310,14 @@
 
 @code
 {
+	// One grid cell and the gap after it, in panel pixels. A cell, and a one-cell item, is 4 less (see .cell).
+	private const int Cell = 76;
+
 	private bool Creating { get; set; }
 	// The list's length when a character was asked for. The form keeps what was typed until the list grows.
 	private int? _createdFrom;
-	private Guid? PendingDelete { get; set; }
+	// The character whose deletion, or retirement, is waiting to be confirmed.
+	private Guid? Pending { get; set; }
 	private string NewName { get; set; } = string.Empty;
 	private string NewDescription { get; set; } = string.Empty;
 	private string NewFaction { get; set; } = string.Empty;
@@ -303,6 +333,23 @@
 	internal static bool StaffOpen { get; set; }
 	private string StaffDraft { get; set; } = string.Empty;
 	private Guid? Selected { get; set; }
+	/// <summary>Whoever this character is choosing something to offer to.</summary>
+	private Player? OfferingTo { get; set; }
+	private GameObject? _harmCues;
+
+	protected override void OnStart()
+	{
+		base.OnStart();
+		// How harm feels is drawn by the engine's post-processing, over the game's own camera, not by this panel.
+		_harmCues = new GameObject( true, "Harm Cues" ) { NetworkMode = NetworkMode.Never };
+		_harmCues.AddComponent<HarmCues>();
+	}
+
+	protected override void OnDestroy()
+	{
+		_harmCues?.Destroy();
+		base.OnDestroy();
+	}
 
 	protected override void OnUpdate()
 	{
@@ -313,11 +360,12 @@
 			NewName = string.Empty;
 			NewDescription = string.Empty;
 		}
-		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || Player.Local?.OpenInventory is not null || Player.Local?.MenuTarget is not null || Player.Local is not { HasCharacter: true };
+		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || OfferingTo is not null || Player.Local?.OpenInventory is not null || Player.Local?.MenuTarget is not null || Player.Local is not { HasCharacter: true };
 		if ( Player.Local is not { HasCharacter: true } )
 		{
 			ChatOpen = false;
 			InventoryOpen = false;
+			OfferingTo = null;
 			return;
 		}
 		// A driven test client takes no keys; see DevCommands.Driven.
@@ -338,6 +386,23 @@
 					if ( Input.Pressed( $"Slot{index + 1}" ) ) Choose( verbs[index] );
 			}
 			return;
+		}
+
+		if ( OfferingTo is { } recipient )
+		{
+			if ( !recipient.IsValid() || !recipient.IsPresent || Input.EscapePressed || Player.Local.IsIncapable )
+			{
+				Input.EscapePressed = false;
+				OfferingTo = null;
+			}
+			return;
+		}
+
+		// An offer is answered with a key, so whoever is offered something need not stop to take the cursor.
+		if ( !ChatOpen && Player.Local.OfferText.Length > 0 )
+		{
+			if ( Input.Pressed( "Slot1" ) ) Player.Local.RequestAnswerOffer( true );
+			else if ( Input.Pressed( "Slot2" ) ) Player.Local.RequestAnswerOffer( false );
 		}
 
 		if ( !ChatOpen && Input.Pressed( "Chat" ) )
@@ -376,8 +441,43 @@
 	{
 		if ( Player.Local is not { MenuTarget: { } target } player ) return;
 		player.MenuTarget = null;
+		// What to offer is chosen from what this character has, so it opens a list instead of asking the host.
+		if ( verb.Id == Player.OfferVerb && target is Player recipient )
+		{
+			OfferingTo = recipient;
+			return;
+		}
 		player.RequestAct( target, verb.Id );
 	}
+
+	private void Offer( Player recipient, ItemStack item, int count )
+	{
+		Player.Local?.RequestOffer( recipient, item.Id, count );
+		OfferingTo = null;
+	}
+
+	private void OfferDoor( Player recipient, OwnedDoor door )
+	{
+		Player.Local?.RequestOfferDoor( recipient, door.Id );
+		OfferingTo = null;
+	}
+
+	/// <summary>How a pile reads in a list: what it is, how many, and for a key its cut.</summary>
+	private static string Listing( ItemStack item )
+	{
+		var definition = ItemDefinition.Find( item.Definition );
+		var title = definition?.Title ?? "Unknown item";
+		if ( item.Count > 1 ) title += $" ×{item.Count}";
+		if ( definition is { IsKey: true } ) title += $", cut {item.Pattern ?? "blank"}";
+		if ( definition is { IsRadio: true } && item.Frequency is { } frequency ) title += $", tuned to {frequency}";
+		return title;
+	}
+
+	/// <summary>A character's faction, and where it stands: dead, or not yet arrived in the city.</summary>
+	private static string Standing( CharacterSummary character ) =>
+		character.IsDead ? $"{character.Faction}, dead"
+		: character.IsWaiting ? $"{character.Faction}, arrives {Player.Until( character.ArrivesAt!.Value - DateTimeOffset.UtcNow )}"
+		: character.Faction;
 
 	/// <summary>The key a player has bound to an action, so the hint is true for them.</summary>
 	private static string Key( string action ) => (Input.GetButtonOrigin( action, false ) ?? action).ToUpperInvariant();
@@ -387,14 +487,6 @@
 		var text = ChatDraft;
 		CloseChat();
 		if ( string.IsNullOrWhiteSpace( text ) || Player.Local is not { } player ) return;
-		// "/pay 20" hands tokens to whoever is being looked at. It is an act, not speech.
-		if ( text.StartsWith( "/pay ", StringComparison.OrdinalIgnoreCase ) )
-		{
-			if ( !long.TryParse( text[5..].Trim(), out var amount ) || amount <= 0 ) Chat.Note( "Pay how much? For example, /pay 20." );
-			else if ( player.HoveredTarget is not Player payee ) Chat.Note( "Look at whoever you are paying." );
-			else player.RequestPay( payee, amount );
-			return;
-		}
 		player.RequestSay( text );
 	}
 
@@ -425,10 +517,12 @@
 		_createdFrom = null;
 	}
 
-	private void ConfirmDelete( Guid characterId )
+	/// <summary>One that never lived is deleted; one that has lived is retired, which is a death.</summary>
+	private void Confirm( CharacterSummary character )
 	{
-		PendingDelete = null;
-		Player.Local?.RequestDeleteCharacter( characterId );
+		Pending = null;
+		if ( character.Lived ) Player.Local?.RequestRetireCharacter( character.Id );
+		else Player.Local?.RequestDeleteCharacter( character.Id );
 	}
 
 	private void ClickCell( int x, int y )
@@ -479,8 +573,8 @@
 	protected override int BuildHash() => HashCode.Combine(
 		HashCode.Combine( Player.Local, Player.Local?.HasCharacter, Player.Local?.PrivateVersion, Player.Local?.CharacterName ),
 		HashCode.Combine( Chat.Version, ChatOpen, InventoryOpen, Selected, Creating, NewFaction, StaffOpen, Player.Local?.MenuTarget ),
-		HashCode.Combine( PendingDelete, _createdFrom, Player.Local?.Characters.Count ),
+		HashCode.Combine( Pending, _createdFrom, Player.Local?.Characters.Count, OfferingTo ),
 		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.IsDown, Player.Local?.IsRestrained, (Player.Local?.HoveredTarget as Player)?.IsDown, (Player.Local?.HoveredTarget as Player)?.IsRestrained ),
-		// Lines and notices fade, so the panel must rebuild as time passes.
+		// Lines and notices fade, and waits run down, so the panel must rebuild as time passes.
 		(int)RealTime.Now );
 }

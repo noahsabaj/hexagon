@@ -9,8 +9,19 @@ using Sandbox;
 
 namespace Hexagon;
 
-/// <summary>What a player sees of one of their characters before entering the city.</summary>
-public sealed record CharacterSummary( Guid Id, string Name, string Faction );
+/// <summary>
+/// What a player sees of one of their characters before entering the city: whether it has lived,
+/// whether it is dead, and when a new one may first enter.
+/// </summary>
+public sealed record CharacterSummary( Guid Id, string Name, string Faction, bool Lived, DateTimeOffset? DiedAt, DateTimeOffset? ArrivesAt )
+{
+	public bool IsDead => DiedAt is not null;
+	/// <summary>Whether it is still waiting to enter the city, by this machine's clock.</summary>
+	public bool IsWaiting => !IsDead && ArrivesAt > DateTimeOffset.UtcNow;
+}
+
+/// <summary>A door whose title a character holds, as its owner is shown it, to offer it on.</summary>
+public sealed record OwnedDoor( Guid Id, string Name );
 
 /// <summary>
 /// One connection's presence in the city. Movement is the engine's <see cref="PlayerController"/>,
@@ -54,8 +65,10 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		Known.TryGetValue( other.CharacterId, out var name ) ? name : Recognition.Stranger( other.CharacterDescription );
 
 	public IReadOnlyList<CharacterSummary> Characters { get; private set; } = Array.Empty<CharacterSummary>();
+	/// <summary>What this character carries. A key shows its cut, never what it opens.</summary>
 	public InventoryData? Inventory { get; private set; }
-	public long Tokens { get; private set; }
+	/// <summary>The doors this character holds the title to.</summary>
+	public IReadOnlyList<OwnedDoor> OwnedDoors { get; private set; } = Array.Empty<OwnedDoor>();
 
 	/// <summary>Bumped whenever private state changes so panels can rebuild.</summary>
 	public int PrivateVersion { get; private set; }
@@ -145,7 +158,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		ApplyAppearance();
 		if ( IsProxy || !HasCharacter || Dev.DevCommands.Driven ) return;
 		// "Use" reaches a target's first verb through IPressable. Everything else it offers is chosen
-		// from a menu, by name: nothing that costs tokens or binds someone hangs off a bare number key.
+		// from a menu, by name: nothing that hands something over or binds someone hangs off a bare key.
 		if ( UiBusy ) return;
 		if ( HoveredTarget is IVerbTarget { Verbs.Count: > 1 } && Input.Pressed( MenuAction ) ) MenuTarget = HoveredTarget;
 		if ( Input.Pressed( "Attack1" ) && !IsIncapable && Controller is { } controller ) RequestAttack( controller.EyeAngles.Forward );
@@ -172,6 +185,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		HostVitalsTick( game );
 		// Bleeding out may have ended the character for good.
 		if ( _character is null ) return;
+		HostOfferTick();
 		HostAuditMovement( controller );
 	}
 
@@ -369,26 +383,27 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	/// <summary>Host: the loaded character, for other host systems such as doors.</summary>
 	public CharacterData? HostCharacter => Networking.IsHost ? _character : null;
 
-	/// <summary>Host: issues an item to the loaded character from a named source and tells the owner.</summary>
-	public Result HostIssue( string source, ItemDefinition definition, Actor by, int count = 1 )
+	/// <summary>Host: issues an item to the loaded character from a named source and tells the owner. A key comes cut to its pattern.</summary>
+	public Result HostIssue( string source, ItemDefinition definition, Actor by, int count = 1, string? pattern = null )
 	{
 		if ( _character is null || GameManager.Instance is not { Transfers: { } transfers, Roster: { } roster } )
 			return Result.Fail( ErrorCode.NotFound, "That player has no character loaded." );
-		var issued = definition.IssueTo( transfers, source, _character, by, count );
+		var issued = definition.IssueTo( transfers, source, _character, by, count, pattern );
 		if ( !issued.Ok ) return issued.ToResult();
 		roster.Save( _character );
 		SendPrivateState();
 		return Result.Success();
 	}
 
-	/// <summary>Host: whether the loaded character is able to do something, from its faction and what it holds.</summary>
+	/// <summary>Host: whether the loaded character is able to do something. Only what it holds grants anything; who it works for does not.</summary>
 	public bool HostCan( string capability )
 	{
 		if ( !Networking.IsHost || _character is null ) return false;
-		var granted = (FactionDefinition.Find( _character.Faction )?.Capabilities ?? Enumerable.Empty<string>())
-			.Concat( _character.Inventory.Items.SelectMany( item => ItemDefinition.Find( item.Definition )?.Grants ?? Enumerable.Empty<string>() ) );
-		return Capabilities.Can( capability, granted );
+		return Capabilities.Can( capability, _character.Inventory.Items.SelectMany( item => ItemDefinition.Find( item.Definition )?.Grants ?? Enumerable.Empty<string>() ) );
 	}
+
+	/// <summary>Host: whether the loaded character carries a key that turns a lock cut to this pattern.</summary>
+	public bool HostHasKey( string pattern ) => Networking.IsHost && _character is not null && Keys.Opens( _character.Inventory, pattern );
 
 	/// <summary>Host: writes what this character just did to the journal, with where and who was near enough to see.</summary>
 	public void HostRecord( string kind, string? subject = null, bool ok = true, params (string Key, string Value)[] data )
@@ -424,7 +439,8 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		if ( _character is null )
 		{
 			var summaries = game.Roster!.OwnedBy( SteamIdOf( caller ) )
-				.Select( value => new CharacterSummary( value.Id, value.Name, FactionDefinition.Find( value.Faction )?.Title ?? value.Faction ) )
+				.Select( value => new CharacterSummary( value.Id, value.Name, FactionDefinition.Find( value.Faction )?.Title ?? value.Faction,
+					value.FirstEntered is not null, value.DiedAt, value.ArrivesAt ) )
 				.ToArray();
 			using ( Rpc.FilterInclude( caller ) ) ReceiveCharacters( JsonSerializer.Serialize( summaries ) );
 		}
@@ -436,8 +452,11 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		if ( _character is null || Network.Owner is not { } owner ) return;
 		// Private state changes whenever the inventory does, which is also when what is in hand may have left it.
 		HostSyncVitals();
+		var doors = Scene.GetAllComponents<Door>().Where( value => value.HostOwner == _character.Id )
+			.Select( value => new OwnedDoor( value.GameObject.Id, value.GameObject.Name ) ).ToArray();
 		using ( Rpc.FilterInclude( owner ) )
-			ReceivePrivateState( _character.Name, _character.Faction, JsonSerializer.Serialize( _character.Inventory ), _character.Tokens, JsonSerializer.Serialize( _character.Known ), _character.Health );
+			ReceivePrivateState( _character.Name, _character.Faction, JsonSerializer.Serialize( Keys.AsSeen( _character.Inventory ) ),
+				JsonSerializer.Serialize( _character.Known ), _character.Health, JsonSerializer.Serialize( doors ) );
 	}
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
@@ -449,19 +468,20 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		FactionPath = string.Empty;
 		Known = new Dictionary<Guid, string>();
 		Inventory = null;
-		Tokens = 0;
+		OwnedDoors = Array.Empty<OwnedDoor>();
+		OfferText = string.Empty;
 		PrivateVersion++;
 	}
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
-	private void ReceivePrivateState( string name, string factionPath, string inventoryJson, long tokens, string knownJson, int health )
+	private void ReceivePrivateState( string name, string factionPath, string inventoryJson, string knownJson, int health, string doorsJson )
 	{
 		Health = health;
 		Known = JsonSerializer.Deserialize<Dictionary<Guid, string>>( knownJson ) ?? new Dictionary<Guid, string>();
 		CharacterName = name;
 		FactionPath = factionPath;
 		Inventory = JsonSerializer.Deserialize<InventoryData>( inventoryJson );
-		Tokens = tokens;
+		OwnedDoors = JsonSerializer.Deserialize<OwnedDoor[]>( doorsJson ) ?? Array.Empty<OwnedDoor>();
 		PrivateVersion++;
 	}
 
