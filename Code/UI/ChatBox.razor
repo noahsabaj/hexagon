@@ -1,0 +1,61 @@
+@using System
+@using System.Linq
+@using Hexagon.Logic
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* What this character has heard lately, and, while open, a line to say something. *@
+<root class="chat @(Open ? "open" : "")">
+	<div class="lines">
+		@foreach ( var line in Chat.Lines.TakeLast( Open ? 14 : 6 ).Where( value => Open || value.Age < 12f ) )
+		{
+			<div class="line @(line.IsNotice ? "notice" : line.Channel.ToString().ToLowerInvariant())">@line.Text</div>
+		}
+	</div>
+	@if ( Open )
+	{
+		<TextEntry @ref="Entry" Value:bind="@Draft" MaxLength="@ChatRules.MaximumScalars" onsubmit=@Submit />
+	}
+</root>
+
+@code
+{
+	/// <summary>Whether a line is being typed.</summary>
+	public bool Open { get; set; }
+
+	/// <summary>Called once the line is said or abandoned.</summary>
+	public Action? Dismiss { get; set; }
+
+	private string Draft { get; set; } = string.Empty;
+	// A property, because the Razor @ref generator only assigns properties.
+	private TextEntry? Entry { get; set; }
+	private bool _wasOpen;
+
+	public override void Tick()
+	{
+		if ( Open != _wasOpen )
+		{
+			_wasOpen = Open;
+			if ( !Open )
+			{
+				Entry?.Blur();
+				Draft = string.Empty;
+			}
+		}
+		// Focused here, as the player is embodied and has no cursor to click with, until it takes.
+		if ( Open && Entry is { HasFocus: false } entry ) entry.Focus();
+	}
+
+	private void Submit()
+	{
+		var text = Draft;
+		Draft = string.Empty;
+		Dismiss?.Invoke();
+		if ( !string.IsNullOrWhiteSpace( text ) ) Player.Local?.RequestSay( text );
+	}
+
+	// Lines fade, so the panel rebuilds as time passes.
+	protected override int BuildHash() => HashCode.Combine( Chat.Version, Open, (int)RealTime.Now );
+}

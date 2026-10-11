@@ -1,0 +1,83 @@
+@using System
+@using Hexagon.Logic
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* What this character could hand to someone: some or all of a pile, or the title to a door it holds. *@
+<root class="center">
+	@if ( Player.Local is { Inventory: { } goods } player && Recipient is { } recipient )
+	{
+		<div class="card picker">
+			<h1>Offer to @player.LabelFor( recipient )</h1>
+			@foreach ( var item in goods.Items )
+			{
+				<div class="row">
+					<div class="grow">@Listing( item )</div>
+					@if ( item.Count > 1 )
+					{
+						<button onclick=@(() => Offer( recipient, item, 1 ))>One</button>
+					}
+					<button class="primary" onclick=@(() => Offer( recipient, item, item.Count ))>@(item.Count > 1 ? "All of it" : "Offer")</button>
+				</div>
+			}
+			@foreach ( var door in player.OwnedDoors )
+			{
+				<div class="row">
+					<div class="grow">The title to @door.Name</div>
+					<button class="primary" onclick=@(() => OfferDoor( recipient, door ))>Offer</button>
+				</div>
+			}
+			@if ( goods.Items.Count == 0 && player.OwnedDoors.Count == 0 )
+			{
+				<div class="muted">You have nothing to offer.</div>
+			}
+			<div class="actions">
+				<button onclick=@(() => Dismiss?.Invoke())>Never mind</button>
+			</div>
+			<div class="muted">They are asked first. Nothing changes hands until they accept.</div>
+		</div>
+	}
+</root>
+
+@code
+{
+	/// <summary>Whoever this character is choosing something to offer to.</summary>
+	public Player? Recipient { get; set; }
+
+	/// <summary>Called once something is offered, or the player backs out.</summary>
+	public Action? Dismiss { get; set; }
+
+	public override void Tick()
+	{
+		if ( Recipient is { } recipient && recipient.IsValid() && recipient.IsPresent && !Input.EscapePressed && Player.Local is { IsIncapable: false } ) return;
+		Input.EscapePressed = false;
+		Dismiss?.Invoke();
+	}
+
+	private void Offer( Player recipient, ItemStack item, int count )
+	{
+		Player.Local?.RequestOffer( recipient, item.Id, count );
+		Dismiss?.Invoke();
+	}
+
+	private void OfferDoor( Player recipient, OwnedDoor door )
+	{
+		Player.Local?.RequestOfferDoor( recipient, door.Id );
+		Dismiss?.Invoke();
+	}
+
+	/// <summary>How a pile reads in a list: what it is, how many, and for a key its cut.</summary>
+	private static string Listing( ItemStack item )
+	{
+		var definition = ItemDefinition.Find( item.Definition );
+		var title = definition?.Title ?? "Unknown item";
+		if ( item.Count > 1 ) title += $" ×{item.Count}";
+		if ( definition is { IsKey: true } ) title += $", cut {item.Pattern ?? "blank"}";
+		if ( definition is { IsRadio: true } && item.Frequency is { } frequency ) title += $", tuned to {frequency}";
+		return title;
+	}
+
+	protected override int BuildHash() => HashCode.Combine( Recipient, Player.Local?.PrivateVersion );
+}

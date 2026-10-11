@@ -1,0 +1,66 @@
+@using System
+@using System.Linq
+@using Hexagon.Logic
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* Everything a target offers, chosen by name, or by its number while the menu is open. *@
+<root class="center">
+	@if ( Player.Local is { MenuTarget: IVerbTarget offered } player )
+	{
+		<div class="card menu">
+			<h1>@Title( player )</h1>
+			@foreach ( var (verb, index) in offered.Verbs.Select( ( value, index ) => (value, index) ) )
+			{
+				<button class="@(index == 0 ? "primary" : "")" onclick=@(() => Choose( verb ))>@(index + 1). @verb.Title</button>
+			}
+			<button onclick=@(() => player.MenuTarget = null)>Never mind</button>
+		</div>
+	}
+</root>
+
+@code
+{
+	/// <summary>Called when offering something to someone was chosen, which is picked from what this character has.</summary>
+	public Action<Player>? OfferTo { get; set; }
+
+	public override void Tick()
+	{
+		if ( Player.Local is not { MenuTarget: { } menu } player ) return;
+		// The menu is over once something is chosen, the target is gone, or the player backs out.
+		var verbs = (menu as IVerbTarget)?.Verbs;
+		if ( !menu.IsValid() || verbs is null || Input.EscapePressed || player.IsIncapable )
+		{
+			Input.EscapePressed = false;
+			player.MenuTarget = null;
+			return;
+		}
+		for ( var index = 0; index < verbs.Count && index < 9; index++ )
+			if ( Input.Pressed( $"Slot{index + 1}" ) ) Choose( verbs[index] );
+	}
+
+	/// <summary>What the menu calls its target: a person by the name this character knows them by, if any.</summary>
+	private static string Title( Player player ) => player.MenuTarget switch
+	{
+		CharacterBody person => player.LabelFor( person ),
+		{ } other => other.GameObject.Name,
+		_ => string.Empty
+	};
+
+	private void Choose( Verb verb )
+	{
+		if ( Player.Local is not { MenuTarget: { } target } player ) return;
+		player.MenuTarget = null;
+		// What to offer is chosen from what this character has, so it opens a list instead of asking the host.
+		if ( verb.Id == VerbIds.PersonOffer && target.GetComponent<Player>() is { } recipient )
+		{
+			OfferTo?.Invoke( recipient );
+			return;
+		}
+		player.RequestAct( target, verb.Id );
+	}
+
+	protected override int BuildHash() => HashCode.Combine( Player.Local?.MenuTarget, (Player.Local?.MenuTarget as IVerbTarget)?.Verbs.Count, Player.Local?.PrivateVersion );
+}

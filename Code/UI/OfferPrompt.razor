@@ -1,0 +1,32 @@
+@using System
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* What this character is being offered. It is answered with a key, so nobody need stop to take the cursor. *@
+<root class="offer">
+	@if ( Player.Local is { } player )
+	{
+		<div class="line">@player.OfferText</div>
+		<div class="row prompt muted">
+			<Image class="glyph" Texture=@Input.GetGlyph( "Slot1", InputGlyphSize.Medium, false ) /><div>Accept</div>
+			<Image class="glyph" Texture=@Input.GetGlyph( "Slot2", InputGlyphSize.Medium, false ) /><div>Refuse</div>
+		</div>
+	}
+</root>
+
+@code
+{
+	/// <summary>Whether the keys answer it: not while typing, or while a menu has them.</summary>
+	public bool Answering { get; set; }
+
+	public override void Tick()
+	{
+		if ( !Answering || Player.Local is not { OfferText.Length: > 0 } player ) return;
+		if ( Input.Pressed( "Slot1" ) ) player.RequestAnswerOffer( true );
+		else if ( Input.Pressed( "Slot2" ) ) player.RequestAnswerOffer( false );
+	}
+
+	protected override int BuildHash() => HashCode.Combine( Player.Local?.OfferText );
+}

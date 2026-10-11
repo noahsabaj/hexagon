@@ -1,0 +1,37 @@
+@using System
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* The console's commands, typed in game as oneself, on the record. *@
+<root class="center">
+	@if ( Player.Local is { } player )
+	{
+		<div class="card staff">
+			<h1>Staff</h1>
+			<div class="muted">Everything typed here is journaled under your name.</div>
+			<TextEntry Value:bind="@Draft" MaxLength="@(256)" onsubmit=@Submit />
+			<div class="lines">
+				@foreach ( var line in player.StaffLines )
+				{
+					<div class="line">@line</div>
+				}
+			</div>
+			<div class="muted">@Operators.Help</div>
+		</div>
+	}
+</root>
+
+@code
+{
+	private string Draft { get; set; } = string.Empty;
+
+	private void Submit()
+	{
+		if ( !string.IsNullOrWhiteSpace( Draft ) ) Player.Local?.RequestStaff( Draft );
+		Draft = string.Empty;
+	}
+
+	protected override int BuildHash() => HashCode.Combine( Player.Local?.StaffLines, Player.Local?.PrivateVersion );
+}
