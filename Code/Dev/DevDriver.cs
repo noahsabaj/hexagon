@@ -93,7 +93,8 @@ public static class DevCommands
 	/// </summary>
 	public static void PollInbox()
 	{
-		if ( !Enabled || !Networking.IsHost || _sincePoll < 0.25f ) return;
+		// A test waits on every command it sends, so the folder is looked at often: listing it costs little.
+		if ( !Enabled || !Networking.IsHost || _sincePoll < 0.05f ) return;
 		_sincePoll = 0;
 		var folder = $"{SandboxFileStore.Root}/dev-inbox";
 		if ( !_announced )
@@ -382,7 +383,7 @@ public static class DevCommands
 					return $"has={player.HasCharacter} name='{player.CharacterName}' faction='{player.Faction?.Title}' " +
 						$"characters=[{string.Join( ", ", player.Characters.Select( value => value.Name + (value.IsDead ? "(dead)" : value.IsWaiting ? "(waits)" : string.Empty) ) )}] " +
 						$"items=[{string.Join( ", ", player.Inventory?.Items.Select( value => $"{Pile( value )}@{value.X},{value.Y}" ) ?? Array.Empty<string>() )}] " +
-						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked}" ) )}] " +
+						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked},swinging={value.IsSwinging}" ) )}] " +
 						$"owned=[{string.Join( ", ", player.OwnedDoors.Select( value => value.Name ) )}] offer='{player.OfferText}' " +
 						$"health={player.Health} down={player.IsDown} restrained={player.IsRestrained} held='{ItemDefinition.Find( player.HeldItemPath )?.Title}' bodies={Game.ActiveScene.GetAllComponents<Corpse>().Count()} " +
 						$"staff={player.IsStaff} said=[{string.Join( " / ", player.StaffLines.TakeLast( 4 ) )}] " +

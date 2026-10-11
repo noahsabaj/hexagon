@@ -26,12 +26,21 @@ $description = 'A tired resident of the city.'
 $script:failures = 0
 $script:sent = 0
 
-if (Get-Process -Name 'sbox', 'sbox-server', 'sbox-dev' -ErrorAction SilentlyContinue) { throw 'Close s&box, its editor and any dedicated server first.' }
+# An open editor is no obstacle, so the editor play test can run at the same time (tools/test.ps1).
+if (Get-Process -Name 'sbox', 'sbox-server' -ErrorAction SilentlyContinue) { throw 'Close s&box and any dedicated server first.' }
 
 # RenderDoc, when it is on the PATH, is loaded into each game client, and with it every native
 # library the engine loads while starting is slow: a client took two to four minutes to reach its
 # menu, and 13 seconds without it. The clients are started without it.
 $pathWithoutRenderDoc = ($env:Path -split ';' | Where-Object { $_ -and -not (Test-Path -LiteralPath (Join-Path $_ 'renderdoc.dll')) }) -join ';'
+
+# The editor, while it plays a scene, listens for local players on the engine's default port, so the
+# server and its clients meet on another. A port the system hands out is free, and outside the ranges
+# Windows keeps for itself.
+$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+$listener.Start()
+$localPort = $listener.LocalEndpoint.Port
+$listener.Stop()
 
 function Read-Log { if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log) } else { @() } }
 
@@ -55,12 +64,39 @@ function Send([int] $Client, [string] $Command) {
     while ([DateTime]::UtcNow -lt $until) {
         $line = Read-Log | Where-Object { $_.Contains($marker) } | Select-Object -Last 1
         if ($line) { return $line.Substring($line.IndexOf($marker) + $marker.Length) }
-        Start-Sleep -Milliseconds 250
+        Start-Sleep -Milliseconds 100
     }
     return 'no reply'
 }
 
-function Expect([string] $What, [string] $State, [string] $Pattern, [switch] $Not) {
+# Asks until the reply matches, and returns the last reply. What one player does takes a moment to
+# reach the host and the other player, and longer on a busy machine, so the test waits for what it
+# expects rather than for a fixed time. A reply that never matches is returned for a check to fail on.
+function Poll([scriptblock] $Ask, [string] $Pattern, [int] $Seconds = 10) {
+    $until = [DateTime]::UtcNow.AddSeconds($Seconds)
+    while ($true) {
+        $reply = & $Ask
+        if ($reply -match $Pattern -or [DateTime]::UtcNow -ge $until) { return $reply }
+        Start-Sleep -Milliseconds 250
+    }
+}
+
+# Moves a character as staff would, and waits until the client playing it has it there. Until then,
+# what that client claims about where it stands is judged against the old place.
+function Teleport([int] $Client, [string] $Name, [int] $X, [int] $Y) {
+    [void](Send 0 "console|hexagon_teleport `"$Name`" $X $Y 60")
+    $until = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        if ((Send $Client 'state') -match 'pos=(-?[\d.]+),(-?[\d.]+),' -and
+            [Math]::Abs([double] $Matches[1] - $X) -lt 32 -and [Math]::Abs([double] $Matches[2] - $Y) -lt 32) { return }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $until)
+}
+
+# Checks a reply. Given the question instead, in braces, it asks until the answer is the one wanted.
+# That something did not happen is checked once, after something sent later has arrived.
+function Expect([string] $What, $State, [string] $Pattern, [switch] $Not) {
+    if ($State -is [scriptblock]) { $State = if ($Not) { & $State } else { Poll $State $Pattern } }
     if (($State -match $Pattern) -ne [bool] $Not) { Write-Host "  ok   $What" -ForegroundColor Green }
     else {
         $script:failures++
@@ -73,7 +109,7 @@ function Expect([string] $What, [string] $State, [string] $Pattern, [switch] $No
 function Start-Server([string] $DataFolder) {
     $start = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $SboxRoot 'sbox-server.exe'))
     $start.WorkingDirectory = $SboxRoot
-    $start.Arguments = "+game `"$manifest`" +net_allow_local 1 +hexagon_data_root $DataFolder +hexagon_dev 1"
+    $start.Arguments = "+game `"$manifest`" +net_allow_local 1 +net_local_port $localPort +hexagon_data_root $DataFolder +hexagon_dev 1"
     $start.RedirectStandardOutput = $true
     # Errors are written to the other stream, and are what the last check most needs to see.
     $start.RedirectStandardError = $true
@@ -108,54 +144,54 @@ try {
     # gives it a window that is never shown, and it runs at full speed.
     foreach ($number in 1, 2) {
         $clients += Start-Process -FilePath (Join-Path $SboxRoot 'sbox.exe') -WorkingDirectory $SboxRoot -PassThru -WindowStyle Hidden `
-            -Environment @{ Path = $pathWithoutRenderDoc } -ArgumentList "+connect local +hexagon_dev 1 +hexagon_dev_client $number -nowindow"
+            -Environment @{ Path = $pathWithoutRenderDoc } -ArgumentList "+net_local_port $localPort +connect local +hexagon_dev 1 +hexagon_dev_client $number -nowindow"
     }
     foreach ($number in 1, 2) { Wait-Until "client $number to have a pawn" { (Send $number 'who') -match 'local=True' } }
 
+    # tools/test.ps1 starts the editor play test when this line appears.
     Write-Host '==> Two characters, one city' -ForegroundColor Cyan
     [void](Send 1 "create|John Doe|$description|citizen")
     [void](Send 2 "create|Jane Roe|A woman in a grey coat, watching the street.|citizen")
     [void](Send 1 'enter|John Doe')
-    Start-Sleep -Seconds 1
+    [void](Poll { Send 1 'state' } "has=True name='John Doe'")
     [void](Send 2 'enter|John Doe')
-    Expect 'a character already in the city cannot be entered twice' (Send 2 'state') 'has=False .*already in the city'
+    Expect 'a character already in the city cannot be entered twice' { Send 2 'state' } 'has=False .*already in the city'
     [void](Send 2 'enter|Jane Roe')
-    [void](Send 0 'console|hexagon_teleport "John Doe" 240 -150 60')
-    [void](Send 0 'console|hexagon_teleport "Jane Roe" 300 -150 60')
-    Start-Sleep -Seconds 2
+    [void](Poll { Send 2 'state' } "has=True name='Jane Roe'")
+    Teleport 1 'John Doe' 240 -150
+    Teleport 2 'Jane Roe' 300 -150
 
     Write-Host '==> Perception' -ForegroundColor Cyan
+    Expect 'the other player is visible, with the description an onlooker would see' { Send 1 'proxies' } "has=True .*seen='A woman in a grey coat"
     $seen = Send 1 'proxies'
-    Expect 'the other player is visible, with the description an onlooker would see' $seen "has=True .*seen='A woman in a grey coat"
     Expect 'her name and faction were never sent' $seen "name='' faction=''"
     Expect 'nor is the name anywhere in what the client holds' $seen 'Jane' -Not
     Expect 'each client knows its own name' (Send 2 'state') "name='Jane Roe' faction='Citizen'"
 
     Write-Host '==> Speech reaches who is in range, and nobody else' -ForegroundColor Cyan
     [void](Send 1 'say|Morning')
-    $heard = Send 2 'state'
+    $heard = Poll { Send 2 'state' } 'says "Morning"'
     Expect 'speech reached a listener 60 units away, from a stranger' $heard '\[A tired resident of the city\.\] says "Morning"'
     Expect 'and did not carry his name' $heard 'chat=\[.*John Doe' -Not
     [void](Send 1 'introduce')
     [void](Send 1 'say|I am John')
-    $heard = Send 2 'state'
-    Expect 'once he introduced himself, she knows him' $heard 'known=\[John Doe\].*John Doe says "I am John"'
+    Expect 'once he introduced himself, she knows him' { Send 2 'state' } 'known=\[John Doe\].*John Doe says "I am John"'
     Expect 'telling is one way: he still sees a stranger' (Send 1 'proxies') "label='\[A woman in a grey coat"
-    Expect 'the journal names who heard it' (Send 0 'journal|chat.say') "actor='John Doe' witnesses=1"
-    [void](Send 0 'console|hexagon_teleport "Jane Roe" 440 -150 60')
-    Start-Sleep -Seconds 2
+    Expect 'the journal names who heard it' { Send 0 'journal|chat.say' } "actor='John Doe' witnesses=1"
+    Teleport 2 'Jane Roe' 440 -150
     Write-Host "       $(Send 0 'who')" -ForegroundColor DarkGray
     [void](Send 1 'say|/w keep this quiet')
     [void](Send 1 'say|Still here')
-    $heard = Send 2 'state'
+    # The host sends what is said in the order it was said, so once the second line has arrived the
+    # first would have.
+    $heard = Poll { Send 2 'state' } 'Still here'
     Expect 'a whisper did not reach a listener 200 units away' $heard 'keep this quiet' -Not
     Expect 'ordinary speech still did' $heard 'Still here'
-    Expect 'the journal shows the whisper had no witnesses' (Send 0 'journal|chat.whisper') 'witnesses=0'
-    [void](Send 0 'console|hexagon_teleport "Jane Roe" 1500 -150 60')
-    Start-Sleep -Seconds 2
+    Expect 'the journal shows the whisper had no witnesses' { Send 0 'journal|chat.whisper' } 'witnesses=0'
+    Teleport 2 'Jane Roe' 1500 -150
     [void](Send 1 'say|/y can anyone hear me')
     [void](Send 1 'say|//back in five')
-    $heard = Send 2 'state'
+    $heard = Poll { Send 2 'state' } 'back in five'
     Expect 'a yell did not carry 1260 units' $heard 'can anyone hear me' -Not
     Expect 'out-of-character chat reached everyone' $heard '\[OOC\] [^:/]+: back in five'
 
@@ -163,158 +199,161 @@ try {
     # goto is what a cheat does: the client simply declares itself somewhere else.
     [void](Send 2 'goto|250|-150|60')
     [void](Send 1 'say|Nobody is near me')
-    Expect 'claiming to stand beside a speaker did not let her listen in' (Send 2 'state') 'Nobody is near me' -Not
-    Expect 'the journal agrees nobody heard' (Send 0 'journal|chat.say') 'witnesses=0'
-    Start-Sleep -Seconds 2
-    Expect 'the host sent her back' (Send 2 'state') 'pos=1[45]\d\d'
-    Expect 'and put the claim on record' (Send 0 'journal') 'movement\.implausible!=[1-9]'
+    # He hears himself once the host has handled it, and had she counted as near, she would have been sent it then.
+    [void](Poll { Send 1 'state' } 'John Doe says "Nobody is near me"')
+    Expect 'claiming to stand beside a speaker did not let her listen in' { Send 2 'state' } 'Nobody is near me' -Not
+    Expect 'the journal agrees nobody heard' { Send 0 'journal|chat.say' } 'witnesses=0'
+    Expect 'the host sent her back' { Send 2 'state' } 'pos=1[45]\d\d'
+    Expect 'and put the claim on record' { Send 0 'journal' } 'movement\.implausible!=[1-9]'
 
     Write-Host '==> The world is shared' -ForegroundColor Cyan
     [void](Send 1 'door|Door 1|use')
-    Start-Sleep -Seconds 1
-    Expect 'a door one player opened is open for the other' (Send 2 'state') 'Door 1:open=True'
+    Expect 'a door one player opened is open for the other' { Send 2 'state' } 'Door 1:open=True'
     [void](Send 2 'door|Door 1|use')
-    Expect 'and out of reach for a player far away' (Send 2 'state') 'Door 1:open=True.*too far away'
+    Expect 'and out of reach for a player far away' { Send 2 'state' } 'Door 1:open=True.*too far away'
 
     Write-Host '==> Radio reaches those tuned in, and nobody else' -ForegroundColor Cyan
     foreach ($name in 'John Doe', 'Jane Roe') { [void](Send 0 "console|hexagon_give `"$name`" radio") }
-    Start-Sleep -Seconds 1
+    foreach ($client in 1, 2) { [void](Poll { Send $client 'state' } 'items=\[Radio') }
     [void](Send 1 'tune|0|101.5')
     [void](Send 2 'tune|0|101.5')
+    foreach ($client in 1, 2) { [void](Poll { Send $client 'state' } 'Radio~101\.5@') }
     [void](Send 1 'say|/r unit one to control')
-    Expect 'a radio carries 1260 units to one tuned the same, by a name she was given' (Send 2 'state') '\[101\.5\] John Doe: "unit one to control"'
+    Expect 'a radio carries 1260 units to one tuned the same, by a name she was given' { Send 2 'state' } '\[101\.5\] John Doe: "unit one to control"'
     [void](Send 2 'say|/r control here')
-    $heard = Send 1 'state'
+    $heard = Poll { Send 1 'state' } 'control here'
     Expect 'he was never given her name, and a radio shows no face' $heard '\[101\.5\] A voice: "control here"'
     Expect 'so nothing of what she looks like came with it' $heard 'grey coat' -Not
-    Expect 'the journal names who was listening' (Send 0 'journal|chat.radio') "actor='Jane Roe' witnesses=1"
+    Expect 'the journal names who was listening' { Send 0 'journal|chat.radio' } "actor='Jane Roe' witnesses=1"
     [void](Send 2 'tune|0|102.0')
+    [void](Poll { Send 2 'state' } 'Radio~102\.0@')
     [void](Send 1 'say|/r is this thing on')
-    Expect 'retuned, she hears nothing' (Send 2 'state') 'is this thing on' -Not
-    Expect 'and the journal agrees' (Send 0 'journal|chat.radio') "actor='John Doe' witnesses=0"
-    [void](Send 0 'console|hexagon_teleport "Jane Roe" 300 -150 60')
-    Start-Sleep -Seconds 2
+    [void](Poll { Send 1 'state' } 'John Doe: "is this thing on"')
+    Expect 'retuned, she hears nothing' { Send 2 'state' } 'is this thing on' -Not
+    Expect 'and the journal agrees' { Send 0 'journal|chat.radio' } "actor='John Doe' witnesses=0"
+    Teleport 2 'Jane Roe' 300 -150
     [void](Send 1 'say|/r standing right here')
-    Expect 'beside him she hears a man talking into a radio, whatever hers is tuned to' (Send 2 'state') 'John Doe radios "standing right here"'
+    Expect 'beside him she hears a man talking into a radio, whatever hers is tuned to' { Send 2 'state' } 'John Doe radios "standing right here"'
     [void](Send 2 'drop|0')
 
     Write-Host '==> Handing over takes two' -ForegroundColor Cyan
-    [void](Send 0 'console|hexagon_teleport "Jane Roe" 300 -150 60')
+    Teleport 2 'Jane Roe' 300 -150
     foreach ($gift in 'pistol', 'pistol_round 4', 'zip_tie', 'token 50') { [void](Send 0 "console|hexagon_give `"John Doe`" $gift") }
     [void](Send 0 'console|hexagon_give "Jane Roe" water')
-    Start-Sleep -Seconds 2
-    Expect 'what staff gave him is in his hands, money with the rest' (Send 1 'state') 'items=\[Radio~101\.5@0,0, Pistol@2,0, Pistol roundx4@4,0, Zip tie@5,0, Tokenx50@0,1\]'
+    Expect 'what staff gave him is in his hands, money with the rest' { Send 1 'state' } 'items=\[Radio~101\.5@0,0, Pistol@2,0, Pistol roundx4@4,0, Zip tie@5,0, Tokenx50@0,1\]'
+    [void](Poll { Send 2 'state' } 'items=\[Water@0,0\]')
     [void](Send 1 'offer|4|30')
-    Expect 'she is asked, by the name she was given' (Send 2 'state') "offer='John Doe offers you 30 Token\.'"
+    Expect 'she is asked, by the name she was given' { Send 2 'state' } "offer='John Doe offers you 30 Token\.'"
     Expect 'and nothing has moved yet' (Send 1 'state') 'Tokenx50@0,1'
     [void](Send 2 'answer|1')
-    Expect 'she took it' (Send 2 'state') "items=\[Water@0,0, Tokenx30@1,0\] .*offer='' .*You take 30 Token\."
-    Expect 'and it left his hands' (Send 1 'state') 'Tokenx20@0,1.*Your offer is taken\.'
+    Expect 'she took it' { Send 2 'state' } "items=\[Water@0,0, Tokenx30@1,0\] .*offer='' .*You take 30 Token\."
+    Expect 'and it left his hands' { Send 1 'state' } 'Tokenx20@0,1.*Your offer is taken\.'
     [void](Send 1 'offer|3|1')
+    [void](Poll { Send 2 'state' } "offer='John Doe offers you [^']*Zip tie")
     [void](Send 2 'answer|0')
-    Expect 'an offer can be refused, and then nothing moves' (Send 1 'state') 'Zip tie@5,0.*Your offer is refused\.'
+    Expect 'an offer can be refused, and then nothing moves' { Send 1 'state' } 'Zip tie@5,0.*Your offer is refused\.'
     [void](Send 1 'offer|3|1')
-    [void](Send 0 'console|hexagon_teleport "Jane Roe" 440 -150 60')
-    Start-Sleep -Seconds 2
-    Expect 'an offer lapses once the two have parted' "$(Send 2 'state') $(Send 1 'state')" "offer='' .*The offer lapses\..*Zip tie@5,0.*Your offer lapses\."
-    Expect 'on the record, with why' (Send 0 'journal|offer.lapse') 'ok=True .*data=\[reason=apart\]'
-    [void](Send 0 'console|hexagon_teleport "Jane Roe" 300 -150 60')
+    [void](Poll { Send 2 'state' } "offer='John Doe offers you [^']*Zip tie")
+    Teleport 2 'Jane Roe' 440 -150
+    Expect 'an offer lapses once the two have parted' { "$(Send 2 'state') $(Send 1 'state')" } "offer='' .*The offer lapses\..*Zip tie@5,0.*Your offer lapses\."
+    Expect 'on the record, with why' { Send 0 'journal|offer.lapse' } 'ok=True .*data=\[reason=apart\]'
+    Teleport 2 'Jane Roe' 300 -150
     [void](Send 0 'console|hexagon_door "Door 2" assign "John Doe"')
-    Start-Sleep -Seconds 2
-    Expect 'staff assigned him a flat' (Send 1 'state') 'owned=\[Door 2\]'
+    Expect 'staff assigned him a flat' { Send 1 'state' } 'owned=\[Door 2\]'
     [void](Send 1 'offerdoor|Door 2')
-    Expect 'its owner offers the title like anything else' (Send 2 'state') "offer='John Doe offers you the title to Door 2\.'"
+    Expect 'its owner offers the title like anything else' { Send 2 'state' } "offer='John Doe offers you the title to Door 2\.'"
     [void](Send 2 'answer|1')
-    Expect 'once she accepts, it is hers' (Send 2 'state') 'owned=\[Door 2\]'
-    Expect 'and no longer his' (Send 1 'state') 'owned=\[\]'
-    Expect 'the hand-over is on record, from him to her' (Send 0 'journal|door.assign') "actor='John Doe' .*data=\[owner=Jane Roe from=John Doe\]"
+    Expect 'once she accepts, it is hers' { Send 2 'state' } 'owned=\[Door 2\]'
+    Expect 'and no longer his' { Send 1 'state' } 'owned=\[\]'
+    Expect 'the hand-over is on record, from him to her' { Send 0 'journal|door.assign' } "actor='John Doe' .*data=\[owner=Jane Roe from=John Doe\]"
 
     Write-Host '==> Violence is slow, visible and on the record' -ForegroundColor Cyan
     Expect 'four rounds are one pile' (Send 1 'state') 'Pistol roundx4@'
     [void](Send 1 'equip|1')
-    Expect 'a drawn pistol is something anyone can see' (Send 2 'proxies') "held='Pistol'"
-    foreach ($shot in 1..3) { [void](Send 1 'attack'); Start-Sleep -Milliseconds 300 }
-    $state = Send 2 'state'
-    Expect 'three shots put her down, not out' $state 'has=True .*health=0 down=True'
-    Expect 'he sees her fall but not her health' (Send 1 'proxies') 'down=True .*health=0 has=True'
-    $journal = Send 0 'journal'
-    Expect 'each shot, and the fall, are on record' $journal 'combat\.attack=3 .*character\.downed=1'
+    Expect 'a drawn pistol is something anyone can see' { Send 2 'proxies' } "held='Pistol'"
+    # A pistol fires at most every half second, and the host ignores a shot sooner than that. So each
+    # shot waits for the last to have used its round, and then for the pistol to be ready again.
+    foreach ($left in 'x3', 'x2', '') {
+        [void](Send 1 'attack')
+        [void](Poll { Send 1 'state' } "Pistol round$left@")
+        if ($left) { Start-Sleep -Milliseconds 550 }
+    }
+    Expect 'three shots put her down, not out' { Send 2 'state' } 'has=True .*health=0 down=True'
+    Expect 'he sees her fall but not her health' { Send 1 'proxies' } 'down=True .*health=0 has=True'
+    Expect 'each shot, and the fall, are on record' { Send 0 'journal' } 'combat\.attack=3 .*character\.downed=1'
     Expect 'each shot used up a round' (Send 1 'state') 'Pistol round@'
     [void](Send 2 'leave')
-    Expect 'she cannot leave the scene' (Send 2 'state') 'has=True .*cannot leave the city like this'
+    Expect 'she cannot leave the scene' { Send 2 'state' } 'has=True .*cannot leave the city like this'
 
     Write-Host '==> Searching is opening a holder' -ForegroundColor Cyan
     [void](Send 1 'act|person.search')
-    Expect 'he sees what she carries' (Send 1 'state') 'open=\[Belongings: Water, Tokenx30\]'
-    Expect 'and she is told' (Send 2 'state') 'going through your belongings'
+    Expect 'he sees what she carries' { Send 1 'state' } 'open=\[Belongings: Water, Tokenx30\]'
+    Expect 'and she is told' { Send 2 'state' } 'going through your belongings'
     [void](Send 1 'take|1')
-    Expect 'what he took left her inventory' (Send 2 'state') 'items=\[Water@0,0\] '
-    Expect 'and joined his own pile' (Send 1 'state') 'Tokenx50@0,1'
+    Expect 'what he took left her inventory' { Send 2 'state' } 'items=\[Water@0,0\] '
+    Expect 'and joined his own pile' { Send 1 'state' } 'Tokenx50@0,1'
     [void](Send 1 'act|person.revive')
-    Expect 'helped up, she is no longer searchable' "$(Send 2 'state') $(Send 1 'state')" 'health=25 down=False .*open=\[: \]'
+    Expect 'helped up, she is no longer searchable' { "$(Send 2 'state') $(Send 1 'state')" } 'health=25 down=False .*open=\[: \]'
 
     Write-Host '==> Restraints' -ForegroundColor Cyan
     [void](Send 2 'act|person.restrain')
-    Expect 'she has nothing to bind him with' (Send 2 'state') 'nothing that lets you do that'
+    Expect 'she has nothing to bind him with' { Send 2 'state' } 'nothing that lets you do that'
     [void](Send 1 'act|person.restrain')
-    Expect 'his zip tie bound her, and was used up' "$(Send 2 'state') $(Send 1 'state')" 'restrained=True .*Your hands are bound.*items=\[(?![^\]]*Zip tie)'
+    Expect 'his zip tie bound her, and was used up' { "$(Send 2 'state') $(Send 1 'state')" } 'restrained=True .*Your hands are bound.*items=\[(?![^\]]*Zip tie)'
     [void](Send 2 'drop|0')
-    Expect 'bound hands do nothing' (Send 2 'state') 'items=\[Water@.*cannot do that now'
+    Expect 'bound hands do nothing' { Send 2 'state' } 'items=\[Water@.*cannot do that now'
     [void](Send 1 'act|person.release')
-    Expect 'released' (Send 2 'state') 'restrained=False'
+    Expect 'released' { Send 2 'state' } 'restrained=False'
 
     Write-Host '==> Death is a deliberate act, and it is final' -ForegroundColor Cyan
     [void](Send 1 'act|person.finish')
     Expect 'someone standing cannot be finished: the verb is not even offered' (Send 0 'journal') 'character\.death|verb\.person\.finish' -Not
     [void](Send 1 'attack')
-    Start-Sleep -Milliseconds 500
+    # He can finish her once his own client shows her down and offers it.
+    [void](Poll { Send 1 'proxies' } 'down=True')
     [void](Send 1 'act|person.finish')
-    Start-Sleep -Seconds 2
-    Expect 'she is dead, and her player is back at the list, where the dead are kept' (Send 2 'state') 'has=False .*characters=\[John Doe, Jane Roe\(dead\)\].*Jane Roe has died\.'
-    $journal = Send 0 'journal'
+    Expect 'she is dead, and her player is back at the list, where the dead are kept' { Send 2 'state' } 'has=False .*characters=\[John Doe, Jane Roe\(dead\)\].*Jane Roe has died\.'
+    $journal = Poll { Send 0 'journal' } '(?<!\S)character\.death=1(?!\S)'
     Expect 'the death is on record' $journal '(?<!\S)character\.death=1(?!\S)'
     Expect 'and the title she held went with her' $journal '(?<!\S)door\.release=1(?!\S)'
+    [void](Poll { Send 1 'state' } 'bodies=1 ')
     [void](Send 1 'act|corpse.search')
-    Expect 'what she carried is on her body' (Send 1 'state') 'bodies=1 .*open=\[Body: Water\]'
+    Expect 'what she carried is on her body' { Send 1 'state' } 'bodies=1 .*open=\[Body: Water\]'
     [void](Send 1 'close')
 
     Write-Host '==> The next life waits; staff can undo a death' -ForegroundColor Cyan
     [void](Send 2 "create|Max Muster|$description|citizen")
     [void](Send 2 'enter|Max Muster')
-    $state = Send 2 'state'
+    $state = Poll { Send 2 'state' } 'Max Muster arrives in the city'
     Expect 'the next character is made at once' $state 'characters=\[John Doe, Jane Roe\(dead\), Max Muster\(waits\)\]'
     Expect 'but enters the city a day after the death' $state 'Max Muster arrives in the city in 2[34] hours'
     [void](Send 0 'console|hexagon_restore "Jane Roe"')
-    Start-Sleep -Seconds 1
-    Expect 'staff restore nobody while the account has all the lives it may' "$(Read-Log)" 'Their account already has John Doe, Max Muster alive\.'
+    Expect 'staff restore nobody while the account has all the lives it may' { "$(Read-Log)" } 'Their account already has John Doe, Max Muster alive\.'
     [void](Send 2 'delete|Max Muster')
+    [void](Poll { Send 2 'state' } 'characters=\[John Doe, Jane Roe\(dead\)\]')
     [void](Send 0 'console|hexagon_restore "Jane Roe"')
-    Start-Sleep -Seconds 1
-    Expect 'once there is room, she is alive again' (Send 2 'state') 'characters=\[John Doe, Jane Roe\] '
+    Expect 'once there is room, she is alive again' { Send 2 'state' } 'characters=\[John Doe, Jane Roe\] '
     [void](Send 2 'enter|Jane Roe')
-    Start-Sleep -Seconds 2
-    Expect 'she gets up where she fell, barely, with what was still on her' (Send 2 'state') 'items=\[Water@0,0\] .*owned=\[\] .*health=25 down=False .*bodies=0 '
-    Expect 'and the body is gone for him too' (Send 1 'state') 'bodies=0 '
-    Expect 'the restore is on record' (Send 0 'journal') '(?<!\S)operator\.restore=1(?!\S)'
+    Expect 'she gets up where she fell, barely, with what was still on her' { Send 2 'state' } 'items=\[Water@0,0\] .*owned=\[\] .*health=25 down=False .*bodies=0 '
+    Expect 'and the body is gone for him too' { Send 1 'state' } 'bodies=0 '
+    Expect 'the restore is on record' { Send 0 'journal' } '(?<!\S)operator\.restore=1(?!\S)'
 
     Write-Host '==> Leaving does not end a scene' -ForegroundColor Cyan
-    [void](Send 0 'console|hexagon_teleport "Jane Roe" 300 -150 60')
+    Teleport 2 'Jane Roe' 300 -150
     [void](Send 0 'console|hexagon_give "John Doe" zip_tie')
-    Start-Sleep -Seconds 2
+    [void](Poll { Send 1 'state' } 'Zip tie@')
+    [void](Poll { Send 1 'proxies' } 'down=False restrained=False .*has=True')
     [void](Send 1 'act|person.restrain')
-    Start-Sleep -Seconds 1
-    Expect 'he binds her again' (Send 2 'state') 'restrained=True'
+    Expect 'he binds her again' { Send 2 'state' } 'restrained=True'
     Stop-Process -Id $clients[1].Id -Force
     Wait-Until 'the server to notice the disconnect' { (Send 0 'journal') -match 'connection\.leave=1' }
-    Expect 'the player who left is gone from the other client' (Send 1 'proxies') '^[^A-Za-z]*$'
+    Expect 'the player who left is gone from the other client' { Send 1 'proxies' } '^[^A-Za-z]*$'
     # What someone left behind looks like is sent once the network has stopped sending it to those too far away.
-    Start-Sleep -Seconds 4
-    Expect 'but the character she left bound is still standing there, and he is sent it' (Send 1 'sleepers') '^\d+,-?\d+,bound$'
+    Expect 'but the character she left bound is still standing there, and he is sent it' { Send 1 'sleepers' } '^\d+,-?\d+,bound$'
     Expect 'he can free her' (Send 1 'act|person.release') '^sent person\.release$'
-    Start-Sleep -Seconds 1
-    Expect 'and then nobody is left there' (Send 1 'state') 'sleepers=0 '
-    Expect 'freeing someone whose player has gone is on record like any other' (Send 0 'journal|verb.person.release') "ok=True actor='John Doe' .*target=Sleeper"
-    Expect 'both joins and every entry are on record' (Send 0 'journal') 'connection\.join=2 .*city\.enter=3'
+    Expect 'and then nobody is left there' { Send 1 'state' } 'sleepers=0 '
+    Expect 'freeing someone whose player has gone is on record like any other' { Send 0 'journal|verb.person.release' } "ok=True actor='John Doe' .*target=Sleeper"
+    Expect 'both joins and every entry are on record' { Send 0 'journal' } 'connection\.join=2 .*city\.enter=3'
 
     Write-Host '==> A copy taken while the server runs is a working backup' -ForegroundColor Cyan
     $saved = Send 0 'roster'
@@ -324,7 +363,7 @@ try {
     Expect 'the running server has both characters saved' $saved 'characters=\[Jane Roe:.*John Doe:.*\] holders=[1-9]'
     foreach ($client in $clients) { if (-not $client.HasExited) { Stop-Process -Id $client.Id -Force } }
     Stop-Process -Id $script:server.Id -Force
-    Start-Sleep -Seconds 2
+    $script:server.WaitForExit()
     Start-Server $copy
     Expect 'a server started on the copy has every character, with all they had' (Send 0 'roster') "^$([regex]::Escape($saved))$"
 
@@ -334,7 +373,8 @@ try {
 finally {
     foreach ($client in $clients) { if (-not $client.HasExited) { Stop-Process -Id $client.Id -Force } }
     if ($script:server -and -not $script:server.HasExited) { Stop-Process -Id $script:server.Id -Force }
-    Start-Sleep -Seconds 1
+    # Their files are let go once they have exited.
+    foreach ($process in @($clients) + @($script:server)) { if ($process) { [void]$process.WaitForExit(10000) } }
     # A failed run keeps its data, journal included: that is the evidence of what the host decided.
     $kept = Get-ChildItem -LiteralPath (Join-Path $SboxRoot 'data') -Recurse -Directory -Filter "$dataRoot*" -ErrorAction SilentlyContinue
     if ($script:failures -gt 0) { $kept | ForEach-Object { Write-Host "Data kept at $($_.FullName)" -ForegroundColor DarkGray } }
