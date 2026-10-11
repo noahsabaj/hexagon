@@ -372,6 +372,15 @@ menu, and a person does.)
   the menu also empties, in the menu's context (`MenuDll.Tick`). A `play_stop` run from there
   closed the city with the menu's data folder, which is none, and the closing save failed. The
   store now keeps the data folder it was made with. (2026-10-11)
+- Of a run of the editor test, about a minute was the editor starting and forty seconds the
+  scenario, and the two-client test was much the same, so playing only part of a scenario saves
+  little. `playtest.ps1 -Attach` plays in an editor already open, which builds edits as they are
+  saved: about forty seconds a run, or under half a minute stopped early with `-Until`. Before it
+  plays, it points the editor at the run's own data folder and asks again; the city the editor
+  keeps is never played in. And the first scene played after the editor started sometimes had none
+  of the game's components, the code not yet in, and the test waited a minute for a player who
+  could not come. The driver now says there is no game manager, and the scene is played again at
+  once. (2026-10-11)
 
 ## 2026-10-10: A change to several documents is saved as one
 

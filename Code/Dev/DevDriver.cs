@@ -217,6 +217,8 @@ public static class DevCommands
 		}
 		if ( args[0] == "hostid" ) return $"local={Connection.Local?.SteamId.ValueUnsigned} host={Connection.Host?.SteamId.ValueUnsigned} address={Connection.Local?.Address} name={Connection.Local?.DisplayName}";
 		if ( args[0] == "convar" ) return ConsoleSystem.GetValue( args[1] ) ?? "unset";
+		// A scene played before the editor had the game's code in has none of its components.
+		if ( GameManager.Instance is null ) return "no game manager";
 		if ( Player.Local is not { } player ) return "no local player";
 		try
 		{

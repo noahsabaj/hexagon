@@ -8,7 +8,13 @@ param(
     # The game to play. Defaults to the sibling HL2RP checkout, whose scene and assets the scenario expects.
     [string] $GameRoot,
     [string] $SboxRoot = 'C:\Program Files (x86)\Steam\steamapps\common\sbox',
-    [int] $TimeoutSeconds = 480
+    [int] $TimeoutSeconds = 480,
+    # Plays in the editor that is already open on the game, which takes code edits in as they are
+    # saved, and leaves it open. Starting the editor is most of a run.
+    [switch] $Attach,
+    # Stops once the section whose name starts with this is played. Each section builds on the ones
+    # before it, so they are played from the first.
+    [string] $Until
 )
 
 Set-StrictMode -Version Latest
@@ -26,7 +32,11 @@ $description = "A tired resident of the city."
 $cityCut = '1-4-6-3-2'
 $flatCut = '5-3-3-2-7'
 
-if (Get-Process -Name 'sbox-dev' -ErrorAction SilentlyContinue) { throw 'Close the s&box editor first.' }
+if (-not $Attach -and (Get-Process -Name 'sbox-dev' -ErrorAction SilentlyContinue)) { throw 'Close the s&box editor first, or pass -Attach to play in it.' }
+if ($Until) {
+    $sections = Select-String -LiteralPath $PSCommandPath -Pattern "^\s*Section '(.+)'\s*$" | ForEach-Object { $_.Matches[0].Groups[1].Value -replace "''", "'" }
+    if (-not ($sections | Where-Object { $_ -like "$Until*" })) { throw "No section's name starts with '$Until'. The sections are: $($sections -join '; ')." }
+}
 
 $http = [System.Net.Http.HttpClient]::new()
 $http.Timeout = [TimeSpan]::FromSeconds(60)
@@ -44,6 +54,9 @@ $script:allowance = 10.0
 $script:counted = [DateTime]::UtcNow
 $script:lastProblem = 'none'
 $script:replayed = $false
+$script:untilPlayed = $false
+$script:consoleFrom = 0
+$untilReached = 'hexagon-playtest: the -Until section was played'
 
 function Invoke-Editor([string] $Method, $Params) {
     $script:requestId++
@@ -84,7 +97,7 @@ function Snapshot([string] $Name, [double] $Settle = 0.3) {
 
 function Wait-Until([string] $What, [scriptblock] $Condition) {
     while ([DateTime]::UtcNow -lt $script:deadline) {
-        if ($editor.HasExited) { throw "s&box exited with code $($editor.ExitCode) while waiting for $What." }
+        if ($editor -and $editor.HasExited) { throw "s&box exited with code $($editor.ExitCode) while waiting for $What." }
         try { if (& $Condition) { return } } catch { $script:lastProblem = $_.Exception.Message }
         Start-Sleep -Milliseconds 500
     }
@@ -211,21 +224,23 @@ function Start-Play {
         # Attach the driver once, then wait for the pawn: adding it again on every retry fails once it exists.
         Wait-Until 'the driver component' { [void](Invoke-Tool 'add_component' @{ id = $hud; type = 'DevDriver' }); $true }
         # A scene played while the editor was still taking the code in has no game manager, so nobody
-        # ever arrives. That is the editor, not the game: the scene is played again. A game that lets
-        # nobody in still fails, at the deadline.
+        # ever arrives. That is the editor, not the game: the scene is played again, as soon as the
+        # driver says so. A game that lets nobody in still fails, at the deadline.
         $arrival = [DateTime]::UtcNow.AddSeconds(60)
-        while ([DateTime]::UtcNow -lt $arrival) {
-            if ($editor.HasExited) { throw "s&box exited with code $($editor.ExitCode) while waiting for the local player." }
+        $unmanaged = 0
+        while ([DateTime]::UtcNow -lt $arrival -and $unmanaged -lt 3) {
+            if ($editor -and $editor.HasExited) { throw "s&box exited with code $($editor.ExitCode) while waiting for the local player." }
             if ([DateTime]::UtcNow -ge $script:deadline) { throw "Timed out waiting for the local player. Last problem: $($script:lastProblem)" }
             try {
                 $reply = Send 'state'
                 if ($reply -match '^has=') { return }
+                if ($reply -eq 'no game manager') { $unmanaged++ }
                 $script:lastProblem = "driver said: $reply"
             }
             catch { $script:lastProblem = $_.Exception.Message }
             Start-Sleep -Milliseconds 500
         }
-        Write-Host "       nobody arrived in a minute ($($script:lastProblem)); playing the scene again" -ForegroundColor DarkGray
+        Write-Host "       nobody arrived ($($script:lastProblem)); playing the scene again" -ForegroundColor DarkGray
         $script:replayed = $true
         [void](Invoke-Tool 'play_stop')
         Start-Sleep -Seconds 2
@@ -266,20 +281,77 @@ function Wait-GameCode {
     throw "Timed out waiting for the game assembly. Last problem: $($script:lastProblem)"
 }
 
-Write-Host "==> Starting the editor (data folder '$dataRoot')" -ForegroundColor Cyan
+# Where the editor keeps the game's data, as its console says when asked.
+function Get-DataRoot {
+    [void](Invoke-Tool 'console_command' @{ command = 'hexagon_data_root' })
+    $line = (Invoke-Tool 'read_console' @{ limit = 5; filter = 'hexagon_data_root - "' }) -split "`n" |
+        Where-Object { $_ -match 'hexagon_data_root - "' } | Select-Object -Last 1
+    if ($line -notmatch 'hexagon_data_root - "([^"]*)"') { throw 'The editor did not say where it keeps the game''s data.' }
+    return $Matches[1]
+}
+
+# Where the console is now, so that the run reads only what it logged itself.
+function Get-ConsoleCursor {
+    if ((Invoke-Tool 'read_console' @{ limit = 1 }) -match 'Cursor: (\d+)\s*$') { return [long] $Matches[1] }
+    return 0
+}
+
+# Checks what the game logged during the run, and stops playing.
+function Complete-Session {
+    # The editor sometimes looks the driver's type up while the assembly is still loading, and a scene
+    # played again was first played while the code was going in. That is about this harness, not the
+    # game, so it is not counted.
+    $notCounted = if ($script:replayed) { 'could not find Hexagon\.' } else { 'could not find Hexagon\.Dev\.DevDriver' }
+    $problems = @((Invoke-Tool 'read_console' @{ limit = 500; minimumLevel = 'Warn'; since = $script:consoleFrom }) -split "`n" |
+        Where-Object { $_ -match 'Hexagon|Exception|\[store\]|\[scene\]|\[death\]|\[restore\]|Whitelist violation|hexagon\.' -and $_ -notmatch "Bad texture|Error loading resource|$notCounted" })
+    Expect 'the session logged no game warnings or errors' "$($problems.Count) problem lines: $($problems -join ' | ')" '^0 problem'
+    [void](Invoke-Tool 'play_stop')
+}
+
+# Begins the next section, or ends the run once the -Until section has been played.
+function Section([string] $Name) {
+    if ($script:untilPlayed) { Complete-Session; throw $untilReached }
+    if ($Until -and $Name -like "$Until*") { $script:untilPlayed = $true }
+    Write-Host "==> $Name" -ForegroundColor Cyan
+}
+
 $script:deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
 $editor = $null
+$priorDataRoot = $null
 try {
-    Start-Editor
-    if (-not (Wait-GameCode)) {
-        Write-Host '       the editor opened the scene before the code was built, and never took the code in; starting it again' -ForegroundColor DarkGray
-        Stop-Process -Id $editor.Id -Force
-        $editor.WaitForExit()
-        Start-Editor
-        if (-not (Wait-GameCode)) { throw 'The editor twice opened the scene before the code was built.' }
+    if ($Attach) {
+        Write-Host "==> Playing in the open editor (data folder '$dataRoot')" -ForegroundColor Cyan
+        try { [void](Invoke-Editor 'initialize' ([ordered]@{ protocolVersion = '2025-03-26'; capabilities = @{}; clientInfo = @{ name = 'hexagon-playtest'; version = '1' } })) }
+        catch { throw "No editor answers at $endpoint. Open the game in the editor first, or run without -Attach." }
+        $ident = (Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json).Ident
+        $status = Invoke-Tool 'editor_status' | ConvertFrom-Json
+        if ($status.Project -ne $ident) { throw "The open editor has '$($status.Project)' open, not '$ident'." }
+        if ($status.IsPlaying) { [void](Invoke-Tool 'play_stop') }
+        # A code edit saved a moment ago may not have been noticed yet.
+        Start-Sleep -Seconds 1
+        Wait-Built
+        Wait-Until 'the game assembly' { (Invoke-Tool 'get_component_type' @{ name = 'DevDriver' }) -match 'Hexagon' }
+        # Played in the city the editor keeps, the scenario would write into it. The editor is pointed
+        # at this run's own folder and asked again; nothing is played until it says so.
+        $priorDataRoot = Get-DataRoot
+        [void](Invoke-Tool 'console_command' @{ command = "hexagon_data_root $dataRoot" })
+        $pointed = Get-DataRoot
+        if ($pointed -ne $dataRoot) { throw "The editor keeps the game's data in '$pointed', not in this run's '$dataRoot'; nothing was played." }
     }
+    else {
+        Write-Host "==> Starting the editor (data folder '$dataRoot')" -ForegroundColor Cyan
+        Start-Editor
+        if (-not (Wait-GameCode)) {
+            Write-Host '       the editor opened the scene before the code was built, and never took the code in; starting it again' -ForegroundColor DarkGray
+            Stop-Process -Id $editor.Id -Force
+            $editor.WaitForExit()
+            Start-Editor
+            if (-not (Wait-GameCode)) { throw 'The editor twice opened the scene before the code was built.' }
+        }
+    }
+    $script:consoleFrom = Get-ConsoleCursor
 
-    Write-Host '==> Characters' -ForegroundColor Cyan
+    Section 'Characters'
     Start-Play
     Expect 'a new city has no characters' (Send 'state') 'has=False .*characters=\[\]'
     Snapshot 'characters'
@@ -294,7 +366,7 @@ try {
     Expect 'the look-alike name was refused with a reason' $state 'characters=\[John Doe\].*reads like it'
     Expect 'a whitelisted faction refused an unlisted account' $state 'not whitelisted for Civil Protection'
 
-    Write-Host '==> Entering the city, chat, inventory' -ForegroundColor Cyan
+    Section 'Entering the city, chat, inventory'
     [void](Send 'enter|John Doe')
     [void](Send 'delete|John Doe')
     Expect 'a character that has lived is not deleted' { Send 'state' } 'characters=\[John Doe\].*has lived in the city'
@@ -308,7 +380,7 @@ try {
 
     # Some refusals leave the state as it was, so the test waits for the host to have recorded the
     # request before it looks; requests are judged in the order they are sent.
-    Write-Host '==> Doors' -ForegroundColor Cyan
+    Section 'Doors'
     [void](Send 'door|Door 1|use')
     Expect 'a door out of reach was refused' { Send 'state' } 'Door 1:open=False.*too far away'
     # goto is what a cheat does: the client simply declares itself somewhere else.
@@ -336,7 +408,7 @@ try {
     Expect 'a door authored as locked stayed shut' $state 'Door 2:open=False,locked=True.*The door is locked'
     Expect 'without a key, nobody locks a door' $state 'You have no key that fits'
 
-    Write-Host '==> A key is an item, cut to its lock' -ForegroundColor Cyan
+    Section 'A key is an item, cut to its lock'
     [void](Send 'console|hexagon_give "John Doe" keycard 1 city')
     [void](Send 'door|Door 1|lock')
     $state = Poll { Send 'state' } 'Door 1:open=False,locked=True'
@@ -358,7 +430,7 @@ try {
     Expect 'and lies in the world' $state 'ground=\[Keycard\]'
     Expect 'without the keycard the door stayed unlocked' $state 'Door 1:open=False,locked=False.*no key that fits'
 
-    Write-Host '==> Holders: the ground, a stocked crate' -ForegroundColor Cyan
+    Section 'Holders: the ground, a stocked crate'
     [void](Send 'pickup|Keycard')
     Expect 'picking it up is the same transfer in reverse' { Send 'state' } "Keycard#$cityCut@0,0.*ground=\[\]"
     [void](Send 'open|Crate')
@@ -378,7 +450,7 @@ try {
     [void](Send 'close')
     Expect 'the crate closed' { Send 'state' } 'open=\[: \]'
 
-    Write-Host '==> Harm, and being down' -ForegroundColor Cyan
+    Section 'Harm, and being down'
     [void](Send 'console|hexagon_hurt "John Doe" 40')
     Expect 'harm lowered health' { Send 'state' } 'health=60 down=False'
     Snapshot 'hurt' 0.6
@@ -396,7 +468,7 @@ try {
     [void](Send 'console|hexagon_revive "John Doe"')
     Expect 'helped up, barely' { Send 'state' } 'health=25 down=False'
 
-    Write-Host '==> Owning a door is title; its lock takes its key' -ForegroundColor Cyan
+    Section 'Owning a door is title; its lock takes its key'
     [void](Send 'console|hexagon_door "Door 2" assign "John Doe"')
     [void](Send 'door|Door 2|lock')
     [void](Poll { Send 'journal' } '(?<!\S)verb\.door\.lock!=4(?!\S)')
@@ -418,7 +490,7 @@ try {
     [void](Send 'console|hexagon_door "Door 2" release')
     Expect 'staff can take a title back' { Send 'state' } 'owned=\[\]'
 
-    Write-Host '==> Staff work in game, on the record' -ForegroundColor Cyan
+    Section 'Staff work in game, on the record'
     $steamId = Send 'steamid'
     [void](Send 'staff|who')
     Expect 'someone who is not staff is refused' { Send 'state' } 'staff=False said=\[You are not staff\.\]'
@@ -438,7 +510,7 @@ try {
     [void](Send 'staff|who')
     Expect 'and it can be taken away' { Send 'state' } 'staff=False said=\[You are not staff\.\]'
 
-    Write-Host '==> Radio' -ForegroundColor Cyan
+    Section 'Radio'
     [void](Send 'say|/r hello')
     Expect 'an untuned radio carries nothing' { Send 'state' } 'no radio tuned to anything'
     [void](Send 'tune|6|55')
@@ -447,14 +519,14 @@ try {
     [void](Send 'say|/r testing')
     Expect 'the dial belongs to the radio, and the speaker hears themselves on it' { Send 'state' } 'Radio~101\.5@0,1.*\[101\.5\] John Doe: "testing"'
 
-    Write-Host '==> What is left in a crate is anyone''s' -ForegroundColor Cyan
+    Section 'What is left in a crate is anyone''s'
     [void](Send 'open|Crate')
     [void](Send 'put|4')
     [void](Send 'put|2')
     Expect 'he left the keycard and a bandage in the crate' { Send 'state' } "open=\[Crate: Keycard#$cityCut, Bandage\]"
     [void](Send 'close')
 
-    Write-Host '==> A faction is people and a look' -ForegroundColor Cyan
+    Section 'A faction is people and a look'
     [void](Send 'leave')
     [void](Send "console|hexagon_whitelist $steamId civil_protection")
     [void](Send "create|Officer Kane|$description|civil_protection")
@@ -500,7 +572,7 @@ try {
     Snapshot 'crate-and-locker'
     Expect 'and put back' "$((Send 'state') -notmatch 'roundx10') $(Send 'state')" '^True .*Pistol roundx30@'
 
-    Write-Host '==> Leaving does not end a scene' -ForegroundColor Cyan
+    Section 'Leaving does not end a scene'
     [void](Send 'console|hexagon_hurt "Officer Kane" 500')
     # Moved after he fell, so only the save as the city closes knows where he is now.
     Teleport 'Officer Kane' 330 -100 8
@@ -508,7 +580,7 @@ try {
     [void](Poll { Send 'journal' } '(?<!\S)city\.leave!=2(?!\S)')
     Expect 'down, he cannot leave, so the city closes with him lying there' (Send 'state') 'has=True .*down=True .*cannot leave the city like this'
 
-    Write-Host '==> Restart' -ForegroundColor Cyan
+    Section 'Restart'
     [void](Invoke-Tool 'play_stop')
     Wait-Until 'play mode to stop' { -not (Invoke-Tool 'editor_status' | ConvertFrom-Json).IsPlaying }
     Start-Play
@@ -531,7 +603,7 @@ try {
     Expect 'what was left in the crate survived the restart' { Send 'state' } 'open=\[Crate: Bandage\]'
     [void](Send 'close')
 
-    Write-Host '==> Death is final' -ForegroundColor Cyan
+    Section 'Death is final'
     [void](Send 'act|person.finish')
     Expect 'someone left lying can be finished, and leaves a body' { Send 'state' } 'bodies=1 .*sleepers=0 '
     [void](Send 'act|corpse.search')
@@ -542,7 +614,7 @@ try {
     [void](Send 'enter|Officer Kane')
     Expect 'and nobody plays them again' { Send 'state' } 'Officer Kane is dead\.'
 
-    Write-Host '==> A life is ended by retiring; the next one waits' -ForegroundColor Cyan
+    Section 'A life is ended by retiring; the next one waits'
     [void](Send "console|hexagon_staff $steamId 1")
     [void](Send 'retire|John Doe')
     Expect 'retiring is a death' { Send 'state' } 'characters=\[John Doe\(dead\), Officer Kane\(dead\)\]'
@@ -556,7 +628,7 @@ try {
     [void](Send 'delete|Max Muster')
     Expect 'one that never lived is deleted, freeing its name' { Send 'state' } 'characters=\[John Doe\(dead\), Officer Kane\(dead\)\]'
 
-    Write-Host '==> Staff undo a death that broke the rules' -ForegroundColor Cyan
+    Section 'Staff undo a death that broke the rules'
     [void](Send 'staff|restore "Officer Kane"')
     Expect 'he is alive again' { Send 'state' } 'characters=\[John Doe\(dead\), Officer Kane\] .*said=\[Officer Kane is alive again'
     [void](Send "console|hexagon_staff $steamId 0")
@@ -565,7 +637,7 @@ try {
     Expect 'he gets up barely, with what was still on the body: what was taken stays taken' $state "items=\[Keycard#$cityCut@0,0, Pistol roundx30@3,0, Zip tiex2@4,0\] .*health=25 down=False .*bodies=0 "
     Expect 'where the body lay' $state 'pos=3[23]\d\.?\d*,-(9\d|1[01]\d)'
 
-    Write-Host '==> The journal' -ForegroundColor Cyan
+    Section 'The journal'
     $journal = Send 'journal'
     Expect 'every item came from a named source: staff, or the scene as built' $journal '(?<!\S)item\.issue=12(?!\S)'
     Expect 'what was used up, or went with a retired character, went through a sink' $journal '(?<!\S)item\.destroy=8(?!\S)'
@@ -585,17 +657,21 @@ try {
     Expect 'and the rearranging of piles' $journal '(?<!\S)item\.split=1(?!\S).*(?<!\S)item\.merge=1(?!\S)'
     Expect 'this client was told no other name' (Send 'proxies') '^[^A-Za-z]*$'
 
-    # The editor sometimes looks the driver's type up while the assembly is still loading, and a scene
-    # played again was first played while the code was going in. That is about this harness, not the
-    # game, so it is not counted.
-    $notCounted = if ($script:replayed) { 'could not find Hexagon\.' } else { 'could not find Hexagon\.Dev\.DevDriver' }
-    $problems = @((Invoke-Tool 'read_console' @{ limit = 500; minimumLevel = 'Warn' }) -split "`n" |
-        Where-Object { $_ -match 'Hexagon|Exception|\[store\]|\[scene\]|\[death\]|\[restore\]|Whitelist violation|hexagon\.' -and $_ -notmatch "Bad texture|Error loading resource|$notCounted" })
-    Expect 'the session logged no game warnings or errors' "$($problems.Count) problem lines: $($problems -join ' | ')" '^0 problem'
-    [void](Invoke-Tool 'play_stop')
+    Complete-Session
+}
+catch {
+    if ($_.Exception.Message -ne $untilReached) { throw }
 }
 finally {
     if ($editor -and -not $editor.HasExited) { Stop-Process -Id $editor.Id -Force }
+    # An open editor is left as it was found, but for the scene it plays.
+    if ($Attach -and $null -ne $priorDataRoot) {
+        try {
+            if ((Invoke-Tool 'editor_status' | ConvertFrom-Json).IsPlaying) { [void](Invoke-Tool 'play_stop') }
+            [void](Invoke-Tool 'console_command' @{ command = "hexagon_data_root `"$priorDataRoot`"" })
+        }
+        catch { Write-Host "Could not point the editor back at '$priorDataRoot': $($_.Exception.Message)" -ForegroundColor Yellow }
+    }
     $http.Dispose()
     # A failed run keeps its data, journal included: that is the evidence of what the host decided.
     $kept = Get-ChildItem -LiteralPath (Join-Path $SboxRoot 'data') -Recurse -Directory -Filter $dataRoot -ErrorAction SilentlyContinue
@@ -604,4 +680,5 @@ finally {
 }
 
 if ($script:failures -gt 0) { throw "$($script:failures) play-test expectation(s) failed." }
-Write-Host 'Play test passed in the real engine.' -ForegroundColor Green
+if ($Until -and -not $script:untilPlayed) { throw "No section's name starts with '$Until'." }
+Write-Host "Play test passed in the real engine$(if ($Until) { ", through '$Until'" })." -ForegroundColor Green

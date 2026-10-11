@@ -123,8 +123,8 @@ replies.
 
 ## Commands
 
-Run from this folder with the s&box editor closed. Those that need a game default to the sibling
-`hl2rp-hexagon` checkout; pass `-GameRoot` for another.
+Run from this folder with the s&box editor closed, but for `playtest.ps1 -Attach`. Those that need
+a game default to the sibling `hl2rp-hexagon` checkout; pass `-GameRoot` for another.
 
 ```bash
 pwsh tools/test.ps1
@@ -134,9 +134,11 @@ Runs the three below: `verify.ps1`, then the two-client play test, and the edito
 it once both clients have joined. Each line is marked with the test that wrote it. Needs Steam
 running and takes about three minutes.
 
-While working, run the least that covers the change: `dotnet test Tests` for a rule in
-`Code/Logic`, in seconds; `verify.ps1` for anything compiled against the engine, in about half a
-minute; and the play test that plays what changed. Run `test.ps1` once before merging.
+While working, keep the editor open on the game and run the least that covers the change:
+`dotnet test Tests` for a rule in `Code/Logic`, in seconds, and `playtest.ps1 -Attach`, which plays
+in the open editor once it has built the edit, in about forty seconds, or less with `-Until`. Close
+the editor and run `test.ps1` once before merging: it also compiles with warnings as errors and
+plays two clients on a dedicated server.
 
 ```bash
 pwsh tools/verify.ps1
@@ -152,6 +154,16 @@ Boots the editor, enters play mode, and plays a full scenario through the real R
 including a restart, in a throwaway data folder. It saves pictures of what it saw as
 `hexagon-look-*.png` in the temp folder. A failed run keeps its data folder, journal included.
 Takes about a minute and a half.
+
+```bash
+pwsh tools/playtest.ps1 -Attach -Until Doors
+```
+
+Plays in the editor already open on the game instead of starting one, a minute sooner, and leaves
+it open; the editor builds code edits as they are saved. The editor is pointed at the run's own
+data folder, and asked, before anything is played, and pointed back after. `-Until` stops once the
+section it names is played; each section builds on the ones before, so the run starts from the
+first.
 
 ```bash
 pwsh tools/playtest-server.ps1
