@@ -43,9 +43,10 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	/// <summary>A face: the same person is the same id tomorrow. It says nothing about who they are.</summary>
 	[Sync( SyncFlags.FromHost )] public Guid CharacterId { get; set; }
 	/// <summary>
-	/// The host's heartbeat. A client is only sent someone while they are in sight, and the host
-	/// cannot tell a client to drop a pawn another client owns, so a client that stops hearing this
-	/// knows the person has gone out of sight.
+	/// The host's heartbeat. A client is only sent someone while they are in sight, and only the
+	/// pawn's owner may tell a client to drop it, which the engine loses on its way through the host
+	/// (see <see cref="IsPresent"/>). So a client that stops hearing this knows the person has gone
+	/// out of sight.
 	/// </summary>
 	[Sync( SyncFlags.FromHost )] public int Pulse { get; set; }
 
@@ -79,6 +80,13 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	// The last claim the host believed, which the next one is traced from.
 	private Vector3? _lastClaim;
 
+	// Owner: the connections the host lets see this pawn. Its movement is sent to them and the host alone.
+	private readonly HashSet<Guid> _observers = new();
+	// Host: who the owner was last told may see it, and which owner was told.
+	private Guid[] _toldObservers = Array.Empty<Guid>();
+	private Guid _toldOwner;
+	private RealTimeUntil _untilObservers;
+
 	// Client-side: when the heartbeat last changed.
 	private int _seenPulse = -1;
 	private RealTimeSince _sincePulse;
@@ -92,12 +100,19 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	/// <summary>How much faster than a run a claim may be before it is disbelieved.</summary>
 	public const float SpeedTolerance = 1.5f;
 
+	/// <summary>How often, at most, the host works out who may see this pawn, in seconds.</summary>
+	public const float ObserverInterval = 0.25f;
+
 	/// <summary>Seconds without a heartbeat before a client takes someone to be out of sight.</summary>
 	public const float PulseTimeout = 2f;
 
 	/// <summary>
 	/// Whether this client is to show the person: they have a character, and, if they are someone
-	/// else, the host is still sending them.
+	/// else, the host is still sending them. Out of sight, the owner's client stops sending them here
+	/// and tells this client so, for the engine to make them inactive; but that notice reaches another
+	/// client through the host, which wraps it in a way the engine there does not unwrap
+	/// (<c>NetworkSystem.OnTargetedMessage</c> reads only packed messages from it), so it is lost, and
+	/// the heartbeat stopping is what tells.
 	/// </summary>
 	public bool IsPresent => HasCharacter && (!IsProxy || Networking.IsHost || _sincePulse < PulseTimeout);
 
@@ -181,6 +196,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	{
 		if ( !Networking.IsHost ) return;
 		Pulse = (int)(Time.Now * 2f);
+		HostTellObservers();
 		if ( _character is null || Controller is not { } controller || GameManager.Instance is not { } game ) return;
 		if ( _open is not null && !HostOpenIsValid() ) HostClose();
 		HostVitalsTick( game );
@@ -245,14 +261,44 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	}
 
 	/// <summary>
-	/// Host: a client is sent this pawn only while its own character is in the city and near enough
-	/// to see it, by where the host believes both are, so no claim of the client's widens what it sees.
+	/// A client is sent this pawn only while its own character is in the city and near enough to see
+	/// it, by where the host believes both are, so no claim of the client's widens what it sees. The
+	/// engine asks whoever sends: the host, for what it syncs, and the owner's client, for the movement
+	/// it simulates, which the host passes on to other clients unread. So the host decides, and tells
+	/// the owner (<see cref="HostTellObservers"/>), and the owner sends only where it was told.
 	/// </summary>
 	bool INetworkVisible.IsVisibleToConnection( Connection connection, in BBox worldBounds )
 	{
-		// The owner always has its own pawn, and the host everything. An owner is asked too, about the host.
-		if ( !Networking.IsHost || connection.IsHost || connection == Network.Owner ) return true;
-		return _character is not null && GameManager.Instance?.Sees( connection, HostPosition ) == true;
+		// The host has everything, and the owner its own pawn.
+		if ( connection.IsHost || connection == Network.Owner ) return true;
+		return Networking.IsHost ? HostMaySee( connection ) : _observers.Contains( connection.Id );
+	}
+
+	/// <summary>Host: whether the connection's character is in the city and near enough to see this one.</summary>
+	private bool HostMaySee( Connection connection ) =>
+		_character is not null && GameManager.Instance?.Sees( connection, HostPosition ) == true;
+
+	/// <summary>Host: tells the owner who may see its pawn, whenever that changes or the pawn changes hands.</summary>
+	private void HostTellObservers()
+	{
+		if ( Network.Owner is not { IsHost: false } owner || _untilObservers > 0f ) return;
+		_untilObservers = ObserverInterval;
+		var observers = Connection.All
+			.Where( value => !value.IsHost && value != owner && HostMaySee( value ) )
+			.Select( value => value.Id )
+			.OrderBy( value => value )
+			.ToArray();
+		if ( owner.Id == _toldOwner && observers.SequenceEqual( _toldObservers ) ) return;
+		_toldOwner = owner.Id;
+		_toldObservers = observers;
+		using ( Rpc.FilterInclude( owner ) ) ReceiveObservers( observers );
+	}
+
+	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
+	private void ReceiveObservers( Guid[] connections )
+	{
+		_observers.Clear();
+		_observers.UnionWith( connections );
 	}
 
 	private PlayerController? Controller => GetComponent<PlayerController>( true );

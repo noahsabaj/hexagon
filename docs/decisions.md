@@ -401,10 +401,12 @@ only while that client's character is within `GameManager.SightRange` of it, by 
 believes both to be. Owners and the host always get their own. A client is not told when it stops
 being sent something, so each pawn carries a `Pulse` that the host advances twice a second, and a
 pawn whose pulse has not moved for two seconds is hidden on that client, collision and all, until it
-moves again. The engine announces a new object to every client and sends it to all of them for two
-seconds before culling applies, so a sleeper keeps its look and description back for its first
-three. A pawn's object name was its owner's Steam name, which every client was sent; it is now
-`Player`.
+moves again. (Corrected 2026-10-11: the owner's client still sent its pawn's movement to every
+client, and the host passed it on, so the pulse only hid what had arrived anyway. See "The owner
+sends its pawn only where the host says".) The engine announces a new object to
+every client and sends it to all of them for two seconds before culling applies, so a sleeper
+keeps its look and description back for its first three. A pawn's object name was its owner's
+Steam name, which every client was sent; it is now `Player`.
 
 ## 2026-10-10: A refusal is evidence too
 
@@ -504,6 +506,26 @@ camera already does. The first version left someone down all but blind, because 
 vignette at its defaults covers most of the screen; someone down still sees who comes near, so it
 was eased until the world shows through. Limping, laboured breathing and a cue for bound hands come
 later.
+
+## 2026-10-11: The owner sends its pawn only where the host says
+
+The engine asks whoever sends an object whether a connection may have it: the host for what it
+syncs, and the owner's client for what it simulates, which for a pawn is its movement. What one
+client sends another goes through the host, which passes it on unread, and a client takes an object
+to be out of sight only when the object's owner says so. Hexagon answered the host's question, but
+on the owner's client it said yes to everyone, so every client was sent every character's movement,
+wherever they were, and a cheat could have shown where everyone in the city was. Now the host works
+out who may see each pawn, by the same rule, and tells its owner whenever that changes, at most four
+times a second (`HostTellObservers`). The owner's client sends its movement to them and the host
+alone. A client that ignores what it is told gives away only its own movement.
+
+The owner's client also tells a client it stops sending to, so that the engine there makes the pawn
+inactive, collision and all. That notice goes through the host wrapped as a `TargetedMessage`, and
+the engine that receives it unwraps only packed messages from one
+(`NetworkSystem.OnTargetedMessage`), so it is dropped and the pawn would stay standing where it was
+last sent. The pulse therefore stays: a client still hides someone whose pulse has stopped. The
+two-client play test narrows sight, then checks that a client out of it stops showing the other, is
+not sent where they go next, and is sent them again once back in sight.
 
 ## What is thin, and known
 

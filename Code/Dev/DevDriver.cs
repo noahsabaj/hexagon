@@ -186,6 +186,14 @@ public static class DevCommands
 			else if ( args.Length > 1 && !args[1].StartsWith( '#' ) ) return $"unknown policy '{args[1]}'";
 			return $"death={game.Death} living={game.LivingCharacters} hours={game.NewLifeHours}";
 		}
+		if ( args[0] == "sight" )
+		{
+			// sight alone says how far characters see; sight|<units> changes it, so a test can step out
+			// of sight without leaving the scene's floor.
+			if ( !Networking.IsHost || GameManager.Instance is not { } game ) return "refused: not the host";
+			if ( args.Length > 1 && !args[1].StartsWith( '#' ) ) game.SightRange = float.Parse( args[1], System.Globalization.CultureInfo.InvariantCulture );
+			return $"sight={game.SightRange}";
+		}
 		if ( args[0] == "journal" )
 		{
 			// Today's journal as kind=count, refusals marked, so a test can assert what was remembered.
@@ -366,6 +374,14 @@ public static class DevCommands
 					// What this client was told about everyone else. Names and factions must be empty.
 					return string.Join( " ; ", Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy )
 						.Select( value => $"down={value.IsDown} restrained={value.IsRestrained} held='{ItemDefinition.Find( value.HeldItemPath )?.Title}' health={value.Health} has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}' seen='{value.CharacterDescription}' label='{player.LabelFor( value )}'" ) );
+				case "pawns":
+					// Every pawn this client holds for someone else, including those the network has made
+					// inactive: whether it shows them, and where each was when it was last sent. What is no
+					// longer sent stays put.
+					return string.Join( " ; ", Game.ActiveScene.GetAllObjects( false )
+						.Select( value => value.Components.Get<Player>( FindMode.EverythingInSelf ) )
+						.Where( value => value is not null && value.IsProxy )
+						.Select( value => $"present={value!.IsPresent} active={value.GameObject.Active} at={value.WorldPosition.x:0},{value.WorldPosition.y:0}" ) );
 				case "steamid":
 					return Connection.Local.SteamId.ValueUnsigned.ToString();
 				case "net":

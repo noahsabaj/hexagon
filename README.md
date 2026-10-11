@@ -115,7 +115,8 @@ pwsh tools/verify.ps1
 | A whole game on top | a game project | `tools/playtest.ps1` plays it in the real editor; `tools/playtest-server.ps1` plays it as two clients on a dedicated server |
 
 What an onlooker could see is `[Sync( SyncFlags.FromHost )]` on components, and a person is sent
-only to clients whose character is within `SightRange` of them. Everything else goes to its owner by
+only to clients whose character is within `SightRange` of them. That includes their movement, which
+their own client sends: the host tells it who may see it. Everything else goes to its owner by
 `[Rpc.Owner]`. A client changes nothing directly: it calls a `[Rpc.Host]` request, and the host
 re-derives who is asking from the connection, measures distances itself, and saves before it
 replies.
