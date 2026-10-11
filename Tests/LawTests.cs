@@ -42,6 +42,35 @@ public sealed class LawTests
 	}
 
 	[TestMethod]
+	public void ABodyTakesEverythingTheCharacterCarriedHoweverItWasPacked()
+	{
+		// A full inventory packed by hand. Moved one pile at a time into the first free cell of a body
+		// the same size, the last can of water finds no room. Kept where each pile was, all of it fits.
+		var journal = new Journal( new MemoryFiles(), () => Now );
+		var transfers = new Transfers( journal );
+		var character = Holder( 6, 4 );
+		var layout = new (string Definition, int Width, int Height, int X, int Y)[]
+		{
+			("items/keycard.item", 1, 1, 0, 0), ("items/pistol.item", 2, 1, 1, 0), ("items/water.item", 1, 2, 5, 2),
+			("items/keycard.item", 1, 1, 4, 1), ("items/pistol.item", 2, 1, 0, 2), ("items/pistol.item", 2, 1, 3, 3),
+			("items/pistol.item", 2, 1, 2, 2), ("items/pistol.item", 2, 1, 0, 3), ("items/pistol.item", 2, 1, 1, 1),
+			("items/water.item", 1, 2, 3, 0),
+		};
+		foreach ( var (definition, width, height, x, y) in layout )
+			character.Inventory.Items.Add( new ItemStack { Id = Guid.NewGuid(), Definition = definition, Width = width, Height = height, X = x, Y = y } );
+		transfers.IssueTokens( Sources.CharacterStart, character, 40, Actor.Of( character ) );
+		var carried = character.Inventory.Items.Select( item => item.Id ).ToArray();
+		var body = new HolderData { Id = Guid.NewGuid(), Kind = HolderKinds.Corpse, Inventory = new InventoryData { Width = 6, Height = 4 } };
+
+		Assert.IsTrue( transfers.MoveAll( character, body, Actor.Of( character ) ).Ok );
+
+		Assert.IsEmpty( character.Inventory.Items, "nothing stays on the dead" );
+		Assert.AreEqual( (0L, 40L), (character.Tokens, body.Tokens) );
+		CollectionAssert.AreEquivalent( carried, body.Inventory.Items.Select( item => item.Id ).ToArray(), "each is the same object it was" );
+		Assert.AreEqual( 10, journal.Read( Now ).Count( entry => entry.Kind == "item.move" && entry.Ok ) );
+	}
+
+	[TestMethod]
 	public void IdenticalThingsPileUpAndEveryOneOfThemIsAccountedFor()
 	{
 		var journal = new Journal( new MemoryFiles(), () => Now );
@@ -219,6 +248,29 @@ public sealed class LawTests
 		Assert.AreEqual( "chat.say", journal.Search( Now, "alice", 1 ).Single().Kind, "the latest are kept" );
 		Assert.HasCount( 3, journal.Search( Now, "", 10 ) );
 		Assert.IsEmpty( journal.Search( Now, "bob", 10 ) );
+	}
+
+	[TestMethod]
+	public void TheJournalNamesWhoWasActedOnAndWhoSawItAndSearchesPastMidnight()
+	{
+		var clock = new DateTimeOffset( 2026, 9, 19, 23, 59, 0, TimeSpan.Zero );
+		var journal = new Journal( new MemoryFiles(), () => clock );
+		var alice = new CharacterData { Id = Guid.NewGuid(), SteamId = 7, Name = "Alice" };
+		var bob = new CharacterData { Id = Guid.NewGuid(), SteamId = 8, Name = "Bob" };
+		var names = new Dictionary<Guid, string> { [alice.Id] = alice.Name, [bob.Id] = bob.Name };
+		journal.NameOf = id => names.GetValueOrDefault( id );
+
+		journal.Record( "verb.person.search", Actor.Of( alice ), bob.HolderLabel, witnesses: new[] { bob.Id, Guid.NewGuid() } );
+		clock = clock.AddMinutes( 2 );
+		// Bob is deleted afterwards, and his name could be taken again. The entry says who it was then.
+		names.Remove( bob.Id );
+		journal.Record( "item.move", Actor.Of( alice ), alice.HolderLabel, data: ("from", bob.HolderLabel) );
+
+		Assert.IsEmpty( journal.Search( clock, "Bob", 10 ), "today alone misses what happened a minute before midnight" );
+		var found = journal.Search( clock, "Bob", 10, days: 2 );
+		Assert.HasCount( 1, found );
+		Assert.AreEqual( $"23:59:00 verb.person.search by Alice on Bob ({bob.HolderLabel}) seen by Bob, someone", found[0].Describe() );
+		CollectionAssert.AreEqual( new[] { "verb.person.search", "item.move" }, journal.Search( clock, "alice", 10, days: 2 ).Select( entry => entry.Kind ).ToArray(), "oldest first" );
 	}
 
 	[TestMethod]

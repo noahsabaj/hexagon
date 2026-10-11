@@ -71,6 +71,7 @@ public sealed class MovementTests
 		var audit = new MovementAudit();
 		audit.Reset( new Vector3( 0, 0, 0 ), 0, 0 );
 		audit.Reset( new Vector3( 5000, 0, 0 ), 1.0 );
+		Assert.IsTrue( audit.Settling, "the owner has not shown up where it was put" );
 
 		Assert.IsTrue( audit.Observe( new Vector3( 10, 0, 0 ), 1.5, Speed ), "a claim from the old place, before the owner applied it, is ignored" );
 		Assert.AreEqual( new Vector3( 5000, 0, 0 ), audit.Position, "ignored, not accepted" );
@@ -79,6 +80,7 @@ public sealed class MovementTests
 
 		Assert.IsTrue( audit.Observe( new Vector3( 5010, 0, 0 ), 2.1, Speed ), "the owner arrived" );
 		Assert.AreEqual( new Vector3( 5010, 0, 0 ), audit.Position );
+		Assert.IsFalse( audit.Settling );
 		Assert.IsFalse( audit.Observe( new Vector3( 10, 0, 0 ), 2.4, Speed ), "and arriving ends the grace" );
 
 		audit.Reset( new Vector3( 0, 0, 0 ), 3.0 );

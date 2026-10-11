@@ -18,27 +18,35 @@ public sealed partial class Player
 	public const string ReviveVerb = "person.revive";
 	public const string FinishVerb = "person.finish";
 
-	public IReadOnlyList<Verb> Verbs
+	/// <summary>How near someone must stand to do anything to a person.</summary>
+	public const float PersonReach = 120f;
+
+	public IReadOnlyList<Verb> Verbs => VerbsFor( IsDown, IsRestrained );
+
+	/// <summary>What can be done to a person in the state anyone can see them in, whether their player is here or not.</summary>
+	internal static IReadOnlyList<Verb> VerbsFor( bool down, bool restrained )
 	{
-		get
+		if ( down )
 		{
-			if ( IsDown )
-			{
-				var finish = GameManager.Instance?.FinishRequires is { Length: > 0 } needed ? needed : null;
-				return new[] { new Verb( ReviveVerb, "Help up" ), new Verb( SearchVerb, "Search" ), new Verb( FinishVerb, "Finish", finish ) };
-			}
-			if ( IsRestrained ) return new[] { new Verb( SearchVerb, "Search" ), new Verb( ReleaseVerb, "Release" ) };
-			return new[] { new Verb( IntroduceVerb, "Introduce yourself" ), new Verb( RestrainVerb, "Restrain", Capability.Restrain ) };
+			var finish = GameManager.Instance?.FinishRequires is { Length: > 0 } needed ? needed : null;
+			return new[] { new Verb( ReviveVerb, "Help up" ), new Verb( SearchVerb, "Search" ), new Verb( FinishVerb, "Finish", finish ) };
 		}
+		if ( restrained ) return new[] { new Verb( SearchVerb, "Search" ), new Verb( ReleaseVerb, "Release" ) };
+		return new[] { new Verb( IntroduceVerb, "Introduce yourself" ), new Verb( RestrainVerb, "Restrain", Capability.Restrain ) };
 	}
 
-	float IVerbTarget.Reach => 120f;
+	float IVerbTarget.Reach => PersonReach;
 
-	bool IPressable.CanPress( IPressable.Event e ) => IsProxy && HasCharacter;
+	// Telling someone your name, or tying their hands, is never what bumping into them with a key does.
+	bool IVerbTarget.UseOpensMenu => true;
+
+	string? IVerbTarget.JournalSubject => _character?.HolderLabel;
+
+	bool IPressable.CanPress( IPressable.Event e ) => IsProxy && IsPresent;
 
 	bool IPressable.Press( IPressable.Event e )
 	{
-		Local?.RequestAct( this, Verbs[0].Id );
+		if ( Local is { } local ) local.MenuTarget = this;
 		return true;
 	}
 
@@ -55,7 +63,7 @@ public sealed partial class Player
 			case ReviveVerb: return HostRevive();
 			case SearchVerb: return HostBeSearched( actor );
 			case RestrainVerb: return HostBeRestrained( actor, other );
-			case ReleaseVerb: return HostSetRestrained( false, "Your hands are free." );
+			case ReleaseVerb: return HostRelease();
 			case FinishVerb:
 				var can = Vitals.CanFinish( _character );
 				if ( can.Ok ) HostDie( "finished", actor );
@@ -92,16 +100,25 @@ public sealed partial class Player
 		if ( tie is null ) return Result.Fail( ErrorCode.Denied, "You have nothing to bind them with." );
 		var game = GameManager.Instance!;
 		game.Transfers!.Destroy( Sinks.Consumed, other, tie.Id, Actor.Of( other ), count: 1 );
-		game.Roster!.Save( other );
+		_character!.IsRestrained = true;
+		_character.Equipped = null;
+		// The tie used up and the hands it binds are one change: a crash keeps both or neither.
+		game.SaveTogether( other, _character );
 		actor.SendPrivateState();
-		return HostSetRestrained( true, "Your hands are bound." );
+		return HostShowRestraint( "Your hands are bound." );
 	}
 
-	private Result HostSetRestrained( bool restrained, string message )
+	/// <summary>Host: frees this character's hands, whether someone cut the tie or staff did.</summary>
+	internal Result HostRelease()
 	{
-		_character!.IsRestrained = restrained;
-		if ( restrained ) _character.Equipped = null;
-		GameManager.Instance?.Roster?.Save( _character );
+		if ( _character is not { IsRestrained: true } character ) return Result.Fail( ErrorCode.Conflict, "Their hands are not bound." );
+		character.IsRestrained = false;
+		GameManager.Instance?.Roster?.Save( character );
+		return HostShowRestraint( "Your hands are free." );
+	}
+
+	private Result HostShowRestraint( string message )
+	{
 		HostClose();
 		HostSyncVitals();
 		SendPrivateState();

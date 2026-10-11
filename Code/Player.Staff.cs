@@ -41,7 +41,7 @@ public sealed partial class Player
 	[Rpc.Host]
 	public void RequestStaff( string line )
 	{
-		if ( !Authorize( out var caller, out var game ) ) return;
+		if ( !Authorize( nameof( RequestStaff ), out var caller, out var game, needsCharacter: false ) ) return;
 		line = (line ?? string.Empty).Trim();
 		if ( line.Length is 0 or > 256 ) return;
 		var steamId = SteamIdOf( caller );

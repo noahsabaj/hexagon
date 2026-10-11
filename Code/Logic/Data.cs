@@ -22,6 +22,8 @@ public sealed class CharacterData : IHolder
 	public float[]? Position { get; set; }
 	public int Health { get; set; } = 100;
 	public bool IsDown { get; set; }
+	/// <summary>How long it has been down while the city was running. Kept here so leaving and returning does not restart it.</summary>
+	public double SecondsDown { get; set; }
 	public bool IsRestrained { get; set; }
 	/// <summary>The item in hand, if any. Anyone can see what it is.</summary>
 	public Guid? Equipped { get; set; }

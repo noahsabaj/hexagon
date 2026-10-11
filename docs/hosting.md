@@ -33,16 +33,25 @@ hexagon_staff <steamid64> 1
 ```
 
 Staff status can only be given from the console. From then on that player presses Tab in game and
-types the same commands without the `hexagon_` prefix: `who`, `whitelist`, `give`, `bring`, `goto`,
-`hurt`, `revive`, `payday`, `journal`. Every line is journaled under their name before it runs.
+types the same commands without the `hexagon_` prefix: `who`, `whitelist`, `give`, `take`, `move`,
+`bring`, `goto`, `teleport`, `hurt`, `revive`, `release`, `faction`, `door`, `payday`, `journal`. The
+[README](../README.md#operator-commands) lists what each does. Every line is journaled under their
+name before it runs, and every line typed at the console is journaled as the console.
 
 ## Settle a dispute
 
-`journal [text] [count]` in the staff panel shows the latest entries containing the text. Useful
-searches: a character's name, `REFUSED`, `combat.attack`, `character.death`, `item.move`,
-`tokens.move`, `verb.door.buy`. Each entry says who, what, where, whether it was allowed, and who
-was close enough to witness it. The files are `journal/<date>.jsonl` in the data folder, one JSON
-object per line, and can be read while the server runs.
+`journal [text] [count] [days]` in the staff panel shows the latest entries containing the text,
+from the last two days unless given more, up to fourteen. Useful searches: a character's name,
+`REFUSED`, `request.forged`, `combat.attack`, `character.death`, `item.move`, `tokens.move`,
+`verb.door.buy`. Each entry says who, what, to whom, where, whether it was allowed, and who was
+close enough to witness it, by the names they had then. Times are UTC. The files are
+`journal/<date>.jsonl` in the data folder, one JSON object per line and one file per UTC day, and
+can be read while the server runs.
+
+Putting things right uses the same commands as anything else, and is journaled like anything else:
+`move` gives back what was taken, `take` removes what should not exist, `release` frees someone
+left bound, `revive` helps up someone left down, and `door "<door>" release` takes back a door, or
+`door release` the one you are standing beside. `door` on its own lists the doors and their owners.
 
 ## Restart
 
@@ -50,6 +59,13 @@ Stop the server with Ctrl+C or by closing it, and start it again with the same d
 **Checked** (in the editor play test): characters, what they know, health, being down or bound,
 what is in hand, inventories, crates, bodies, dropped items, doors and their owners, and whitelists
 all return. Characters come back where they stood. Players rejoin and pick their character again.
+Someone who was down or bound when it stopped is back where they were, lying or standing bound,
+until their player returns, and can be helped up, freed or searched meanwhile.
+
+The city saves every 60 seconds (`AutosaveSeconds`) and again as it closes. **Not yet checked:**
+whether Ctrl+C on a dedicated server gives it that last chance. Until it has been seen to, at most
+the last minute of where people stood and how long the downed have been down may be lost; anything
+that changed hands was saved when it did.
 
 ## Back up
 
@@ -59,7 +75,11 @@ character's tokens, items, health and acquaintances with the original.
 
 Every document is written twice, first to a pending copy beside it, so a copy of the folder taken
 mid-write still holds one complete version, and loading prefers whichever is whole. The journal is
-appended to, so a copy may end one entry early; a torn last line is skipped when read.
+appended to, so a copy may end one entry early; a torn last line is skipped when read. A change to
+two documents at once, such as a sale, is first written whole into `together/` and finished from
+there if interrupted, but a copy taken during one can still catch one side of it without the other,
+because copying a folder is not one act. For a backup that must agree with itself, stop the server
+first.
 
 ## The v0.1 session
 

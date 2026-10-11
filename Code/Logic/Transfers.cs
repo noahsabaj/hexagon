@@ -31,6 +31,8 @@ public static class Sinks
 	public const string CharacterDeleted = "character.deleted";
 	/// <summary>Paid to the city for property, not to anyone in it.</summary>
 	public const string Property = "property";
+	/// <summary>Taken out of the world by staff, as when settling a dispute.</summary>
+	public const string Operator = "operator";
 }
 
 /// <summary>
@@ -38,8 +40,9 @@ public static class Sinks
 /// world from a named source and leave it through a named sink, and every one of those is
 /// journaled. So the money supply is a sum over the journal, and an item that appears in two
 /// places has a recorded path to each.
-/// An operation changes the documents in memory. The caller saves them: the giver first, so a
-/// crash between the two saves loses a thing the journal can restore rather than duplicating it.
+/// An operation changes the documents in memory. The caller saves every holder it touched with one
+/// <see cref="DocumentStore.SaveTogether"/>, so a crash keeps all of the change or none of it. No
+/// order of separate saves is safe: in a sale each side is the giver of something.
 /// </summary>
 public sealed class Transfers
 {
@@ -76,6 +79,38 @@ public sealed class Transfers
 			data: new[] { ("from", from.HolderLabel), ("item", itemId.ToString( "N" )), ("definition", item.Definition), ("count", count.ToString()),
 				("into", placed.Ok ? placed.Value.Id.ToString( "N" ) : string.Empty) } );
 		return placed.ToResult();
+	}
+
+	/// <summary>
+	/// Everything one holder has goes to another, as when a body is left where a character fell. Each
+	/// pile keeps its place where that place is free, so a holder at least as large as the giver takes
+	/// all of it; packing them one at a time into the first free cell does not always fit what fitted
+	/// before. A pile whose place is taken is moved like any other. Fails, having moved what it could,
+	/// if anything is left behind.
+	/// </summary>
+	public Result MoveAll( IHolder from, IHolder to, Actor by )
+	{
+		if ( ReferenceEquals( from, to ) ) return Result.Fail( ErrorCode.Invalid, "That is already there." );
+		var left = 0;
+		foreach ( var item in from.Inventory.Items.ToArray() )
+		{
+			if ( !InventoryGrid.Fits( to.Inventory, item.X, item.Y, item.Width, item.Height ) )
+			{
+				if ( !Move( from, to, item.Id, by ).Ok ) left++;
+				continue;
+			}
+			var kept = Like( item, item.Id );
+			kept.Count = item.Count;
+			kept.X = item.X;
+			kept.Y = item.Y;
+			to.Inventory.Items.Add( kept );
+			from.Inventory.Items.Remove( item );
+			_journal.Record( "item.move", by, to.HolderLabel,
+				data: new[] { ("from", from.HolderLabel), ("item", item.Id.ToString( "N" )), ("definition", item.Definition), ("count", item.Count.ToString()),
+					("into", kept.Id.ToString( "N" )) } );
+		}
+		if ( from.Tokens > 0 ) MoveTokens( from, to, from.Tokens, by );
+		return left == 0 ? Result.Success() : Result.Fail( ErrorCode.Conflict, $"{left} would not fit." );
 	}
 
 	public Result Destroy( string sink, IHolder from, Guid itemId, Actor by, int count = 0 )

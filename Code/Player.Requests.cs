@@ -8,22 +8,23 @@ using Sandbox;
 namespace Hexagon;
 
 // Everything a client can ask of the host. Each request re-derives who is asking from the
-// connection, validates its arguments on the host, saves before replying, and is journaled.
-// Acting on anything in the world goes through RequestAct and nowhere else.
+// connection, validates its arguments on the host, saves before replying, and is journaled,
+// refusals included. Acting on anything in the world goes through RequestAct and nowhere else.
 public sealed partial class Player
 {
 	[Rpc.Host]
 	public void RequestCharacters()
 	{
-		if ( Authorize( out var caller, out var game ) ) SendCharacterList( caller, game );
+		if ( Authorize( nameof( RequestCharacters ), out var caller, out var game, needsCharacter: false ) ) SendCharacterList( caller, game );
 	}
 
 	[Rpc.Host]
 	public void RequestCreateCharacter( string name, string description, string factionPath )
 	{
-		if ( !Authorize( out var caller, out var game ) ) return;
+		if ( !Authorize( nameof( RequestCreateCharacter ), out var caller, out var game, needsCharacter: false ) ) return;
 		if ( FactionDefinition.Find( factionPath ) is not { } faction )
 		{
+			HostRecord( "character.create", ok: false, data: new[] { ("reason", "faction"), ("faction", Clip( factionPath ?? string.Empty )) } );
 			Chat.Tell( caller, "That faction does not exist." );
 			return;
 		}
@@ -38,6 +39,8 @@ public sealed partial class Player
 		var created = game.Roster!.Create( steamId, name, description, faction.ResourcePath, DateTimeOffset.UtcNow );
 		if ( !created.Ok )
 		{
+			// The name is kept: an attempt to pass as someone else is worth knowing about.
+			HostRecord( "character.create", faction.ResourceName, ok: false, ("reason", created.Code.ToString()), ("name", Clip( name ?? string.Empty )) );
 			Chat.Tell( caller, created.Message );
 			return;
 		}
@@ -53,50 +56,62 @@ public sealed partial class Player
 	[Rpc.Host]
 	public void RequestDeleteCharacter( Guid characterId )
 	{
-		if ( !Authorize( out var caller, out var game ) ) return;
-		if ( _character?.Id == characterId )
+		if ( !Authorize( nameof( RequestDeleteCharacter ), out var caller, out var game, needsCharacter: false ) ) return;
+		var steamId = SteamIdOf( caller );
+		var doomed = game.Roster!.Find( characterId );
+		// "Not yours" and "does not exist" get the same answer, so ids cannot be probed.
+		var refusal = doomed is null || doomed.SteamId != steamId ? "Character was not found."
+			// On any connection: two copies of the game on one account are still one account.
+			: HostLoaded( characterId ) is not null ? "Leave the city with that character before deleting it."
+			// Someone lying in the street, or bound, is still part of a scene that is not over.
+			: doomed.IsDown || doomed.IsRestrained ? "That character cannot be deleted while it is down or bound."
+			: null;
+		if ( doomed is null || refusal is not null )
 		{
-			Chat.Tell( caller, "Leave that character before deleting it." );
+			HostRecord( "character.delete", $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );
+			Chat.Tell( caller, refusal ?? "Character was not found." );
 			return;
 		}
-		var steamId = SteamIdOf( caller );
 		// What the character held leaves the world on the record, not by vanishing with the file.
-		if ( game.Roster!.Find( characterId ) is { } doomed && doomed.SteamId == steamId )
-		{
-			game.Transfers!.DestroyAll( Sinks.CharacterDeleted, doomed, Actor.Of( doomed ) );
-			game.Journal!.Record( "character.delete", Actor.Of( doomed ), doomed.HolderLabel );
-		}
-		var deleted = game.Roster.Delete( steamId, characterId );
-		if ( !deleted.Ok ) Chat.Tell( caller, deleted.Message );
+		var by = Actor.Of( doomed );
+		game.Transfers!.DestroyAll( Sinks.CharacterDeleted, doomed, by );
+		Door.HostReleaseOwnedBy( doomed.Id, by );
+		game.Journal!.Record( "character.delete", by, doomed.HolderLabel );
+		game.Roster.Delete( steamId, characterId );
 		SendCharacterList( caller, game );
 	}
 
 	[Rpc.Host]
 	public void RequestEnterCity( Guid characterId )
 	{
-		if ( !Authorize( out var caller, out var game ) || _character is not null ) return;
-		// "Not yours" and "does not exist" get the same answer, so ids cannot be probed.
-		if ( game.Roster!.Find( characterId ) is not { } character || character.SteamId != SteamIdOf( caller ) )
+		if ( !Authorize( nameof( RequestEnterCity ), out var caller, out var game, needsCharacter: false ) ) return;
+		var character = game.Roster!.Find( characterId );
+		var steamId = SteamIdOf( caller );
+		var faction = character is null ? null : FactionDefinition.Find( character.Faction );
+		var refusal = _character is not null ? "Leave the city first."
+			// "Not yours" and "does not exist" get the same answer, so ids cannot be probed.
+			: character is null || character.SteamId != steamId ? "Character was not found."
+			: HostLoaded( characterId ) is not null ? "That character is already in the city."
+			// A whitelist taken away takes the faction's characters with it until it is given back.
+			: faction is { RequiresWhitelist: true } && !game.Account( steamId ).Whitelists.Contains( faction.ResourcePath ) ? $"You are no longer whitelisted for {faction.Title}."
+			: null;
+		if ( character is null || refusal is not null )
 		{
-			Chat.Tell( caller, "Character was not found." );
-			return;
-		}
-		if ( Scene.GetAllComponents<Player>().Any( other => other._character?.Id == characterId ) )
-		{
-			Chat.Tell( caller, "That character is already in the city." );
+			HostRecord( "city.enter", $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );
+			Chat.Tell( caller, refusal ?? "Character was not found." );
 			return;
 		}
 
+		// Whoever was left lying, or bound, where they were picks up from there.
+		Sleeper.HostRemove( character.Id );
 		_character = character;
 		CharacterDescription = character.Description;
 		CharacterId = character.Id;
-		Look = Looks.Of( FactionDefinition.Find( character.Faction ) );
 		HasCharacter = true;
 		var position = character.Position is { Length: 3 } saved
 			? new Vector3( saved[0], saved[1], saved[2] )
 			: game.FindSpawn().Position;
 		HostTeleport( position );
-		_sinceDown = 0;
 		SendPrivateState();
 		HostRecord( "city.enter" );
 	}
@@ -104,11 +119,12 @@ public sealed partial class Player
 	[Rpc.Host]
 	public void RequestLeaveCity()
 	{
-		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
+		if ( !Authorize( nameof( RequestLeaveCity ), out var caller, out var game ) ) return;
 		if ( IsIncapable )
 		{
-			// Walking out of a scene that has gone badly is not on offer. Disconnecting changes nothing
-			// either: the state is in the character's document and is waiting when it returns.
+			// Walking out of a scene that has gone badly is not on offer. Disconnecting is no way out
+			// either: the character stays where it is, as anyone else can see.
+			HostRecord( "city.leave", ok: false, data: ("reason", IsDown ? "down" : "restrained") );
 			Chat.Tell( caller, "You cannot leave the city like this." );
 			return;
 		}
@@ -118,43 +134,68 @@ public sealed partial class Player
 		SendCharacterList( caller, game );
 	}
 
+	/// <summary>Host: staff took away what this character needs to be in the city. It is saved, and its player is back in the menu.</summary>
+	internal void HostSendToMenu( string message )
+	{
+		if ( _character is null || GameManager.Instance is not { } game ) return;
+		HostSave();
+		HostRecord( "city.leave", data: ("reason", "sent") );
+		HostUnload();
+		if ( Network.Owner is not { } owner ) return;
+		SendCharacterList( owner, game );
+		Chat.Tell( owner, message );
+	}
+
+	/// <summary>
+	/// Host: its player has gone. The character is saved and let go of before the pawn goes, which is
+	/// not at once, so nothing takes it for still being in the city meanwhile: whoever is down or
+	/// bound is left where they are.
+	/// </summary>
+	internal void HostDisconnected()
+	{
+		HostSave();
+		HostUnload();
+	}
+
 	/// <summary>Host: the character stops being in the city. The pawn stays, back in the menu.</summary>
 	private void HostUnload()
 	{
 		HostClose();
+		// Someone down or bound does not get up because their player went: they stay where they are.
+		if ( _character is { } character && GameManager.Instance?.Roster?.Contains( character ) == true ) Sleeper.HostLeave( character, HostPosition );
 		_character = null;
 		HasCharacter = false;
 		CharacterId = Guid.Empty;
 		CharacterDescription = string.Empty;
-		Look = string.Empty;
 		HostSyncVitals();
 	}
 
 	[Rpc.Host]
 	public void RequestSay( string text )
 	{
-		if ( !Authorize( out var caller, out _ ) ) return;
-		if ( _character is null )
+		if ( !Authorize( nameof( RequestSay ), out var caller, out _ ) ) return;
+		var message = ChatRules.Parse( text );
+		if ( message.Ok )
 		{
-			Chat.Tell( caller, "Enter the city before speaking." );
+			Chat.Deliver( this, message.Value );
 			return;
 		}
-		var message = ChatRules.Parse( text );
-		if ( message.Ok ) Chat.Deliver( this, message.Value );
-		else Chat.Tell( caller, message.Message );
+		HostRecord( "chat", ok: false, data: new[] { ("reason", message.Code.ToString()), ("text", Clip( text ?? string.Empty )) } );
+		Chat.Tell( caller, message.Message );
 	}
 
 	[Rpc.Host]
 	public void RequestMoveItem( Guid itemId, int x, int y )
 	{
-		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
+		if ( !Authorize( nameof( RequestMoveItem ), out var caller, out var game ) || HostItem( nameof( RequestMoveItem ), itemId ) is null ) return;
+		var character = _character!;
 		// Put down on a pile of the same thing, it joins it. Otherwise it is only rearranged.
-		var under = _character.Inventory.Items.FirstOrDefault( value => value.Id != itemId && value.Max > 1 &&
+		var under = character.Inventory.Items.FirstOrDefault( value => value.Id != itemId && value.Max > 1 &&
 			x >= value.X && x < value.X + value.Width && y >= value.Y && y < value.Y + value.Height );
-		var moved = under is not null && game.Transfers!.Merge( _character, itemId, under.Id, Actor.Of( _character ) ) is { Ok: true } merged
+		var moved = under is not null && game.Transfers!.Merge( character, itemId, under.Id, Actor.Of( character ) ) is { Ok: true } merged
 			? merged
-			: InventoryGrid.Move( _character.Inventory, itemId, x, y );
-		if ( moved.Ok ) game.Roster!.Save( _character );
+			: InventoryGrid.Move( character.Inventory, itemId, x, y );
+		if ( moved.Ok ) game.Roster!.Save( character );
 		else Chat.Tell( caller, moved.Message );
 		SendPrivateState();
 	}
@@ -163,10 +204,15 @@ public sealed partial class Player
 	[Rpc.Host]
 	public void RequestSplitItem( Guid itemId, int count )
 	{
-		if ( !Authorize( out var caller, out var game ) || _character is null ) return;
-		var split = game.Transfers!.Split( _character, itemId, count, Actor.Of( _character ) );
-		if ( split.Ok ) game.Roster!.Save( _character );
-		else Chat.Tell( caller, split.Message );
+		if ( !Authorize( nameof( RequestSplitItem ), out var caller, out var game ) || HostItem( nameof( RequestSplitItem ), itemId ) is null ) return;
+		var split = game.Transfers!.Split( _character!, itemId, count, Actor.Of( _character! ) );
+		if ( split.Ok ) game.Roster!.Save( _character! );
+		else
+		{
+			// Want of room is on record as the split that failed. A count that is not part of the pile was never a split.
+			if ( split.Code == ErrorCode.Invalid ) HostInvalid( nameof( RequestSplitItem ), "count", count.ToString() );
+			Chat.Tell( caller, split.Message );
+		}
 		SendPrivateState();
 	}
 
@@ -177,11 +223,20 @@ public sealed partial class Player
 	[Rpc.Host]
 	public void RequestAct( Component target, string verbId )
 	{
-		if ( !Authorize( out var caller, out _ ) || _character is null ) return;
-		if ( !target.IsValid() || target is not IVerbTarget actable ) return;
-		if ( actable.Verbs.FirstOrDefault( value => value.Id == verbId ) is not { } verb ) return;
+		if ( !Authorize( nameof( RequestAct ), out var caller, out _ ) ) return;
+		if ( !target.IsValid() || target is not IVerbTarget actable )
+		{
+			HostInvalid( nameof( RequestAct ), "target", verbId );
+			return;
+		}
+		// Asking for something the target does not offer, such as finishing someone still standing.
+		if ( actable.Verbs.FirstOrDefault( value => value.Id == verbId ) is not { } verb )
+		{
+			HostInvalid( nameof( RequestAct ), "verb", verbId );
+			return;
+		}
 
-		var subject = $"{target.GetType().Name}:{target.GameObject.Id:N}";
+		var subject = actable.JournalSubject ?? $"{target.GetType().Name}:{target.GameObject.Id:N}";
 		var outcome = IsIncapable ? Result.Fail( ErrorCode.Denied, "You cannot do that now." ) : Judge( target, actable, verb );
 		if ( outcome.Ok ) outcome = actable.Perform( this, verb );
 		HostRecord( $"verb.{verb.Id}", subject, outcome.Ok, ("target", target.GameObject.Name), ("reason", outcome.Code.ToString()) );

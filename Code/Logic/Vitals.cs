@@ -30,7 +30,20 @@ public static class Vitals
 		character.Health = Math.Max( 0, character.Health - amount );
 		if ( character.Health > 0 ) return Harm.Hurt;
 		character.IsDown = true;
+		character.SecondsDown = 0;
 		return Harm.Downed;
+	}
+
+	/// <summary>
+	/// Time passes for someone who is down, whether or not their player is still connected. True once
+	/// they have been down for <paramref name="limit"/> seconds of the city running; a limit of zero
+	/// or less never ends it.
+	/// </summary>
+	public static bool Bleed( CharacterData character, double seconds, double limit )
+	{
+		if ( !character.IsDown ) return false;
+		character.SecondsDown += Math.Max( 0, seconds );
+		return limit > 0 && character.SecondsDown >= limit;
 	}
 
 	public static Result Heal( CharacterData character, int amount )
@@ -45,6 +58,7 @@ public static class Vitals
 	{
 		if ( !character.IsDown ) return Result.Fail( ErrorCode.Conflict, "They are not down." );
 		character.IsDown = false;
+		character.SecondsDown = 0;
 		character.Health = Revived;
 		return Result.Success();
 	}
@@ -58,6 +72,7 @@ public static class Vitals
 	{
 		character.Health = Full;
 		character.IsDown = false;
+		character.SecondsDown = 0;
 		character.IsRestrained = false;
 	}
 }

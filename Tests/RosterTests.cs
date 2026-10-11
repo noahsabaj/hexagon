@@ -50,6 +50,21 @@ public sealed class RosterTests
 	}
 
 	[TestMethod]
+	public void ACharacterDeletedWhileStillHeldIsNotWrittenBack()
+	{
+		// One account on two connections: one deletes the character the other still has loaded.
+		var files = new MemoryFiles();
+		var roster = new CharacterRoster( new DocumentStore( files ) );
+		var held = roster.Create( 1, "John Doe", Description, "citizen", Now ).Value;
+		Assert.IsTrue( roster.Delete( 1, held.Id ).Ok );
+
+		held.Tokens = 50;
+		Assert.IsFalse( roster.Save( held ), "the other connection's next save is refused" );
+		Assert.IsNull( new CharacterRoster( new DocumentStore( files.Reboot() ) ).Find( held.Id ), "so it stays deleted after a restart" );
+		Assert.IsTrue( roster.Create( 1, "John Doe", Description, "citizen", Now ).Ok, "and its name and slot stay free" );
+	}
+
+	[TestMethod]
 	public void SlotsAreLimitedPerAccountAndDeletionFreesTheName()
 	{
 		var roster = new CharacterRoster( new DocumentStore( new MemoryFiles() ) );

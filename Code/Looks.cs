@@ -32,7 +32,10 @@ public static class Looks
 		var body = cut > 0 ? look[..cut] : string.Empty;
 		var worn = cut >= 0 ? look[(cut + 1)..] : string.Empty;
 		renderer.Model = Model.Load( body.Length > 0 ? body : DefaultBody );
-		(worn.Length > 0 ? ClothingContainer.CreateFromJson( worn ) : new ClothingContainer()).Apply( renderer );
+		var outfit = worn.Length > 0 ? ClothingContainer.CreateFromJson( worn ) : new ClothingContainer();
+		var dresser = Dresser.GetOrCreate( renderer );
+		dresser.UpdateAppearance( outfit );
+		dresser.Apply( outfit );
 	}
 
 	/// <summary>Gives an object the item's own model, or a small tinted block when its asset names none.</summary>

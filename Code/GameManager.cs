@@ -19,6 +19,9 @@ public sealed class GameManager : Component, Component.INetworkListener
 {
 	public static GameManager? Instance { get; private set; }
 
+	/// <summary>Where the world's own document is kept.</summary>
+	public const string WorldPath = "world.json";
+
 	/// <summary>Host-only. Null on clients.</summary>
 	public CharacterRoster? Roster { get; private set; }
 	public DocumentStore? Store { get; private set; }
@@ -30,6 +33,8 @@ public sealed class GameManager : Component, Component.INetworkListener
 	[Property] public float AutosaveSeconds { get; set; } = 60f;
 	/// <summary>How often factions pay their wage. Zero means never.</summary>
 	[Property] public float WageSeconds { get; set; } = 900f;
+	/// <summary>How far a character sees, in world units. A client is sent nobody farther from its character than this.</summary>
+	[Property] public float SightRange { get; set; } = 4000f;
 
 	/// <summary>What death means in this game. Hexagon supplies the pipeline; this is the policy.</summary>
 	[Property, Group( "Death" )] public DeathPolicy Death { get; set; } = DeathPolicy.Respawn;
@@ -48,14 +53,22 @@ public sealed class GameManager : Component, Component.INetworkListener
 
 	private readonly List<Guid> _clients = new();
 	private readonly Dictionary<long, AccountData> _accounts = new();
+	// What each connection may still ask this second, whichever pawn its requests name.
+	private readonly Dictionary<Guid, RateLimiter> _budgets = new();
+	private readonly RefusalThrottle _refusals = new();
+	// Where each connection's character is, as the host believes, for deciding what its client is sent.
+	private readonly Dictionary<Guid, Vector3> _eyes = new();
 	private RealTimeSince _sinceAutosave;
 	private bool _worldRestored;
 	private RealTimeSince _sinceWages;
+	private RealTimeSince _sinceRefusals;
 
 	protected override void OnAwake() => Instance = this;
 
 	protected override void OnDestroy()
 	{
+		// The city closing is the last chance to keep what changed since the last autosave.
+		if ( Roster is not null ) SaveAll();
 		if ( Instance == this ) Instance = null;
 	}
 
@@ -76,24 +89,52 @@ public sealed class GameManager : Component, Component.INetworkListener
 		Transfers = new Transfers( Journal );
 		Holders = new HolderStore( Store );
 		Roster = new CharacterRoster( Store );
-		World = Store.Load<WorldData>( "world.json" ) ?? new WorldData();
+		// An entry names who it was done to and who saw it, as they were called at the time.
+		Journal.NameOf = id => Roster?.Find( id )?.Name;
+		World = Store.Load<WorldData>( WorldPath ) ?? new WorldData();
+		// Counted from when the city opened, not from when the program started.
+		_sinceWages = 0;
+		_sinceAutosave = 0;
 		Log.Info( $"Hexagon host ready: {Roster.Count} characters, {World.Doors.Count} saved doors." );
 	}
 
 	protected override void OnFixedUpdate()
 	{
 		Dev.DevCommands.PollInbox();
-		if ( !_worldRestored && Networking.IsHost && Networking.IsActive && Holders is not null )
-		{
-			// What was lying on the ground when the server stopped is still lying there.
-			_worldRestored = true;
-			foreach ( var ground in Holders.OfKind( HolderKinds.Ground ) ) WorldItem.Spawn( ground );
-			foreach ( var body in Holders.OfKind( HolderKinds.Corpse ) ) Corpse.Spawn( body );
-		}
-		if ( Networking.IsHost && Roster is not null && WageSeconds > 0 && _sinceWages > WageSeconds ) PayWages( Actor.Console );
-		if ( !Networking.IsHost || Roster is null || _sinceAutosave < AutosaveSeconds ) return;
+		if ( !Networking.IsHost || Roster is null ) return;
+		if ( !_worldRestored && Networking.IsActive ) RestoreWorld();
+		See();
+		if ( _sinceRefusals > 1f ) ReportRefusals();
+		if ( WageSeconds > 0 && _sinceWages > WageSeconds ) PayWages( Actor.Console );
+		if ( _sinceAutosave < AutosaveSeconds ) return;
 		_sinceAutosave = 0;
-		foreach ( var player in Scene.GetAllComponents<Player>() ) player.HostSave();
+		SaveAll();
+	}
+
+	/// <summary>Host: what was in the city when the server stopped is still there.</summary>
+	private void RestoreWorld()
+	{
+		_worldRestored = true;
+		// A holder emptied before a crash could remove it has nothing left to find.
+		foreach ( var ground in Holders!.OfKind( HolderKinds.Ground ) )
+			if ( ground.Inventory.Items.Count == 0 ) Holders.Delete( ground.Id );
+			else WorldItem.Spawn( ground );
+		foreach ( var body in Holders.OfKind( HolderKinds.Corpse ) )
+			if ( body.Inventory.Items.Count == 0 && body.Tokens == 0 ) Holders.Delete( body.Id );
+			else Corpse.Spawn( body );
+		// Whoever was down or bound when it stopped is still lying, or standing, where they were.
+		foreach ( var character in Roster!.All.Where( value => value.IsDown || value.IsRestrained ).ToArray() )
+			Sleeper.HostLeave( character, character.Position is { Length: 3 } at ? new Vector3( at[0], at[1], at[2] ) : FindSpawn().Position );
+	}
+
+	/// <summary>Host: writes what changes without being saved at once: where everyone stands, and how long the down have been down.</summary>
+	public void SaveAll()
+	{
+		if ( Roster is null || !Scene.IsValid() ) return;
+		// Walked rather than looked up: a closing scene empties its index before it destroys anything,
+		// and this manager is destroyed before the pawns, which are added after it.
+		foreach ( var player in Scene.Components.GetAll<Player>( FindMode.EverythingInSelfAndDescendants ) ) player.HostSave();
+		foreach ( var character in Roster.All.Where( value => value.IsDown ).ToArray() ) Roster.Save( character );
 	}
 
 	void INetworkListener.OnActive( Connection connection )
@@ -109,10 +150,15 @@ public sealed class GameManager : Component, Component.INetworkListener
 
 		Journal?.Record( "connection.join", new Actor( (long)connection.SteamId.ValueUnsigned, Name: connection.DisplayName ) );
 		var spawn = FindSpawn();
-		var pawn = new GameObject( true, $"Player - {connection.DisplayName}" );
+		// Every client is sent every object's name, so a player's own name never goes in one.
+		var pawn = new GameObject( true, "Player" );
 		pawn.WorldTransform = spawn;
 		Player.Compose( pawn );
-		if ( !pawn.NetworkSpawn( connection ) )
+		// Only the host knows where everyone is, so it alone decides which clients are sent this pawn.
+		var options = NetworkSpawnOptions.Default;
+		options.Owner = connection;
+		options.AlwaysTransmit = false;
+		if ( !pawn.NetworkSpawn( options ) )
 		{
 			pawn.Destroy();
 			connection.Kick( "The server could not create your player." );
@@ -122,10 +168,12 @@ public sealed class GameManager : Component, Component.INetworkListener
 	void INetworkListener.OnDisconnected( Connection connection )
 	{
 		_clients.Remove( connection.Id );
+		_budgets.Remove( connection.Id );
 		Journal?.Record( "connection.leave", new Actor( (long)connection.SteamId.ValueUnsigned, Name: connection.DisplayName ) );
-		foreach ( var player in Scene.GetAllComponents<Player>().Where( value => value.Network.Owner == connection ) )
+		foreach ( var player in Scene.GetAllComponents<Player>().Where( value => value.Network.Owner == connection ).ToArray() )
 		{
-			player.HostSave();
+			// Leaving is not a way out of being down or bound: the character stays where it is.
+			player.HostDisconnected();
 			player.GameObject.Destroy();
 		}
 	}
@@ -135,6 +183,48 @@ public sealed class GameManager : Component, Component.INetworkListener
 		// A new host has none of the saved state, so it would run an empty city. Stop instead.
 		Log.Warning( "Hexagon does not support host migration; leaving the session." );
 		Networking.Disconnect();
+	}
+
+	/// <summary>Host: notes where each connection's character is, for <see cref="Sees"/>.</summary>
+	private void See()
+	{
+		_eyes.Clear();
+		foreach ( var player in Scene.GetAllComponents<Player>() )
+			if ( player.HostCharacter is not null && player.Network.Owner is { } owner ) _eyes[owner.Id] = player.HostPosition;
+	}
+
+	/// <summary>Host: whether the connection has a character in the city near enough to see this place.</summary>
+	public bool Sees( Connection connection, Vector3 at ) =>
+		_eyes.TryGetValue( connection.Id, out var eye ) && eye.Distance( at ) <= SightRange;
+
+	/// <summary>
+	/// Host: takes one request from the connection's budget. Whoever sends a request pays for it,
+	/// whichever pawn it names, so asking in someone else's name is no way to flood the host.
+	/// </summary>
+	public bool HostSpend( Connection caller )
+	{
+		if ( !_budgets.TryGetValue( caller.Id, out var budget ) ) _budgets[caller.Id] = budget = new RateLimiter( capacity: 12, refillPerSecond: 4 );
+		return budget.TryTake( RealTime.Now );
+	}
+
+	/// <summary>
+	/// Host: journals a refusal that costs the sender nothing to cause, such as a forged request or
+	/// one over budget. Each kind is written at most once a second per account, and the rest are
+	/// counted into the next. False when this one was only counted.
+	/// </summary>
+	public bool HostRefuse( Connection caller, string kind, string? subject, params (string Key, string Value)[] data )
+	{
+		if ( Journal is null || !_refusals.Admit( Player.SteamIdOf( caller ), kind, RealTime.Now, out var held ) ) return false;
+		Journal.Record( kind, Player.HostActorOf( caller ), subject, ok: false, data: held > 0 ? data.Append( ("more", held.ToString()) ).ToArray() : data );
+		return true;
+	}
+
+	/// <summary>Host: what a flood held back is written once the flood has stopped.</summary>
+	private void ReportRefusals()
+	{
+		_sinceRefusals = 0;
+		foreach ( var (account, kind, held) in _refusals.Due( RealTime.Now ) )
+			Journal?.Record( kind, new Actor( account ), ok: false, data: ("more", held.ToString()) );
 	}
 
 	/// <summary>
@@ -167,7 +257,25 @@ public sealed class GameManager : Component, Component.INetworkListener
 		return points.Length == 0 ? global::Transform.Zero : Game.Random.FromArray( points )!.WorldTransform;
 	}
 
-	public void SaveWorld() => Store?.Save( "world.json", World );
+	public void SaveWorld() => Store?.Save( WorldPath, World );
+
+	/// <summary>
+	/// Host: saves documents that changed together as one change, so a crash keeps all of it or none:
+	/// both sides of a sale, the price of a door and its deed. A character or holder deleted since it
+	/// changed is left out, as saving it alone would leave it out.
+	/// </summary>
+	public void SaveTogether( params object[] documents )
+	{
+		if ( Store is null ) return;
+		var change = new List<(string Path, object Document)>();
+		foreach ( var document in documents.Distinct() )
+		{
+			if ( document is CharacterData character && Roster!.Contains( character ) ) change.Add( (CharacterRoster.PathOf( character.Id ), character) );
+			else if ( document is HolderData holder && Holders!.Contains( holder ) ) change.Add( (HolderStore.PathOf( holder.Id ), holder) );
+			else if ( document is WorldData world ) change.Add( (WorldPath, world) );
+		}
+		if ( change.Count > 0 ) Store.SaveTogether( change.ToArray() );
+	}
 
 	public AccountData Account( long steamId )
 	{

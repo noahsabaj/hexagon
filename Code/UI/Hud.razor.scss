@@ -87,6 +87,10 @@ Hud {
 		&.primary {
 			background-color: #2f7fa8;
 		}
+
+		&.danger {
+			background-color: #a8382f;
+		}
 	}
 
 	TextEntry {

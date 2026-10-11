@@ -39,6 +39,12 @@ public sealed class MovementAudit
 	public Vec3 Position { get; private set; }
 
 	/// <summary>
+	/// True from a host move until the owner shows up where it was put. Until then its claims are
+	/// still from the old place, so where it claims to have gone is not a path it walked.
+	/// </summary>
+	public bool Settling => _awaitingArrival;
+
+	/// <summary>
 	/// The host moved the character itself. The owner applies that a moment later, so until it does,
 	/// or until <paramref name="settleSeconds"/> pass, claims from the old place are ignored rather
 	/// than judged. They are never accepted: a host teleport is not a free one for the client.

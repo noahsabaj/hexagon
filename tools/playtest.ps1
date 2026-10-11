@@ -32,6 +32,7 @@ $script:requestId = 0
 $script:failures = 0
 $script:nonce = 0
 $script:lastProblem = 'none'
+$script:replayed = $false
 
 function Invoke-Editor([string] $Method, $Params) {
     $script:requestId++
@@ -76,15 +77,37 @@ function Wait-Until([string] $What, [scriptblock] $Condition) {
     throw "Timed out waiting for $What. Last problem: $($script:lastProblem)"
 }
 
+# The editor builds the game's code in the background and swaps it in when it is done. While it does,
+# the game cannot find its own types: a scene played then loses every Hexagon component, and a
+# command sent then fails inside the editor. So nothing is played until the code is in.
+function Wait-Built {
+    Wait-Until 'the code to build' { -not (Invoke-Tool 'editor_status' | ConvertFrom-Json).IsCompiling }
+    $status = Invoke-Tool 'editor_status' | ConvertFrom-Json
+    if ($status.LastCompileSucceeded -eq $false) { throw "The code did not compile ($($status.LastCompileErrors) errors); compile_status lists them." }
+}
+
 # Sends one driver command and returns what the game reported back through the console.
 function Send([string] $Command) {
     # The editor skips a property write that does not change the value, so a repeated command would
     # never run. A trailing nonce makes every write distinct; the driver ignores extra arguments.
     $script:nonce++
-    [void](Invoke-Tool 'set_component' ([ordered]@{ id = $hud; type = 'DevDriver'; properties = @{ Command = "$Command|#$($script:nonce)" } }))
+    $write = [ordered]@{ id = $hud; type = 'DevDriver'; properties = @{ Command = "$Command|#$($script:nonce)" } }
+    try { [void](Invoke-Tool 'set_component' $write) }
+    catch {
+        # Swapping the code in, the editor briefly cannot describe the driver, and fails while checking
+        # the write, before setting anything: the command never ran, so it is sent again once the
+        # code is in. Anything else, the driver's own failures included, is a failure.
+        $problem = $_.Exception.Message
+        if ($problem -notmatch 'NullReferenceException' -or $problem -notmatch 'ApplyComponentProperties' -or $problem -match 'set_Command') { throw }
+        Write-Host "       the editor was swapping the code in; sending '$Command' again" -ForegroundColor DarkGray
+        Start-Sleep -Seconds 2
+        Wait-Built
+        [void](Invoke-Tool 'set_component' $write)
+    }
     Start-Sleep -Milliseconds 700
     $lines = (Invoke-Tool 'read_console' @{ limit = 40; filter = '[dev]' }) -split "`n" | Where-Object { $_ -match '\[dev\]' }
-    return (($lines | Select-Object -Last 1) -replace '^.*?=> ', '')
+    # The editor ends each console line with CRLF, and only the LF is split on.
+    return "$(($lines | Select-Object -Last 1) -replace '^.*?=> ', '')".TrimEnd()
 }
 
 function Expect([string] $What, [string] $State, [string] $Pattern) {
@@ -97,21 +120,42 @@ function Expect([string] $What, [string] $State, [string] $Pattern) {
 }
 
 function Start-Play {
-    # The asset system may still be indexing right after the assembly loads.
-    Wait-Until 'the scene to open' {
-        [void](Invoke-Tool 'open_scene' @{ path = 'scenes/main.scene' })
-        (Invoke-Tool 'editor_status' | ConvertFrom-Json).ActiveScenePath -eq 'scenes/main.scene'
-    }
-    # Started too early, the editor plays an empty default scene and still reports that it is
-    # playing. Only a session on the real scene counts; anything else is stopped and retried.
-    Wait-Until 'play mode on the real scene' {
-        if ((Invoke-Tool 'play_start' | ConvertFrom-Json).Scene -eq 'main') { return $true }
+    while ($true) {
+        Wait-Built
+        # The asset system may still be indexing right after the assembly loads.
+        Wait-Until 'the scene to open' {
+            [void](Invoke-Tool 'open_scene' @{ path = 'scenes/main.scene' })
+            (Invoke-Tool 'editor_status' | ConvertFrom-Json).ActiveScenePath -eq 'scenes/main.scene'
+        }
+        # Started too early, the editor plays an empty default scene and still reports that it is
+        # playing. Only a session on the real scene counts; anything else is stopped and retried.
+        Wait-Until 'play mode on the real scene' {
+            if ((Invoke-Tool 'play_start' | ConvertFrom-Json).Scene -eq 'main') { return $true }
+            [void](Invoke-Tool 'play_stop')
+            $false
+        }
+        # Attach the driver once, then wait for the pawn: adding it again on every retry fails once it exists.
+        Wait-Until 'the driver component' { [void](Invoke-Tool 'add_component' @{ id = $hud; type = 'DevDriver' }); $true }
+        # A scene played while the editor was still taking the code in has no game manager, so nobody
+        # ever arrives. That is the editor, not the game: the scene is played again. A game that lets
+        # nobody in still fails, at the deadline.
+        $arrival = [DateTime]::UtcNow.AddSeconds(60)
+        while ([DateTime]::UtcNow -lt $arrival) {
+            if ($editor.HasExited) { throw "s&box exited with code $($editor.ExitCode) while waiting for the local player." }
+            if ([DateTime]::UtcNow -ge $script:deadline) { throw "Timed out waiting for the local player. Last problem: $($script:lastProblem)" }
+            try {
+                $reply = Send 'state'
+                if ($reply -match '^has=') { return }
+                $script:lastProblem = "driver said: $reply"
+            }
+            catch { $script:lastProblem = $_.Exception.Message }
+            Start-Sleep -Milliseconds 500
+        }
+        Write-Host "       nobody arrived in a minute ($($script:lastProblem)); playing the scene again" -ForegroundColor DarkGray
+        $script:replayed = $true
         [void](Invoke-Tool 'play_stop')
-        $false
+        Start-Sleep -Seconds 2
     }
-    # Attach the driver once, then wait for the pawn: adding it again on every retry fails once it exists.
-    Wait-Until 'the driver component' { [void](Invoke-Tool 'add_component' @{ id = $hud; type = 'DevDriver' }); $true }
-    Wait-Until 'the local player' { $reply = Send 'state'; $script:lastProblem = "driver said: $reply"; $reply -match '^has=' }
 }
 
 Write-Host "==> Starting the editor (data folder '$dataRoot')" -ForegroundColor Cyan
@@ -140,6 +184,8 @@ try {
 
     Write-Host '==> Entering the city, chat, inventory' -ForegroundColor Cyan
     [void](Send 'enter|John Doe')
+    [void](Send 'delete|John Doe')
+    Expect 'a character in the city cannot be deleted' (Send 'state') 'characters=\[John Doe\].*Leave the city with that character before deleting it'
     [void](Send 'say|Hello there')
     [void](Send 'say|/me waves')
     [void](Send 'say|//brb')
@@ -183,6 +229,12 @@ try {
     $state = Send 'state'
     Expect 'an operator issued a keycard' $state 'Keycard@'
     Expect 'holding the keycard let a citizen lock the door' $state 'Door 1:open=False,locked=True'
+    # A closed door is a wall. One step through it is no faster than walking, and is still refused.
+    Start-Sleep -Seconds 2
+    [void](Send 'goto|240|-205|8')
+    Start-Sleep -Seconds 2
+    Expect 'stepping through the locked door did not get past it' (Send 'state') 'pos=2[2-5]\d\.?\d*,-1[2-6]\d'
+    Expect 'and the host recorded it as a wall' (Send 'journal|movement.implausible') 'ok=False .*reason=wall'
     [void](Send 'door|Door 1|lock')
     [void](Send 'drop|2')
     [void](Send 'door|Door 1|lock')
@@ -228,6 +280,8 @@ try {
     [void](Send 'door|Door 2|lock')
     $state = Send 'state'
     Expect 'buying a door paid its price into a sink' $state 'tokens=50 .*Door 2:open=False,locked=False,owned'
+    [void](Send 'console|hexagon_door "Door 2" release')
+    Expect 'staff can take a door back from its owner' (Send 'state') 'Door 2:open=False,locked=False\]'
     [void](Send 'open|Ration Vendor')
     Expect 'the vendor stocked its shelves from its declared source, and has a float' (Send 'state') 'opentokens=200 .*open=\[Ration Vendor: Rationx3, Waterx3, Bandagex3\]'
     Snapshot 'vendor'
@@ -310,18 +364,32 @@ try {
     Snapshot 'crate-and-vendor'
     Expect 'and put back' "$((Send 'state') -notmatch 'roundx10') $(Send 'state')" '^True .*Pistol roundx30@'
 
-    Write-Host '==> Restart' -ForegroundColor Cyan
+    Write-Host '==> Leaving does not end a scene' -ForegroundColor Cyan
+    [void](Send 'console|hexagon_hurt "Officer Kane" 500')
+    # Moved after he fell, so only the save as the city closes knows where he is now.
+    [void](Send 'console|hexagon_teleport "Officer Kane" 330 -100 8')
+    Start-Sleep -Seconds 2
     [void](Send 'leave')
+    Expect 'down, he cannot leave, so the city closes with him lying there' (Send 'state') 'has=True .*down=True .*cannot leave the city like this'
+
+    Write-Host '==> Restart' -ForegroundColor Cyan
     [void](Invoke-Tool 'play_stop')
     Start-Sleep -Seconds 3
     Start-Play
     $state = Send 'state'
     Expect 'both characters survived the restart' $state 'characters=\[John Doe, Officer Kane\]'
     Expect 'the locked door survived the restart' $state 'Door 1:open=False,locked=True'
+    Expect 'the released door is still nobody''s' $state 'Door 2:open=False,locked=False\]'
     Expect 'a new session starts with an empty chat log' $state 'chat=\[\]'
     [void](Send 'enter|John Doe')
+    # What someone left lying looks like is sent only once the network has stopped sending it to those too far away.
+    Start-Sleep -Seconds 3
     $state = Send 'state'
     Expect 'the moved item survived the restart' $state 'Ration@4,3'
+    Expect 'whoever was down when the city closed is still lying there' $state 'sleepers=1 '
+    Expect 'where he was when it closed, which only the closing save knew' (Send 'sleepers') '^3[23]\d,-(9\d|1[01]\d),down$'
+    [void](Send 'act|person.revive')
+    Expect 'and someone else can help them up, after which nobody is lying there' (Send 'state') 'sleepers=0 '
     [void](Send 'open|Crate')
     Expect 'what was put in the crate survived the restart' (Send 'state') 'open=\[Crate: Keycard\]'
     # The swinging door nudges the pawn, so this is a neighbourhood, not a point.
@@ -337,13 +405,18 @@ try {
     Expect 'allowed acts are on record' $journal 'verb\.door\.lock=4(\s|$)'
     Expect 'the money supply is what the journal says it is' $journal 'tokens\.destroy=1(\s|$)'
     Expect 'the operator is on record too' $journal 'operator\.whitelist=1(\s|$)'
+    Expect 'and so is what staff did to a door' $journal 'door\.release=1(\s|$)'
+    Expect 'a refused deletion is on record' $journal 'character\.delete!=1(\s|$)'
+    Expect 'someone left lying is acted on like anyone else, on the record' $journal 'verb\.person\.revive=1(\s|$)'
     Expect 'speech is on record' $journal 'chat\.say=1 .*chat\.me=3 .*chat\.ooc=1.*item\.move=5 .*item\.split=1 .*item\.merge=1'
     Expect 'this client was told no other name' (Send 'proxies') '^[^A-Za-z]*$'
 
-    # The editor sometimes looks the driver's type up while the assembly is still loading. That is
-    # about this harness, not the game, so it is not counted.
+    # The editor sometimes looks the driver's type up while the assembly is still loading, and a scene
+    # played again was first played while the code was going in. That is about this harness, not the
+    # game, so it is not counted.
+    $notCounted = if ($script:replayed) { 'could not find Hexagon\.' } else { 'could not find Hexagon\.Dev\.DevDriver' }
     $problems = @((Invoke-Tool 'read_console' @{ limit = 500; minimumLevel = 'Warn' }) -split "`n" |
-        Where-Object { $_ -match 'Hexagon|Exception|\[store\]|Whitelist violation|hexagon\.' -and $_ -notmatch 'Bad texture|Error loading resource|could not find Hexagon\.Dev\.DevDriver' })
+        Where-Object { $_ -match 'Hexagon|Exception|\[store\]|Whitelist violation|hexagon\.' -and $_ -notmatch "Bad texture|Error loading resource|$notCounted" })
     Expect 'the session logged no game warnings or errors' "$($problems.Count) problem lines: $($problems -join ' | ')" '^0 problem'
     [void](Invoke-Tool 'play_stop')
 }

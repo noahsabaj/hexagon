@@ -62,17 +62,27 @@ public sealed class HolderStore
 		return holder;
 	}
 
-	public void Save( HolderData holder ) => _store.Save( Path( holder.Id ), holder );
+	/// <summary>Whether this holder is still kept, and was not deleted once emptied.</summary>
+	public bool Contains( HolderData holder ) => _holders.TryGetValue( holder.Id, out var held ) && ReferenceEquals( held, holder );
+
+	/// <summary>A deleted holder is not written back, so an emptied body cannot return after a restart.</summary>
+	public bool Save( HolderData holder )
+	{
+		if ( !Contains( holder ) ) return false;
+		_store.Save( PathOf( holder.Id ), holder );
+		return true;
+	}
 
 	/// <summary>Refused while anything is inside: a holder never takes its contents out of the world with it.</summary>
 	public Result Delete( Guid id )
 	{
 		if ( Find( id ) is not { } holder ) return Result.Fail( ErrorCode.NotFound, "There is no such holder." );
 		if ( holder.Inventory.Items.Count > 0 || holder.Tokens > 0 ) return Result.Fail( ErrorCode.Conflict, "It is not empty." );
-		_store.Delete( Path( id ) );
+		_store.Delete( PathOf( id ) );
 		_holders.Remove( id );
 		return Result.Success();
 	}
 
-	private static string Path( Guid id ) => $"holders/{id:N}.json";
+	/// <summary>Where a holder's document is kept, for saving it together with others.</summary>
+	public static string PathOf( Guid id ) => $"holders/{id:N}.json";
 }

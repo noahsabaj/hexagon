@@ -76,6 +76,7 @@ public static class Chat
 		if ( speaker.Network.Owner is not { } owner ) return;
 		if ( speaker.IsIncapable || TunedTo( character ) is not { } frequency )
 		{
+			speaker.HostRecord( "chat.radio", ok: false, data: new[] { ("reason", speaker.IsIncapable ? "incapable" : "untuned"), ("text", text) } );
 			Tell( owner, speaker.IsIncapable ? "You cannot reach your radio." : "You have no radio tuned to anything." );
 			return;
 		}
@@ -103,8 +104,13 @@ public static class Chat
 		using ( Rpc.FilterInclude( connection ) ) Receive( -1, text );
 	}
 
+	/// <summary>This client only: a notice from the HUD itself, such as why something typed did nothing.</summary>
+	public static void Note( string text ) => Add( -1, text );
+
 	[Rpc.Broadcast( NetFlags.HostOnly | NetFlags.Reliable )]
-	private static void Receive( int channel, string text )
+	private static void Receive( int channel, string text ) => Add( channel, text );
+
+	private static void Add( int channel, string text )
 	{
 		Lines.Add( new ChatLine( text, channel < 0, channel < 0 ? ChatChannel.Say : (ChatChannel)channel, 0 ) );
 		if ( Lines.Count > MaximumLines ) Lines.RemoveAt( 0 );

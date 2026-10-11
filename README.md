@@ -8,7 +8,8 @@ It is not a port of NutScript or Helix. Those leave a server's hardest problems 
 metagaming, duplicated items, disputes and staff abuse. Hexagon holds itself to three laws.
 
 - **Perception.** A client receives only what its character could perceive. Names and factions
-  reach their owner alone; speech reaches only those in range.
+  reach their owner alone; speech reaches only those in range; people farther away than a character
+  can see are not sent at all.
 - **Conservation.** Items and tokens only move: between holders, in from a named source, out
   through a named sink. Nothing is set, spawned or deleted.
 - **Memory.** Every host decision is journaled with who, where and who saw it, refusals and
@@ -38,16 +39,21 @@ itself to.
 - **Holders.** A crate, a dropped item, a body and a vendor are one kind of thing, so dropping,
   storing, looting, searching and trading are the same transfer.
 - **Verbs.** A world object or a person lists what can be done to it. One host checkpoint decides
-  who may: identity, rate limit, reach, capability, journal. Use does the first; a menu names the rest.
+  who may: identity, rate limit, reach, capability, journal. Use does the first, or for a person
+  opens the menu, which names them all.
 - **Chat**: say, `/w` whisper, `/y` yell, `/me`, `/r` radio, `//` out-of-character, and `/pay`. Speech reaches
   only players in range, each in their own words for the speaker.
-- **Doors** that anyone in reach can open, that a capability or ownership can lock, and that can be bought.
+- **Doors** that anyone in reach can open, that ownership or the capability the door names can
+  lock, and that can be bought. Staff can take one back, and a character gone for good gives up
+  any it owned.
 - **Violence with consequences.** Harm puts a character down, never out. Helping up, searching and
-  finishing are deliberate, witnessed acts. The game chooses what death means.
+  finishing are deliberate, witnessed acts. The game chooses what death means. A player who leaves
+  while down or bound leaves the character lying, or standing bound, where it was.
 - **Restraints and search**, **vendors, wages and payments**, all conserving items and tokens.
 - **Staff tools** in game: the console's own commands, journaled under the staff member's name.
 - **Persistence.** Characters, what they know, their health and state, holders, doors and
-  whitelists survive a restart. So does the journal.
+  whitelists survive a restart. So does the journal. A change to two documents, such as a sale, is
+  saved as one.
 - **A default HUD**: character menu, chat, inventory, the open holder, verbs, staff panel.
 
 ## Setting up from a clean checkout
@@ -83,12 +89,13 @@ pwsh tools/verify.ps1
 | Part | Where | How it is checked |
 | --- | --- | --- |
 | Rules with no engine in them: names, inventory grid, transfers, journal, capabilities, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
-| Components: game manager, player, door, chat, operator commands | `Code` | Compiled against the installed engine, warnings as errors |
+| Components: game manager, player, sleeper, door, chat, operator commands | `Code` | Compiled against the installed engine, warnings as errors |
 | Default HUD | `Code/UI` | Same compile, then looked at in the play test |
 | A whole game on top | a game project | `tools/playtest.ps1` plays it in the real editor; `tools/playtest-server.ps1` plays it as two clients on a dedicated server |
 
-What an onlooker could see is `[Sync( SyncFlags.FromHost )]` on components. Everything else goes
-to its owner by `[Rpc.Owner]`. A client changes nothing directly: it calls a `[Rpc.Host]` request, and the host
+What an onlooker could see is `[Sync( SyncFlags.FromHost )]` on components, and a person is sent
+only to clients whose character is within `SightRange` of them. Everything else goes to its owner by
+`[Rpc.Owner]`. A client changes nothing directly: it calls a `[Rpc.Host]` request, and the host
 re-derives who is asking from the connection, measures distances itself, and saves before it
 replies.
 
@@ -120,21 +127,36 @@ it was actually told: that the other player's name never arrived, that a whisper
 range, that a door one opened is open for the other. Needs Steam running and takes several
 minutes, most of it the clients starting.
 
+```bash
+pwsh tools/generate-confusables.ps1
+```
+
+Rebuilds the look-alike table that character names are checked against, from the Unicode release
+it is pinned to. It refuses data whose hash is not the pinned one. `-Check` changes nothing and
+fails if the table in the repository is not exactly what it would write; CI runs that.
+
 ## Operator commands
 
 Typed in the host's console as `hexagon_<command>`, or by staff in game (Tab) without the prefix.
 
 | Command | Effect |
 | --- | --- |
-| `staff <steamid64> <0|1>` | Console only. Let an account use these commands in game |
-| `whitelist <steamid64> <faction>` / `unwhitelist` | Allow or stop an account creating characters in a whitelisted faction |
-| `give "<character name>" <item> [count]` | Issue items, from the `operator` source |
-| `teleport "<character name>" <x> <y> <z>`, and in game `bring` / `goto "<character name>"` | Move a character |
-| `hurt "<character name>" <amount>` / `revive "<character name>"` | Harm a character, or help one up |
+| `staff <steamid64> <0\|1>` | Console only. Let an account use these commands in game |
+| `whitelist <steamid64> <faction>` / `unwhitelist` | Allow or stop an account creating characters in a whitelisted faction. Taking it away sends that faction's characters on the account back to the menu |
+| `give "<character name>" <item\|tokens> [count]` | Issue items or tokens, from the `operator` source |
+| `take "<character name>" <item\|tokens> [count]` | Take them out of the world, through the `operator` sink. No count takes all |
+| `move "<from>" "<to>" <item\|tokens> [count]` | Move them from one character to another, as any transfer |
+| `teleport "<character name>" <x> <y> <z>`, and in game `bring` / `goto "<character name>"` | Move a character who is in the city |
+| `hurt "<character name>" <amount>` / `revive "<character name>"` | Harm a character in the city, or help one up, here or not |
+| `release "<character name>"` | Free a character's bound hands, here or not |
+| `faction "<character name>" <faction>` | Change a character's faction |
+| `door ["<door>"] <open\|close\|lock\|unlock\|release>` | Work a door whatever it asks for, or take it back from its owner. In game an unnamed door is the one beside you; `door` alone lists them |
 | `payday` | Pay every faction's wage now |
-| `who` | Who is playing whom, and where. The one place a name is shown to someone never told it |
-| `journal [text] [count]` | The latest of today's journal entries containing the text |
+| `who` | Who is playing whom, and where, and who was left down or bound. The one place a name is shown to someone never told it |
+| `journal [text] [count] [days]` | The latest entries containing the text, from the last two days unless told otherwise |
 
-The journal is `journal/<date>.jsonl` under the data folder, one JSON object per line.
+A character is named as staff know it, in quotes, whether or not it is in the city. Every command is
+journaled before it runs, under the staff member's name or as the console. The journal is
+`journal/<date>.jsonl` under the data folder, one JSON object per line, a file per UTC day.
 
 [docs/v0.1.md](docs/v0.1.md) defines the first release as a checklist. See [docs/decisions.md](docs/decisions.md) for why it is shaped this way and what is not here yet.

@@ -21,18 +21,25 @@ public sealed class JournalEntry
 	public string? ActorName { get; set; }
 	/// <summary>What it was done to: a holder, an item, a door.</summary>
 	public string? Subject { get; set; }
+	/// <summary>When it was done to a character, that character's name as it was then.</summary>
+	public string? SubjectName { get; set; }
 	public float[]? Where { get; set; }
 	/// <summary>Characters close enough to have seen it.</summary>
 	public List<Guid> Witnesses { get; set; } = new();
+	/// <summary>Their names as they were then, in the same order. The ids stay the evidence; staff read these.</summary>
+	public List<string> WitnessNames { get; set; } = new();
 	public Dictionary<string, string> Data { get; set; } = new();
 
 	/// <summary>One line a person can read.</summary>
 	public string Describe()
 	{
 		var who = ActorName ?? (Account == 0 ? "console" : Account.ToString());
+		var subject = Subject is null ? "" : SubjectName is null ? $" on {Subject}" : $" on {SubjectName} ({Subject})";
 		var details = string.Join( " ", Data.Select( pair => $"{pair.Key}={pair.Value}" ) );
-		return $"{At.UtcDateTime:HH:mm:ss} {Kind}{(Ok ? "" : " REFUSED")} by {who}{(Subject is null ? "" : $" on {Subject}")}" +
-			$"{(details.Length == 0 ? "" : $" ({details})")}{(Witnesses.Count == 0 ? "" : $" seen by {Witnesses.Count}")}";
+		var seen = Witnesses.Count == 0 ? ""
+			: WitnessNames.Count == Witnesses.Count ? $" seen by {string.Join( ", ", WitnessNames )}"
+			: $" seen by {Witnesses.Count}";
+		return $"{At.UtcDateTime:HH:mm:ss} {Kind}{(Ok ? "" : " REFUSED")} by {who}{subject}{(details.Length == 0 ? "" : $" ({details})")}{seen}";
 	}
 }
 
@@ -62,6 +69,13 @@ public sealed class Journal
 		_warn = warn ?? (_ => { });
 	}
 
+	/// <summary>
+	/// A character's name by id, so an entry names who it was done to and who saw it, as they were
+	/// called at the time. Staff cannot turn an id into a name in game, and a deleted character's
+	/// name is free to be taken again. The game sets this once its roster is loaded.
+	/// </summary>
+	public Func<Guid, string?>? NameOf { get; set; }
+
 	public static string PathFor( DateTimeOffset day ) => $"journal/{day.UtcDateTime:yyyy-MM-dd}.jsonl";
 
 	/// <summary>Never throws: a full disk must not undo a decision the host has already made.</summary>
@@ -70,6 +84,7 @@ public sealed class Journal
 		if ( entry.At == default ) entry.At = _clock();
 		try
 		{
+			Name( entry );
 			// The leading newline ends any line a crash left half-written, so it cannot swallow this one.
 			_files.Append( PathFor( entry.At ), "\n" + JsonSerializer.Serialize( entry ) );
 		}
@@ -92,12 +107,32 @@ public sealed class Journal
 		Record( entry );
 	}
 
-	/// <summary>The latest entries of a day whose readable line contains the text, oldest first. Empty text matches all.</summary>
-	public IReadOnlyList<JournalEntry> Search( DateTimeOffset day, string text, int maximum )
+	/// <summary>
+	/// The latest entries whose readable line contains the text, oldest first, from the last
+	/// <paramref name="days"/> days up to <paramref name="now"/>. A day is a UTC day, so an evening
+	/// that crosses midnight there is two. Empty text matches all.
+	/// </summary>
+	public IReadOnlyList<JournalEntry> Search( DateTimeOffset now, string text, int maximum, int days = 1 )
 	{
-		var matches = Read( day ).Where( entry => text.Length == 0 || entry.Describe().Contains( text, StringComparison.OrdinalIgnoreCase ) ).ToList();
+		var matches = new List<JournalEntry>();
+		for ( var back = Math.Max( 1, days ) - 1; back >= 0; back-- )
+			matches.AddRange( Read( now.AddDays( -back ) ).Where( entry => text.Length == 0 || entry.Describe().Contains( text, StringComparison.OrdinalIgnoreCase ) ) );
 		return matches.Skip( Math.Max( 0, matches.Count - maximum ) ).ToArray();
 	}
+
+	private void Name( JournalEntry entry )
+	{
+		if ( NameOf is not { } nameOf ) return;
+		if ( entry.SubjectName is null && CharacterIn( entry.Subject ) is { } subject ) entry.SubjectName = nameOf( subject );
+		if ( entry.WitnessNames.Count == 0 && entry.Witnesses.Count > 0 )
+			entry.WitnessNames.AddRange( entry.Witnesses.Select( witness => nameOf( witness ) ?? "someone" ) );
+	}
+
+	/// <summary>The character a subject such as <c>character:4f1c...</c> names, if it names one.</summary>
+	private static Guid? CharacterIn( string? subject ) =>
+		subject is not null && subject.StartsWith( "character:", StringComparison.Ordinal ) && Guid.TryParseExact( subject["character:".Length..], "N", out var id )
+			? id
+			: null;
 
 	/// <summary>That day's entries, oldest first. A line torn by a crash is skipped.</summary>
 	public IReadOnlyList<JournalEntry> Read( DateTimeOffset day )

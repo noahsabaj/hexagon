@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Sandbox;
 
@@ -95,7 +96,11 @@ public static class DevCommands
 		foreach ( var file in FileSystem.Data.FindFile( folder, "*.txt" ).OrderBy( value => value ) )
 		{
 			var path = $"{folder}/{file}";
-			var lines = FileSystem.Data.ReadAllText( path ).Split( (char)10, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries );
+			string text;
+			// The test may still be writing it. It is read on a later poll, and nothing after it before then.
+			try { text = FileSystem.Data.ReadAllText( path ); }
+			catch ( System.IO.IOException ) { break; }
+			var lines = text.Split( (char)10, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries );
 			FileSystem.Data.DeleteFile( path );
 			foreach ( var line in lines )
 			{
@@ -152,7 +157,8 @@ public static class DevCommands
 			// journal|<kind> describes the latest entry of that kind instead.
 			if ( args.Length > 1 && !args[1].StartsWith( '#' ) )
 				return entries.LastOrDefault( value => value.Kind == args[1] ) is { } last
-					? $"ok={last.Ok} actor='{last.ActorName}' witnesses={last.Witnesses.Count} subject='{last.Subject}'"
+					? $"ok={last.Ok} actor='{last.ActorName}' witnesses={last.Witnesses.Count} subject='{last.Subject}' " +
+						$"data=[{string.Join( " ", last.Data.Select( pair => $"{pair.Key}={pair.Value}" ) )}]"
 					: "no such entry";
 			return string.Join( " ", entries.GroupBy( value => value.Kind + (value.Ok ? "" : "!") ).Select( group => $"{group.Key}={group.Count()}" ) );
 		}
@@ -274,17 +280,15 @@ public static class DevCommands
 					player.RequestCloseHolder();
 					return "sent close";
 				case "act":
-					// A verb on the nearest other character, or on a body.
+					// A verb on the nearest other character, on someone left lying where they were, or on a body.
 					Component? subject = args[1].StartsWith( "corpse." )
 						? Game.ActiveScene.GetAllComponents<Corpse>().FirstOrDefault()
-						: Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy && value.HasCharacter )
-							.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();
+						: Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsShown ) );
 					if ( subject is null ) return "nobody there";
 					player.RequestAct( subject, args[1] );
 					return $"sent {args[1]}";
 				case "attack":
-					var foe = Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy && value.HasCharacter )
-						.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();
+					Component? foe = Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsShown ) );
 					player.RequestAttack( foe is null ? Vector3.Forward : foe.WorldPosition - player.WorldPosition );
 					return "sent attack";
 				case "equip":
@@ -293,8 +297,7 @@ public static class DevCommands
 					player.RequestItemAct( inHand.Id, "item.equip" );
 					return "sent equip";
 				case "pay":
-					var payee = Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy && value.HasCharacter )
-						.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();
+					var payee = Nearest( player, Others( player ) );
 					if ( payee is null ) return "nobody there";
 					player.RequestPay( payee, long.Parse( args[1] ) );
 					return "sent pay";
@@ -305,7 +308,7 @@ public static class DevCommands
 					player.RequestTakeTokens();
 					return "sent taketokens";
 				case "introduce":
-					var stranger = Game.ActiveScene.GetAllComponents<Player>().FirstOrDefault( value => value.IsProxy && value.HasCharacter );
+					var stranger = Nearest( player, Others( player ) );
 					if ( stranger is null ) return "nobody to meet";
 					player.RequestAct( stranger, "person.introduce" );
 					return "sent introduce";
@@ -322,6 +325,10 @@ public static class DevCommands
 				case "goto":
 					player.WorldPosition = new Vector3( float.Parse( args[1] ), float.Parse( args[2] ), float.Parse( args[3] ) );
 					return "moved";
+				case "sleepers":
+					// Where everyone left lying, or standing bound, is, as this client was shown them.
+					return string.Join( " ", Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsShown )
+						.Select( value => $"{value.WorldPosition.x:0},{value.WorldPosition.y:0},{(value.IsDown ? "down" : "bound")}" ) );
 				case "state":
 					return $"has={player.HasCharacter} name='{player.CharacterName}' faction='{player.Faction?.Title}' tokens={player.Tokens} " +
 						$"characters=[{string.Join( ", ", player.Characters.Select( value => value.Name ) )}] " +
@@ -332,7 +339,7 @@ public static class DevCommands
 						$"known=[{string.Join( ", ", player.Known.Values.OrderBy( value => value ) )}] " +
 						$"open=[{player.OpenTitle}: {string.Join( ", ", player.OpenInventory?.Items.Select( Pile ) ?? Array.Empty<string>() )}] " +
 						$"ground=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<WorldItem>().Select( value => value.Definition?.Title ).OrderBy( value => value ) )}] " +
-						$"pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";
+						$"sleepers={Game.ActiveScene.GetAllComponents<Sleeper>().Count( value => value.IsShown )} pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";
 				default:
 					return $"unknown command '{args[0]}'";
 			}
@@ -342,6 +349,13 @@ public static class DevCommands
 			return $"threw: {exception.Message}";
 		}
 	}
+
+	/// <summary>Everyone else this client can see in the city.</summary>
+	private static IEnumerable<Player> Others( Player player ) =>
+		Game.ActiveScene.GetAllComponents<Player>().Where( value => value != player && value.IsProxy && value.IsPresent );
+
+	private static T? Nearest<T>( Player player, IEnumerable<T> candidates ) where T : Component =>
+		candidates.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();
 
 	private static string Pile( Hexagon.Logic.ItemStack value ) =>
 		$"{ItemDefinition.Find( value.Definition )?.Title}{(value.Count > 1 ? $"x{value.Count}" : string.Empty)}{(value.Frequency is { } frequency ? $"~{frequency}" : string.Empty)}";
