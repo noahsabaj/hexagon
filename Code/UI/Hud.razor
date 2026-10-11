@@ -427,8 +427,7 @@
 	/// <summary>What the menu calls its target: a person by the name this character knows them by, if any.</summary>
 	private static string MenuTitle( Player player ) => player.MenuTarget switch
 	{
-		Player person => player.LabelFor( person ),
-		Sleeper sleeper => player.LabelFor( sleeper ),
+		CharacterBody person => player.LabelFor( person ),
 		{ } other => other.GameObject.Name,
 		_ => string.Empty
 	};
@@ -438,7 +437,7 @@
 		if ( Player.Local is not { MenuTarget: { } target } player ) return;
 		player.MenuTarget = null;
 		// What to offer is chosen from what this character has, so it opens a list instead of asking the host.
-		if ( verb.Id == VerbIds.PersonOffer && target is Player recipient )
+		if ( verb.Id == VerbIds.PersonOffer && target.GetComponent<Player>() is { } recipient )
 		{
 			OfferingTo = recipient;
 			return;
@@ -472,7 +471,7 @@
 	/// <summary>A character's faction, and where it stands: dead, or not yet arrived in the city.</summary>
 	private static string Standing( CharacterSummary character ) =>
 		character.IsDead ? $"{character.Faction}, dead"
-		: character.IsWaiting ? $"{character.Faction}, arrives {Player.Until( character.ArrivesAt!.Value - DateTimeOffset.UtcNow )}"
+		: character.IsWaiting ? $"{character.Faction}, arrives {Admission.Until( character.ArrivesAt!.Value - DateTimeOffset.UtcNow )}"
 		: character.Faction;
 
 	private void SubmitChat()
@@ -618,7 +617,7 @@
 		HashCode.Combine( Pending, _createdFrom, Player.Local?.Characters.Count, OfferingTo, _dragging ),
 		// A dragged pile follows the mouse.
 		_dragging is null ? 0 : Panel.MousePosition.GetHashCode(),
-		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.HoveredTooltip, Player.Local?.IsDown, Player.Local?.IsRestrained, (Player.Local?.HoveredTarget as Player)?.IsDown, (Player.Local?.HoveredTarget as Player)?.IsRestrained ),
+		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.HoveredTooltip, Player.Local?.IsDown, Player.Local?.IsRestrained, (Player.Local?.HoveredTarget as CharacterBody)?.IsDown, (Player.Local?.HoveredTarget as CharacterBody)?.IsRestrained ),
 		// Lines and notices fade, and waits run down, so the panel must rebuild as time passes.
 		(int)RealTime.Now );
 }

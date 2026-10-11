@@ -10,13 +10,14 @@ namespace Hexagon;
 
 /// <summary>
 /// A character left in the city by a player who went while it was down or bound. Leaving is not a
-/// way out of a scene: the character stays where it was, keeps bleeding, and can be helped up,
-/// searched, released or finished like anyone else in that state. It is the host's object, sent
+/// way out of a scene: the character stays where it was, keeps bleeding, and its
+/// <see cref="CharacterBody"/> can be helped up, searched, released or finished like anyone else in
+/// that state. It is the host's object, sent
 /// only to clients near enough to see it (see <see cref="Reveal"/>), and its player picks up from
 /// here on coming back.
 /// </summary>
 [Title( "Hexagon Sleeper" ), Category( "Hexagon" ), Icon( "bedtime" )]
-public sealed class Sleeper : Component, Component.IPressable, Component.INetworkVisible, IVerbTarget
+public sealed class Sleeper : Component, Component.INetworkVisible, IEmbodiment
 {
 	[Sync( SyncFlags.FromHost )] public Guid CharacterId { get; set; }
 	[Sync( SyncFlags.FromHost )] public bool IsDown { get; set; }
@@ -39,13 +40,12 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 	private string? _dressedIn;
 	private bool? _shownDown;
 
-	/// <summary>Host: the character lying, or standing bound, here.</summary>
-	public CharacterData? HostCharacter => Networking.IsHost ? HexagonServices.Current?.Roster?.Find( CharacterId ) : null;
+	/// <summary>Host: the character lying, or standing bound, here; none once it is back in its own body.</summary>
+	public CharacterData? HostCharacter =>
+		Networking.IsHost && Player.HostLoaded( CharacterId ) is null ? HexagonServices.Current?.Roster?.Find( CharacterId ) : null;
 
-	public IReadOnlyList<Verb> Verbs => IsDown || IsRestrained ? Player.VerbsFor( IsDown, IsRestrained ) : Array.Empty<Verb>();
-	float IVerbTarget.Reach => Player.PersonReach;
-	bool IVerbTarget.UseOpensMenu => true;
-	string? IVerbTarget.JournalSubject => $"character:{CharacterId:N}";
+	bool IEmbodiment.IsShownHere => IsRevealed;
+	Vector3 IEmbodiment.HostPosition => WorldPosition;
 
 	/// <summary>Host: leaves a character where it is, if it is down or bound and is not lying somewhere already.</summary>
 	public static Sleeper? HostLeave( CharacterData character, Vector3 at )
@@ -58,6 +58,7 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 		figure.AddComponent<SkinnedModelRenderer>().Model = Model.Load( Looks.DefaultBody );
 		body.AddComponent<BoxCollider>().Static = true;
 		var sleeper = body.AddComponent<Sleeper>();
+		body.AddComponent<CharacterBody>();
 		sleeper.CharacterId = character.Id;
 		sleeper.HostSync( character );
 		body.NetworkSpawn( Reveal.Options );
@@ -105,34 +106,22 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 	[Rpc.Broadcast( NetFlags.HostOnly | NetFlags.Reliable )]
 	private void TellWitnesses( string description, string look ) => Tell( description, look );
 
-	private static string LookOf( CharacterData character ) => Looks.Of( FactionDefinition.Find( character.Faction ) );
+	private static string LookOf( CharacterData character ) => CharacterService.LookOf( character );
 
 	protected override void OnAwake() => _sinceLeft = 0;
 
 	protected override void OnFixedUpdate()
 	{
-		if ( !Networking.IsHost || HexagonServices.Current is not { Roster: { } roster } game ) return;
+		if ( !Networking.IsHost || HexagonServices.Current?.Roster is not { } roster ) return;
 		// Gone, up and free, or back in its own body in the city: there is nobody left lying here.
 		if ( roster.Find( CharacterId ) is not { } character || !(character.IsDown || character.IsRestrained) || Player.HostLoaded( CharacterId ) is not null )
 		{
 			GameObject.Destroy();
 			return;
 		}
-		if ( !IsShown && _sinceLeft > Reveal.HoldSeconds )
-		{
-			IsShown = true;
-			HostSync( character );
-		}
-		// Time passes for someone lying in the street, whether or not their player is watching.
-		if ( !Vitals.Bleed( character, Time.Delta, game.DownedSeconds ) ) return;
-		if ( game.BleedOutKills )
-		{
-			Player.HostDie( game, character, WorldPosition, LookOf( character ), "bled out", null );
-			return;
-		}
-		Vitals.Revive( character );
-		roster.Save( character );
-		HostRefresh( character );
+		if ( IsShown || _sinceLeft <= Reveal.HoldSeconds ) return;
+		IsShown = true;
+		HostSync( character );
 	}
 
 	protected override void OnUpdate()
@@ -156,64 +145,4 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 
 	/// <summary>Host: a client is sent this only while its own character is near enough to see it.</summary>
 	bool INetworkVisible.IsVisibleToConnection( Connection connection, in BBox worldBounds ) => Reveal.IsVisibleTo( connection, WorldPosition );
-
-	bool IPressable.CanPress( IPressable.Event e ) => IsRevealed;
-
-	bool IPressable.Press( IPressable.Event e )
-	{
-		if ( Player.Local is { } local ) local.MenuTarget = this;
-		return true;
-	}
-
-	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) =>
-		Player.Local is null || !IsRevealed ? null : new IPressable.Tooltip( Player.Local.LabelFor( this ), "person", CharacterDescription );
-
-	Result IVerbTarget.Perform( Player actor, Verb verb )
-	{
-		if ( HostCharacter is not { } character || HexagonServices.Current is not { Roster: { } roster } game || actor.HostCharacter is not { } other )
-			return Result.Fail( ErrorCode.NotFound, "There is nobody there." );
-		switch ( verb.Id )
-		{
-			case VerbIds.PersonRevive:
-			{
-				var revived = Vitals.Revive( character );
-				if ( !revived.Ok ) return revived;
-				roster.Save( character );
-				HostRefresh( character );
-				return revived;
-			}
-			case VerbIds.PersonSearch:
-				actor.HostOpen( this, character, "Belongings", onlyWhile: () => !GameObject.IsDestroyed && (character.IsDown || character.IsRestrained) );
-				return Result.Success();
-			case VerbIds.PersonRelease:
-			{
-				if ( !character.IsRestrained ) return Result.Fail( ErrorCode.Conflict, "Their hands are not bound." );
-				character.IsRestrained = false;
-				roster.Save( character );
-				HostRefresh( character );
-				return Result.Success();
-			}
-			case VerbIds.PersonFinish:
-			{
-				var can = Vitals.CanFinish( character );
-				if ( can.Ok ) Player.HostDie( game, character, WorldPosition, LookOf( character ), "finished", other );
-				return can;
-			}
-			default:
-				return Result.Fail( ErrorCode.Invalid, "That cannot be done." );
-		}
-	}
-
-	/// <summary>Host: harm done to someone who cannot get away from it.</summary>
-	internal void HostDamage( int amount, Player by, string cause )
-	{
-		if ( HostCharacter is not { } character || HexagonServices.Current?.Roster is not { } roster ) return;
-		var harm = Vitals.Damage( character, amount );
-		if ( harm == Harm.None ) return;
-		if ( harm == Harm.Downed ) character.Equipped = null;
-		roster.Save( character );
-		if ( harm == Harm.Downed )
-			Player.HostRecordAt( JournalKinds.CharacterDowned, Actor.Of( character ), WorldPosition, by.HostCharacter?.HolderLabel, data: new[] { ("cause", cause) } );
-		HostRefresh( character );
-	}
 }

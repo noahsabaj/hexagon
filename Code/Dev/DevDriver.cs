@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Hexagon.Logic;
 using Sandbox;
 
 namespace Hexagon.Dev;
@@ -345,12 +346,12 @@ public static class DevCommands
 					// A verb on the nearest other character, on someone left lying where they were, or on a body.
 					Component? subject = args[1].StartsWith( "corpse." )
 						? Game.ActiveScene.GetAllComponents<Corpse>().FirstOrDefault()
-						: Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed ) );
+						: Person( player );
 					if ( subject is null ) return "nobody there";
 					player.RequestAct( subject, args[1] );
 					return $"sent {args[1]}";
 				case "attack":
-					Component? foe = Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed ) );
+					Component? foe = Person( player );
 					player.RequestAttack( foe is null ? Vector3.Forward : foe.WorldPosition - player.WorldPosition );
 					return "sent attack";
 				case "equip":
@@ -381,7 +382,7 @@ public static class DevCommands
 				case "introduce":
 					var stranger = Nearest( player, Others( player ) );
 					if ( stranger is null ) return "nobody to meet";
-					player.RequestAct( stranger, VerbIds.PersonIntroduce );
+					player.RequestAct( stranger.GetComponent<CharacterBody>(), VerbIds.PersonIntroduce );
 					return "sent introduce";
 				case "proxies":
 					// What this client was told about everyone else. Names and factions must be empty.
@@ -434,10 +435,14 @@ public static class DevCommands
 	private static IEnumerable<Player> Others( Player player ) =>
 		Game.ActiveScene.GetAllComponents<Player>().Where( value => value != player && value.IsProxy && value.IsPresent );
 
+	/// <summary>The nearest other person this client can see: someone in the city, or someone left lying where they were.</summary>
+	private static CharacterBody? Person( Player player ) =>
+		(Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed ) ))?.GetComponent<CharacterBody>();
+
 	private static T? Nearest<T>( Player player, IEnumerable<T> candidates ) where T : Component =>
 		candidates.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();
 
-	private static string Pile( Hexagon.Logic.ItemStack value ) =>
+	private static string Pile( ItemStack value ) =>
 		$"{ItemDefinition.Find( value.Definition )?.Title}{(value.Count > 1 ? $"x{value.Count}" : string.Empty)}{(value.Frequency is { } frequency ? $"~{frequency}" : string.Empty)}{(value.Pattern is { } cut ? $"#{cut}" : string.Empty)}";
 }
 #endif

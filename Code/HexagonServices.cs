@@ -33,6 +33,8 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 	public Journal? Journal { get; private set; }
 	public Transfers? Transfers { get; private set; }
 	public HolderStore? Holders { get; private set; }
+	/// <summary>Host-only: everything done to a character, whichever body it has.</summary>
+	public CharacterService? Characters { get; private set; }
 	public WorldData World { get; private set; } = new();
 
 	[Property] public float AutosaveSeconds { get; set; } = 60f;
@@ -102,6 +104,7 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 		Transfers = new Transfers( Journal );
 		Holders = new HolderStore( Store );
 		Roster = new CharacterRoster( Store );
+		Characters = new CharacterService( this );
 		// An entry names who it was done to and who saw it, as they were called at the time.
 		Journal.NameOf = id => Roster?.Find( id )?.Name;
 		World = Store.Load<WorldData>( WorldPath ) ?? new WorldData();

@@ -59,14 +59,11 @@ public sealed partial class Player
 		if ( !Authorize( nameof( RequestDeleteCharacter ), out var caller, out var game, needsCharacter: false ) ) return;
 		var steamId = SteamIdOf( caller );
 		var doomed = game.Roster!.Find( characterId );
-		// "Not yours" and "does not exist" get the same answer, so ids cannot be probed.
-		var refusal = doomed is null || doomed.SteamId != steamId ? "Character was not found."
-			: doomed.FirstEntered is not null || doomed.IsDead ? $"{doomed.Name} has lived in the city. A life is ended by retiring, not by deleting."
-			: null;
+		var refusal = Admission.ToDelete( doomed, steamId );
 		if ( doomed is null || refusal is not null )
 		{
 			HostRecord( JournalKinds.CharacterDelete, $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );
-			Chat.Tell( caller, refusal ?? "Character was not found." );
+			Chat.Tell( caller, refusal ?? Admission.NotFound );
 			return;
 		}
 		// Staff may have given it something already. That leaves the world on the record, not by vanishing with the file.
@@ -88,19 +85,11 @@ public sealed partial class Player
 		if ( !Authorize( nameof( RequestRetireCharacter ), out var caller, out var game, needsCharacter: false ) ) return;
 		var steamId = SteamIdOf( caller );
 		var retiring = game.Roster!.Find( characterId );
-		// "Not yours" and "does not exist" get the same answer, so ids cannot be probed.
-		var refusal = retiring is null || retiring.SteamId != steamId ? "Character was not found."
-			: retiring.IsDead ? $"{retiring.Name} is already dead."
-			: retiring.FirstEntered is null ? $"{retiring.Name} never entered the city, so it is deleted, not retired."
-			// On any connection: two copies of the game on one account are still one account.
-			: HostLoaded( characterId ) is not null ? "Leave the city with that character before retiring it."
-			// Someone lying in the street, or bound, is still part of a scene that is not over.
-			: retiring.IsDown || retiring.IsRestrained ? "That character cannot be retired while it is down or bound."
-			: null;
+		var refusal = Admission.ToRetire( retiring, steamId, loaded: HostLoaded( characterId ) is not null );
 		if ( retiring is null || refusal is not null )
 		{
 			HostRecord( JournalKinds.CharacterRetire, $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );
-			Chat.Tell( caller, refusal ?? "Character was not found." );
+			Chat.Tell( caller, refusal ?? Admission.NotFound );
 			return;
 		}
 		var by = Actor.Of( retiring );
@@ -112,14 +101,6 @@ public sealed partial class Player
 		SendCharacterList( caller, game );
 	}
 
-	/// <summary>How long is left, roughly, as a player would say it.</summary>
-	public static string Until( TimeSpan left )
-	{
-		if ( left.TotalHours > 1 ) return $"in {Math.Ceiling( left.TotalHours ):0} hours";
-		if ( left.TotalMinutes > 1 ) return $"in {Math.Ceiling( left.TotalMinutes ):0} minutes";
-		return "in a minute";
-	}
-
 	[Rpc.Host]
 	public void RequestEnterCity( Guid characterId )
 	{
@@ -128,20 +109,12 @@ public sealed partial class Player
 		var steamId = SteamIdOf( caller );
 		var faction = character is null ? null : FactionDefinition.Find( character.Faction );
 		var now = DateTimeOffset.UtcNow;
-		var refusal = _character is not null ? "Leave the city first."
-			// "Not yours" and "does not exist" get the same answer, so ids cannot be probed.
-			: character is null || character.SteamId != steamId ? "Character was not found."
-			: character.IsDead ? $"{character.Name} is dead."
-			// Dying and making someone new does not put a player back in the scene at once.
-			: character.ArrivesAt is { } arrives && arrives > now ? $"{character.Name} arrives in the city {Until( arrives - now )}."
-			: HostLoaded( characterId ) is not null ? "That character is already in the city."
-			// A whitelist taken away takes the faction's characters with it until it is given back.
-			: faction is { RequiresWhitelist: true } && !game.Account( steamId ).Whitelists.Contains( faction.ResourcePath ) ? $"You are no longer whitelisted for {faction.Title}."
-			: null;
+		var whitelistedOut = faction is { RequiresWhitelist: true } && !game.Account( steamId ).Whitelists.Contains( faction.ResourcePath ) ? faction.Title : null;
+		var refusal = Admission.ToEnter( character, steamId, now, inCity: _character is not null, loadedElsewhere: HostLoaded( characterId ) is not null, whitelistedOut );
 		if ( character is null || refusal is not null )
 		{
 			HostRecord( JournalKinds.CityEnter, $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );
-			Chat.Tell( caller, refusal ?? "Character was not found." );
+			Chat.Tell( caller, refusal ?? Admission.NotFound );
 			return;
 		}
 
@@ -240,8 +213,7 @@ public sealed partial class Player
 		if ( !Authorize( nameof( RequestMoveItem ), out var caller, out var game ) || HostItem( nameof( RequestMoveItem ), itemId ) is null ) return;
 		var character = _character!;
 		// Put down on a pile of the same thing, it joins it. Otherwise it is only rearranged.
-		var under = character.Inventory.Items.FirstOrDefault( value => value.Id != itemId && value.Max > 1 &&
-			x >= value.X && x < value.X + value.Width && y >= value.Y && y < value.Y + value.Height );
+		var under = InventoryGrid.PileAt( character.Inventory, x, y, except: itemId );
 		var moved = under is not null && game.Transfers!.Merge( character, itemId, under.Id, Actor.Of( character ) ) is { Ok: true } merged
 			? merged
 			: InventoryGrid.Move( character.Inventory, itemId, x, y );

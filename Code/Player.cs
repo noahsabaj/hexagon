@@ -33,7 +33,7 @@ public sealed record OwnedDoor( Guid Id, string Name );
 /// request, and the host decides.
 /// </summary>
 [Title( "Hexagon Player" ), Category( "Hexagon" ), Icon( "person" )]
-public sealed partial class Player : Component, Component.IPressable, Component.INetworkVisible, IVerbTarget
+public sealed partial class Player : Component, Component.INetworkVisible, IEmbodiment
 {
 	/// <summary>The pawn this client controls, or null before it has spawned.</summary>
 	public static Player? Local { get; private set; }
@@ -61,9 +61,9 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	public string LabelFor( Player other ) =>
 		other == this ? CharacterName : Known.TryGetValue( other.CharacterId, out var name ) ? name : Recognition.Stranger( other.CharacterDescription );
 
-	/// <summary>Owner: how this client's character would refer to someone left lying, or bound, where they were.</summary>
-	public string LabelFor( Sleeper other ) =>
-		Known.TryGetValue( other.CharacterId, out var name ) ? name : Recognition.Stranger( other.CharacterDescription );
+	/// <summary>Owner: how this client's character would refer to someone, standing here or left lying where they were.</summary>
+	public string LabelFor( CharacterBody other ) =>
+		other.GameObject == GameObject ? CharacterName : Known.TryGetValue( other.CharacterId, out var name ) ? name : Recognition.Stranger( other.CharacterDescription );
 
 	public IReadOnlyList<CharacterSummary> Characters { get; private set; } = Array.Empty<CharacterSummary>();
 	/// <summary>What this character carries. A key shows its cut, never what it opens.</summary>
@@ -116,6 +116,9 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	/// </summary>
 	public bool IsPresent => HasCharacter && (!IsProxy || Networking.IsHost || _sincePulse < PulseTimeout);
 
+	// Another client's person, while they are in sight.
+	bool IEmbodiment.IsShownHere => IsProxy && IsPresent;
+
 	/// <summary>Builds the pawn on the host, before it is network-spawned, so clients receive it whole.</summary>
 	public static void Compose( GameObject pawn )
 	{
@@ -135,6 +138,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		// Linked explicitly: the automatic link runs when the controller enables, before the child exists.
 		controller.Renderer = renderer;
 		pawn.AddComponent<Player>();
+		pawn.AddComponent<CharacterBody>();
 	}
 
 	protected override void OnStart()
@@ -196,9 +200,6 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		HostTellObservers();
 		if ( _character is null || Controller is not { } controller || HexagonServices.Current is not { } game ) return;
 		if ( _open is not null && !HostOpenIsValid() ) HostClose();
-		HostVitalsTick( game );
-		// Bleeding out may have ended the character for good.
-		if ( _character is null ) return;
 		HostOfferTick();
 		HostAuditMovement( controller );
 	}

@@ -69,32 +69,8 @@ public static class Operators
 		while ( length > 0 && words[length - 1].Length == 0 ) length--;
 		words = words[..length];
 		// Whoever has the console is on the record too.
-		game.Journal!.Record( JournalKinds.StaffCommand, Actor.Console, data: ("line", Line( words )) );
+		game.Journal!.Record( JournalKinds.StaffCommand, Actor.Console, data: ("line", CommandLine.Line( words )) );
 		foreach ( var line in Execute( game, Actor.Console, null, words ) ) Log.Info( line );
-	}
-
-	/// <summary>The words as they would be typed, quoted where they need to be.</summary>
-	private static string Line( string[] words ) =>
-		string.Join( " ", words.Select( word => word.Length == 0 || word.Contains( ' ' ) ? $"\"{word}\"" : word ) );
-
-	/// <summary>Splits a typed line into words, keeping a "quoted name" as one.</summary>
-	public static string[] Words( string line )
-	{
-		var words = new List<string>();
-		var current = new System.Text.StringBuilder();
-		var quoted = false;
-		foreach ( var character in line )
-		{
-			if ( character == '"' ) quoted = !quoted;
-			else if ( character == ' ' && !quoted )
-			{
-				if ( current.Length > 0 ) words.Add( current.ToString() );
-				current.Clear();
-			}
-			else current.Append( character );
-		}
-		if ( current.Length > 0 ) words.Add( current.ToString() );
-		return words.ToArray();
 	}
 
 	/// <summary>Host: carries out one command and returns what to tell whoever gave it.</summary>
@@ -103,6 +79,7 @@ public static class Operators
 		if ( words.Length == 0 ) return new[] { Help };
 		var journal = game.Journal!;
 		var roster = game.Roster!;
+		var characters = game.Characters!;
 		string Word( int index ) => index < words.Length ? words[index] : string.Empty;
 		// Anyone alive, in the city or not. The dead are only restored.
 		CharacterData? Character( string name ) => name.Length == 0 ? null : roster.Named( name ) is { IsDead: false } living ? living : null;
@@ -176,8 +153,8 @@ public static class Operators
 				if ( count == 0 ) return new[] { failed.Length > 0 ? failed : $"{from.Name} has no {definition.Title}." };
 				var done = $"Moved {count} {definition.Title} from {from.Name} to {to.Name}.{(failed.Length > 0 ? $" The rest did not fit: {failed}" : string.Empty)}";
 				game.SaveTogether( from, to );
-				Player.HostRefresh( from );
-				Player.HostRefresh( to );
+				characters.Changed( from );
+				characters.Changed( to );
 				return new[] { done };
 			}
 			case "teleport":
@@ -199,15 +176,14 @@ public static class Operators
 				if ( Find( Word( 1 ) ) is not { } target || !int.TryParse( Word( 2 ), out var amount ) || amount <= 0 )
 					return new[] { "Usage: hurt \"<character name>\" <amount>. The character must be in the city." };
 				journal.Record( JournalKinds.OperatorHurt, by, target.HostCharacter!.HolderLabel, data: ("amount", amount.ToString()) );
-				target.HostDamage( amount, null, "operator" );
+				characters.Damage( target.HostCharacter!, amount, null, "operator", target.HostPosition );
 				return new[] { $"Hurt {target.HostCharacter.Name} for {amount}." };
 			}
 			case "revive":
 			{
 				if ( Character( Word( 1 ) ) is not { } character ) return new[] { "Usage: revive \"<character name>\"." };
 				journal.Record( JournalKinds.OperatorRevive, by, character.HolderLabel );
-				var revived = Player.HostLoaded( character.Id ) is { } loaded ? loaded.HostRevive() : Vitals.Revive( character );
-				if ( revived.Ok ) Changed( game, character );
+				var revived = characters.Revive( character );
 				return new[] { revived.Ok ? $"Helped {character.Name} up." : revived.Message };
 			}
 			case "release":
@@ -215,19 +191,14 @@ public static class Operators
 				if ( Character( Word( 1 ) ) is not { } character ) return new[] { "Usage: release \"<character name>\"." };
 				if ( !character.IsRestrained ) return new[] { $"{character.Name}'s hands are not bound." };
 				journal.Record( JournalKinds.OperatorRelease, by, character.HolderLabel );
-				if ( Player.HostLoaded( character.Id ) is { } loaded ) loaded.HostRelease();
-				else
-				{
-					character.IsRestrained = false;
-					Changed( game, character );
-				}
+				characters.Release( character );
 				return new[] { $"Freed {character.Name}'s hands." };
 			}
 			case "restore":
 			{
 				// Undoing a death that broke the rules. The dead keep their names, so the name finds them.
 				if ( Word( 1 ).Length == 0 || roster.Named( Word( 1 ) ) is not { } dead ) return new[] { "Usage: restore \"<dead character's name>\"." };
-				var restored = Player.HostRestore( game, dead, by );
+				var restored = characters.Restore( dead, by );
 				if ( !restored.Ok ) return new[] { restored.Message };
 				journal.Record( JournalKinds.OperatorRestore, by, dead.HolderLabel );
 				return new[] { $"{dead.Name} is alive again, and gets up where the body lay." };
@@ -332,30 +303,15 @@ public static class Operators
 	private static bool Coordinate( string text, out float value ) =>
 		float.TryParse( text, NumberStyles.Float, CultureInfo.InvariantCulture, out value ) && float.IsFinite( value );
 
-	/// <summary>
-	/// Takes up to the asked number of an item from a character, pile by pile, all of them when none
-	/// is asked. Returns how many went.
-	/// </summary>
-	private static int Remove( string asked, CharacterData from, ItemDefinition definition, Func<ItemStack, int, Result> take )
-	{
-		var piles = from.Inventory.Items.Where( item => item.Definition == definition.ResourcePath ).ToArray();
-		var wanted = int.TryParse( asked, out var count ) && count > 0 ? count : piles.Sum( pile => pile.Count );
-		var removed = 0;
-		foreach ( var pile in piles )
-		{
-			if ( removed >= wanted ) break;
-			var some = Math.Min( wanted - removed, pile.Count );
-			if ( !take( pile, some ).Ok ) break;
-			removed += some;
-		}
-		return removed;
-	}
+	/// <summary>Takes up to the asked number of an item from a character, pile by pile, all of them when none is asked. Returns how many went.</summary>
+	private static int Remove( string asked, CharacterData from, ItemDefinition definition, Func<ItemStack, int, Result> take ) =>
+		CommandLine.TakeFromPiles( asked, from.Inventory.Items.Where( item => item.Definition == definition.ResourcePath ).ToArray(), ( pile, some ) => take( pile, some ).Ok );
 
 	/// <summary>Host: a character staff changed is saved, and whoever can see it is shown the change.</summary>
 	private static void Changed( HexagonServices game, CharacterData character )
 	{
 		game.Roster!.Save( character );
-		Player.HostRefresh( character );
+		game.Characters!.Changed( character );
 	}
 
 	private static string Move( Journal journal, Actor by, Player target, Vector3 to )

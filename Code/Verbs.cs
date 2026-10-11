@@ -6,9 +6,6 @@ using Sandbox;
 
 namespace Hexagon;
 
-/// <summary>Something a character can do to a target. <paramref name="Requires"/> names a capability, or is null when anyone may.</summary>
-public sealed record Verb( string Id, string Title, string? Requires = null );
-
 /// <summary>
 /// A component characters can act on. It only lists its verbs and carries them out. Who is asking,
 /// whether they stand close enough, whether they are able, the rate limit and the journal entry
