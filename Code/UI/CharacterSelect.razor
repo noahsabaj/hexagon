@@ -1,0 +1,136 @@
+@using System
+@using System.Linq
+@using Hexagon.Logic
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* The menu: a player's characters, and the form for a new one. *@
+<root class="center">
+	@if ( Player.Local is { } player )
+	{
+		<div class="card">
+			<h1>@(Creating ? "New character" : "Your characters")</h1>
+			@if ( !Creating )
+			{
+				@foreach ( var character in player.Characters )
+				{
+					<div class="row">
+						<div class="grow">
+							<div class="name @(character.IsDead ? "dead" : "")">@character.Name</div>
+							<div class="muted">@Standing( character )</div>
+						</div>
+						@if ( Pending == character.Id )
+						{
+							<button class="danger" onclick=@(() => Confirm( character ))>@(character.Lived ? "Retire for good" : "Delete")</button>
+							<button onclick=@(() => Pending = null)>Keep</button>
+						}
+						else if ( !character.IsDead )
+						{
+							@if ( !character.IsWaiting )
+							{
+								<button class="primary" onclick=@(() => player.RequestEnterCity( character.Id ))>Enter</button>
+							}
+							<button onclick=@(() => Pending = character.Id)>@(character.Lived ? "Retire" : "Delete")</button>
+						}
+					</div>
+					@if ( Pending == character.Id )
+					{
+						<div class="muted">@(character.Lived
+							? $"Retiring {character.Name} is a death. They take everything they carry with them, and your next character waits as it would after any death."
+							: $"{character.Name} never entered the city, so deleting them frees the name and costs nothing.")</div>
+					}
+				}
+				@if ( player.Characters.Count == 0 )
+				{
+					<div class="muted">You have no characters yet.</div>
+				}
+				<div class="actions">
+					<button class="primary" onclick=@(() => { Creating = true; Pending = null; })>Create a character</button>
+				</div>
+			}
+			else
+			{
+				<label>Name</label>
+				<TextEntry Value:bind="@NewName" MaxLength="@NameRules.MaximumNameLength" />
+				<label>Description (at least @NameRules.MinimumDescriptionLength characters)</label>
+				<TextEntry Value:bind="@NewDescription" MaxLength="@NameRules.MaximumDescriptionLength" />
+				<label>Faction</label>
+				<div class="row wrap">
+					@foreach ( var faction in FactionDefinition.All.OrderBy( value => value.Title ) )
+					{
+						<button class="@(faction.ResourcePath == NewFaction ? "primary" : "")"
+							onclick=@(() => NewFaction = faction.ResourcePath)>
+							@faction.Title@(faction.RequiresWhitelist ? " (whitelist)" : "")
+						</button>
+					}
+				</div>
+				<div class="muted">A new character arrives with nothing but the clothes they stand in.</div>
+				<div class="actions">
+					<button class="primary" onclick=@SubmitCharacter>Create</button>
+					<button onclick=@CancelCharacter>Back</button>
+				</div>
+			}
+			@foreach ( var notice in Chat.Lines.Where( value => value.IsNotice && value.Age < 8f ).TakeLast( 2 ) )
+			{
+				<div class="line notice">@notice.Text</div>
+			}
+		</div>
+	}
+</root>
+
+@code
+{
+	private bool Creating { get; set; }
+	// The list's length when a character was asked for. The form keeps what was typed until the list grows.
+	private int? _createdFrom;
+	// The character whose deletion, or retirement, is waiting to be confirmed.
+	private Guid? Pending { get; set; }
+	private string NewName { get; set; } = string.Empty;
+	private string NewDescription { get; set; } = string.Empty;
+	private string NewFaction { get; set; } = string.Empty;
+
+	public override void Tick()
+	{
+		if ( _createdFrom is not { } before || Player.Local is not { } local || local.Characters.Count <= before ) return;
+		_createdFrom = null;
+		Creating = false;
+		NewName = string.Empty;
+		NewDescription = string.Empty;
+	}
+
+	/// <summary>A character's faction, and where it stands: dead, or not yet arrived in the city.</summary>
+	private static string Standing( CharacterSummary character ) =>
+		character.IsDead ? $"{character.Faction}, dead"
+		: character.IsWaiting ? $"{character.Faction}, arrives {Admission.Until( character.ArrivesAt!.Value - DateTimeOffset.UtcNow )}"
+		: character.Faction;
+
+	private void SubmitCharacter()
+	{
+		if ( Player.Local is not { } player ) return;
+		// Cleared once the character exists. A refused name is corrected, not typed again.
+		_createdFrom = player.Characters.Count;
+		player.RequestCreateCharacter( NewName, NewDescription, NewFaction );
+	}
+
+	private void CancelCharacter()
+	{
+		Creating = false;
+		_createdFrom = null;
+	}
+
+	/// <summary>One that never lived is deleted; one that has lived is retired, which is a death.</summary>
+	private void Confirm( CharacterSummary character )
+	{
+		Pending = null;
+		if ( character.Lived ) Player.Local?.RequestRetireCharacter( character.Id );
+		else Player.Local?.RequestDeleteCharacter( character.Id );
+	}
+
+	// Notices fade, and waits run down, so the menu rebuilds as time passes.
+	protected override int BuildHash() => HashCode.Combine(
+		HashCode.Combine( Player.Local, Player.Local?.PrivateVersion, Player.Local?.Characters.Count ),
+		HashCode.Combine( Creating, Pending, NewFaction, _createdFrom, Chat.Version ),
+		(int)RealTime.Now );
+}

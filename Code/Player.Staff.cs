@@ -20,7 +20,7 @@ public sealed partial class Player
 	/// <summary>Host: tells the owner what its account may do.</summary>
 	public void HostSendAccount()
 	{
-		if ( !Networking.IsHost || Network.Owner is not { } owner || GameManager.Instance is not { } game ) return;
+		if ( !Networking.IsHost || Network.Owner is not { } owner || HexagonServices.Current is not { } game ) return;
 		using ( Rpc.FilterInclude( owner ) ) ReceiveAccount( game.Account( SteamIdOf( owner ) ).IsStaff );
 	}
 
@@ -48,7 +48,7 @@ public sealed partial class Player
 		var allowed = game.Account( steamId ).IsStaff;
 		var by = _character is not null ? Actor.Of( _character ) : new Actor( steamId, Name: caller.DisplayName );
 		game.Journal!.Record( JournalKinds.StaffCommand, by, ok: allowed, data: ("line", line) );
-		var reply = allowed ? Operators.Execute( game, by, this, Operators.Words( line ) ) : new[] { "You are not staff." };
+		var reply = allowed ? Operators.Execute( game, by, this, CommandLine.Words( line ) ) : new[] { "You are not staff." };
 		using ( Rpc.FilterInclude( caller ) ) ReceiveStaffLines( reply.ToArray() );
 	}
 }

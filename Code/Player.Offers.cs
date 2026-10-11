@@ -12,9 +12,6 @@ namespace Hexagon;
 // The title to a door is handed over the same way as anything carried.
 public sealed partial class Player
 {
-	/// <summary>How long an offer waits for an answer, in seconds.</summary>
-	public const float OfferSeconds = 30f;
-
 	/// <summary>Owner-side: what this character is being offered, in words, or empty.</summary>
 	public string OfferText { get; private set; } = string.Empty;
 
@@ -93,12 +90,9 @@ public sealed partial class Player
 
 	private void HostMakeOffer( Connection caller, Player recipient, Offer offer, params (string Key, string Value)[] data )
 	{
-		var refusal = IsIncapable ? "You cannot do that now."
-			: !recipient.IsValid() || recipient == this || recipient._character is null ? "There is nobody there."
-			: recipient.HostPosition.Distance( HostPosition ) > PersonReach ? "You are too far away."
-			: recipient.IsIncapable ? "They are in no state to take it."
-			: recipient._offer is not null ? "They are already being offered something."
-			: null;
+		var there = recipient.IsValid() && recipient != this && recipient._character is not null;
+		var refusal = OfferRules.ToOffer( IsIncapable, there, there ? recipient.HostPosition.Distance( HostPosition ) : 0f, PersonReach,
+			there && recipient.IsIncapable, there && recipient._offer is not null );
 		var subject = recipient.IsValid() ? recipient._character?.HolderLabel : null;
 		HostRecord( JournalKinds.Verb( VerbIds.PersonOffer ), subject, refusal is null, refusal is null ? data : data.Append( ("reason", refusal) ).ToArray() );
 		if ( refusal is not null )
@@ -112,7 +106,7 @@ public sealed partial class Player
 	}
 
 	/// <summary>Host: the offered things pass from the giver's hands to this character's, as one saved change.</summary>
-	private Result HostTakeOffered( GameManager game, CharacterData from, Offer offer )
+	private Result HostTakeOffered( HexagonServices game, CharacterData from, Offer offer )
 	{
 		if ( from.Inventory.Items.FirstOrDefault( value => value.Id == offer.ItemId ) is not { } stack || stack.Count < offer.Count )
 			return Result.Fail( ErrorCode.NotFound, "They no longer have it." );
@@ -136,11 +130,8 @@ public sealed partial class Player
 	{
 		if ( _offer is not { } offer ) return;
 		var giver = offer.From;
-		var why = offer.Made > OfferSeconds ? "time"
-			: !giver.IsValid() || giver._character is null ? "gone"
-			: IsIncapable || giver.IsIncapable ? "incapable"
-			: giver.HostPosition.Distance( HostPosition ) > PersonReach ? "apart"
-			: null;
+		var there = giver.IsValid() && giver._character is not null;
+		var why = OfferRules.Lapse( offer.Made, there, IsIncapable || (there && giver.IsIncapable), there ? giver.HostPosition.Distance( HostPosition ) : 0f, PersonReach );
 		if ( why is null ) return;
 		HostDropOffer( why );
 		if ( Network.Owner is { } owner ) Chat.Tell( owner, "The offer lapses." );

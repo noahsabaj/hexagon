@@ -33,7 +33,7 @@ public sealed record OwnedDoor( Guid Id, string Name );
 /// request, and the host decides.
 /// </summary>
 [Title( "Hexagon Player" ), Category( "Hexagon" ), Icon( "person" )]
-public sealed partial class Player : Component, Component.IPressable, Component.INetworkVisible, IVerbTarget
+public sealed partial class Player : Component, Component.INetworkVisible, IEmbodiment
 {
 	/// <summary>The pawn this client controls, or null before it has spawned.</summary>
 	public static Player? Local { get; private set; }
@@ -61,9 +61,9 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	public string LabelFor( Player other ) =>
 		other == this ? CharacterName : Known.TryGetValue( other.CharacterId, out var name ) ? name : Recognition.Stranger( other.CharacterDescription );
 
-	/// <summary>Owner: how this client's character would refer to someone left lying, or bound, where they were.</summary>
-	public string LabelFor( Sleeper other ) =>
-		Known.TryGetValue( other.CharacterId, out var name ) ? name : Recognition.Stranger( other.CharacterDescription );
+	/// <summary>Owner: how this client's character would refer to someone, standing here or left lying where they were.</summary>
+	public string LabelFor( CharacterBody other ) =>
+		other.GameObject == GameObject ? CharacterName : Known.TryGetValue( other.CharacterId, out var name ) ? name : Recognition.Stranger( other.CharacterDescription );
 
 	public IReadOnlyList<CharacterSummary> Characters { get; private set; } = Array.Empty<CharacterSummary>();
 	/// <summary>What this character carries. A key shows its cut, never what it opens.</summary>
@@ -116,6 +116,9 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	/// </summary>
 	public bool IsPresent => HasCharacter && (!IsProxy || Networking.IsHost || _sincePulse < PulseTimeout);
 
+	// Another client's person, while they are in sight.
+	bool IEmbodiment.IsShownHere => IsProxy && IsPresent;
+
 	/// <summary>Builds the pawn on the host, before it is network-spawned, so clients receive it whole.</summary>
 	public static void Compose( GameObject pawn )
 	{
@@ -135,6 +138,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		// Linked explicitly: the automatic link runs when the controller enables, before the child exists.
 		controller.Renderer = renderer;
 		pawn.AddComponent<Player>();
+		pawn.AddComponent<CharacterBody>();
 	}
 
 	protected override void OnStart()
@@ -144,8 +148,6 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 			Local = this;
 			// Statics outlive a session in the editor, so a new one starts with a clean log.
 			Chat.Clear();
-			Dev.DevCommands.Reset();
-			Dev.DevCommands.Announce();
 		}
 		ApplyPresence();
 		if ( !IsProxy ) RequestCharacters();
@@ -158,12 +160,6 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		if ( Local == this ) Local = null;
 	}
 
-	protected override void OnPreRender()
-	{
-		// A test looking at a character from outside. After everything else has placed the camera.
-		if ( !IsProxy && Dev.DevCommands.HeldCamera is { } held && Scene.Camera is { } view ) view.WorldTransform = held;
-	}
-
 	protected override void OnUpdate()
 	{
 		if ( Pulse != _seenPulse )
@@ -173,7 +169,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		}
 		ApplyPresence();
 		ApplyAppearance();
-		if ( IsProxy || !HasCharacter || Dev.DevCommands.Driven ) return;
+		if ( IsProxy || !HasCharacter ) return;
 		// "Use" reaches a target's first verb through IPressable. Everything else it offers is chosen
 		// from a menu, by name: nothing that hands something over or binds someone hangs off a bare key.
 		if ( UiBusy ) return;
@@ -202,11 +198,8 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		if ( !Networking.IsHost ) return;
 		Pulse = (int)(Time.Now * 2f);
 		HostTellObservers();
-		if ( _character is null || Controller is not { } controller || GameManager.Instance is not { } game ) return;
+		if ( _character is null || Controller is not { } controller || HexagonServices.Current is not { } game ) return;
 		if ( _open is not null && !HostOpenIsValid() ) HostClose();
-		HostVitalsTick( game );
-		// Bleeding out may have ended the character for good.
-		if ( _character is null ) return;
 		HostOfferTick();
 		HostAuditMovement( controller );
 	}
@@ -283,7 +276,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 
 	/// <summary>Host: whether the connection's character is in the city and near enough to see this one.</summary>
 	private bool HostMaySee( Connection connection ) =>
-		_character is not null && GameManager.Instance?.Sees( connection, HostPosition ) == true;
+		_character is not null && HexagonServices.Current?.Sees( connection, HostPosition ) == true;
 
 	/// <summary>Host: tells the owner who may see its pawn, whenever that changes or the pawn changes hands.</summary>
 	private void HostTellObservers()
@@ -358,12 +351,9 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 		// Another's body is moved by the network, not by physics, so it can lose its colliders safely.
 		if ( IsProxy && controller.ColliderObject.IsValid() ) controller.ColliderObject.Enabled = present;
 		if ( IsProxy ) return;
-		// A driven test client acts as though nobody is at the keyboard, but still stands, falls and is pushed.
-		if ( Dev.DevCommands.Driven ) Input.Suppressed = true;
 		controller.UseInputControls = HasCharacter && !IsDown;
-		controller.EnablePressing = !Dev.DevCommands.Driven;
-		controller.UseLookControls = HasCharacter && !Dev.DevCommands.Driven;
-		controller.UseCameraControls = HasCharacter && !Dev.DevCommands.CameraHeld;
+		controller.UseLookControls = HasCharacter;
+		controller.UseCameraControls = HasCharacter;
 	}
 
 	/// <summary>
@@ -372,10 +362,10 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	/// requests need a character in the city. Each refusal is journaled, as a run of them is how a
 	/// cheat shows up, but a flood of them is written as a count.
 	/// </summary>
-	private bool Authorize( string request, out Connection caller, out GameManager game, bool needsCharacter = true )
+	private bool Authorize( string request, out Connection caller, out HexagonServices game, bool needsCharacter = true )
 	{
 		caller = Rpc.Caller;
-		game = GameManager.Instance!;
+		game = HexagonServices.Current!;
 		if ( !Networking.IsHost || game?.Roster is null || caller is null ) return false;
 		if ( !game.HostSpend( caller ) )
 		{
@@ -395,7 +385,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	/// <summary>Host: a request no honest client would make, such as for an item it does not have. Refused on the record.</summary>
 	private void HostInvalid( string request, string reason, string? value = null )
 	{
-		if ( GameManager.Instance is not { } game || Network.Owner is not { } owner ) return;
+		if ( HexagonServices.Current is not { } game || Network.Owner is not { } owner ) return;
 		var data = value is null
 			? new[] { ("request", request), ("reason", reason) }
 			: new[] { ("request", request), ("reason", reason), ("value", Clip( value )) };
@@ -428,7 +418,8 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	/// <summary>Host: writes the loaded character, including where it stands.</summary>
 	public void HostSave()
 	{
-		if ( !Networking.IsHost || _character is null || GameManager.Instance?.Roster is not { } roster ) return;
+		// Also as the city closes, when the scene may no longer be the active one.
+		if ( !Networking.IsHost || _character is null || HexagonServices.Get( Scene )?.Roster is not { } roster ) return;
 		var at = HostPosition;
 		_character.Position = new[] { at.x, at.y, at.z };
 		roster.Save( _character );
@@ -440,7 +431,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	/// <summary>Host: issues an item to the loaded character from a named source and tells the owner. A key comes cut to its pattern.</summary>
 	public Result HostIssue( string source, ItemDefinition definition, Actor by, int count = 1, string? pattern = null )
 	{
-		if ( _character is null || GameManager.Instance is not { Transfers: { } transfers, Roster: { } roster } )
+		if ( _character is null || HexagonServices.Current is not { Transfers: { } transfers, Roster: { } roster } )
 			return Result.Fail( ErrorCode.NotFound, "That player has no character loaded." );
 		var issued = definition.IssueTo( transfers, source, _character, by, count, pattern );
 		if ( !issued.Ok ) return issued.ToResult();
@@ -473,7 +464,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	/// <summary>Host: writes an act done at a place to the journal, with every character near enough to have seen it.</summary>
 	internal static void HostRecordAt( string kind, Actor by, Vector3? at, string? subject = null, bool ok = true, params (string Key, string Value)[] data )
 	{
-		if ( !Networking.IsHost || GameManager.Instance?.Journal is not { } journal ) return;
+		if ( !Networking.IsHost || HexagonServices.Current?.Journal is not { } journal ) return;
 		var witnesses = at is { } place ? HostWitnesses( place, by.Character ) : Array.Empty<Guid>();
 		journal.Record( kind, by, subject, ok, at is { } where ? new[] { where.x, where.y, where.z } : null, witnesses, data );
 	}
@@ -486,7 +477,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 	/// <summary>How near a character must be to count as having seen an act: the range of ordinary speech.</summary>
 	public const float WitnessRange = 300f;
 
-	private void SendCharacterList( Connection caller, GameManager game )
+	private void SendCharacterList( Connection caller, HexagonServices game )
 	{
 		// The list is the menu, and a client takes it as leaving whoever it was. A player in the city
 		// is sent it when they leave, whatever they asked of the menu meanwhile.

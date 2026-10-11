@@ -59,7 +59,7 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 	{
 		if ( !HostScene.Join( this ) ) return;
 		_restored = true;
-		if ( GameManager.Instance!.World.Doors.TryGetValue( GameObject.Id, out var saved ) )
+		if ( HexagonServices.Current!.World.Doors.TryGetValue( GameObject.Id, out var saved ) )
 		{
 			IsOpen = saved.IsOpen;
 			IsLocked = saved.IsLocked;
@@ -146,7 +146,7 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 	/// <summary>Host: the title passes to a character, whether staff assign it or its owner's offer is accepted. The keys do not come with it.</summary>
 	public void HostAssign( CharacterData to, Actor by )
 	{
-		if ( GameManager.Instance is not { } game ) return;
+		if ( HexagonServices.Current is not { } game ) return;
 		var was = _owner;
 		_owner = to.Id;
 		Persist();
@@ -162,7 +162,7 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 	/// <summary>Host: nobody owns it any more. A building nobody owns is for staff, or a player office, to assign.</summary>
 	public void HostRelease( Actor by )
 	{
-		if ( _owner is not { } owner || GameManager.Instance is not { } game ) return;
+		if ( _owner is not { } owner || HexagonServices.Current is not { } game ) return;
 		_owner = null;
 		Persist();
 		var was = game.Roster?.Find( owner );
@@ -173,7 +173,7 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 	/// <summary>Host: a character that leaves the world for good leaves no deeds behind it.</summary>
 	public static void HostReleaseOwnedBy( Guid characterId, Actor by )
 	{
-		if ( GameManager.Instance is not { } game ) return;
+		if ( HexagonServices.Current is not { } game ) return;
 		foreach ( var door in game.Scene.GetAllComponents<Door>().Where( value => value._owner == characterId ).ToArray() ) door.HostRelease( by );
 		// A door not yet restored, or no longer in the scene, is cleared in the saved world instead.
 		var saved = game.World.Doors.Values.Where( value => value.Owner == characterId ).ToArray();
@@ -191,7 +191,7 @@ public sealed class Door : Component, Component.IPressable, IVerbTarget
 
 	private void Persist()
 	{
-		if ( GameManager.Instance is not { } game ) return;
+		if ( HexagonServices.Current is not { } game ) return;
 		game.World.Doors[GameObject.Id] = Saved();
 		game.SaveWorld();
 	}

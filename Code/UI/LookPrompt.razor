@@ -1,0 +1,39 @@
+@using System
+@using System.Linq
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* What is looked at, as its own tooltip describes it, and the keys that act on it, as the player has them bound. *@
+<root class="verbs">
+	@if ( Player.Local is { HoveredTarget: IVerbTarget { Verbs.Count: > 0 } hovered, HoveredTooltip: { } tip } )
+	{
+		<div class="row tip">
+			<i>@tip.Icon</i>
+			<div class="grow">@tip.Title</div>
+		</div>
+		@if ( !string.IsNullOrEmpty( tip.Description ) )
+		{
+			<div class="muted">@tip.Description</div>
+		}
+		<div class="row prompt">
+			<Image class="glyph" Texture=@Input.GetGlyph( "Use", InputGlyphSize.Medium, false ) />
+			<div>@(hovered.UseOpensMenu ? $"Choose: {string.Join( ", ", hovered.Verbs.Select( value => value.Title ) )}" : hovered.Verbs[0].Title)</div>
+		</div>
+		@if ( !hovered.UseOpensMenu && hovered.Verbs.Count > 1 )
+		{
+			<div class="row prompt muted">
+				<Image class="glyph" Texture=@Input.GetGlyph( Player.MenuAction, InputGlyphSize.Medium, false ) />
+				<div>More: @string.Join( ", ", hovered.Verbs.Skip( 1 ).Select( value => value.Title ) )</div>
+			</div>
+		}
+	}
+</root>
+
+@code
+{
+	// What a person offers changes as they go down or are bound.
+	protected override int BuildHash() => HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.HoveredTooltip,
+		(Player.Local?.HoveredTarget as CharacterBody)?.IsDown, (Player.Local?.HoveredTarget as CharacterBody)?.IsRestrained );
+}

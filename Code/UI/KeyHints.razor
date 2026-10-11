@@ -1,0 +1,24 @@
+@using System
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* The keys that matter in the city, drawn as the player has them bound. *@
+<root class="keys">
+	@if ( Player.Local is { } player )
+	{
+		<div class="row prompt"><Image class="glyph" Texture=@Input.GetGlyph( "Chat", InputGlyphSize.Medium, false ) /><div>Talk</div></div>
+		<div class="row prompt"><Image class="glyph" Texture=@Input.GetGlyph( "Menu", InputGlyphSize.Medium, false ) /><div>Inventory</div></div>
+		<div class="row prompt"><Image class="glyph" Texture=@Input.GetGlyph( "Attack1", InputGlyphSize.Medium, false ) /><div>@(ItemDefinition.Find( player.HeldItemPath ) is { Damage: > 0 } weapon ? $"Use the {weapon.Title.ToLowerInvariant()}" : "Strike")</div></div>
+		@if ( player.IsStaff )
+		{
+			<div class="row prompt"><Image class="glyph" Texture=@Input.GetGlyph( "Score", InputGlyphSize.Medium, false ) /><div>Staff</div></div>
+		}
+	}
+</root>
+
+@code
+{
+	protected override int BuildHash() => HashCode.Combine( Player.Local?.HeldItemPath, Player.Local?.IsStaff );
+}

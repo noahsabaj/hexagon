@@ -1,11 +1,12 @@
 @using System
-@using System.Linq
-@using Hexagon.Logic
 @using Sandbox
 @using Sandbox.UI
 @namespace Hexagon.UI
 @inherits PanelComponent
 
+@* The HUD's shell. Each part is its own panel, rebuilt only when what it shows changes; this decides
+   which are up, holds the keys that open and close them, and tells the player when a panel has the
+   cursor. Its stylesheet reaches every part. *@
 <root>
 	@if ( Player.Local is not { } player )
 	{
@@ -13,328 +14,58 @@
 	}
 	else if ( !player.HasCharacter )
 	{
-		<div class="center">
-			<div class="card">
-				<h1>@(Creating ? "New character" : "Your characters")</h1>
-				@if ( !Creating )
-				{
-					@foreach ( var character in player.Characters )
-					{
-						<div class="row">
-							<div class="grow">
-								<div class="name @(character.IsDead ? "dead" : "")">@character.Name</div>
-								<div class="muted">@Standing( character )</div>
-							</div>
-							@if ( Pending == character.Id )
-							{
-								<button class="danger" onclick=@(() => Confirm( character ))>@(character.Lived ? "Retire for good" : "Delete")</button>
-								<button onclick=@(() => Pending = null)>Keep</button>
-							}
-							else if ( !character.IsDead )
-							{
-								@if ( !character.IsWaiting )
-								{
-									<button class="primary" onclick=@(() => player.RequestEnterCity( character.Id ))>Enter</button>
-								}
-								<button onclick=@(() => Pending = character.Id)>@(character.Lived ? "Retire" : "Delete")</button>
-							}
-						</div>
-						@if ( Pending == character.Id )
-						{
-							<div class="muted">@(character.Lived
-								? $"Retiring {character.Name} is a death. They take everything they carry with them, and your next character waits as it would after any death."
-								: $"{character.Name} never entered the city, so deleting them frees the name and costs nothing.")</div>
-						}
-					}
-					@if ( player.Characters.Count == 0 )
-					{
-						<div class="muted">You have no characters yet.</div>
-					}
-					<div class="actions">
-						<button class="primary" onclick=@(() => { Creating = true; Pending = null; })>Create a character</button>
-					</div>
-				}
-				else
-				{
-					<label>Name</label>
-					<TextEntry Value:bind="@NewName" MaxLength="@NameRules.MaximumNameLength" />
-					<label>Description (at least @NameRules.MinimumDescriptionLength characters)</label>
-					<TextEntry Value:bind="@NewDescription" MaxLength="@NameRules.MaximumDescriptionLength" />
-					<label>Faction</label>
-					<div class="row wrap">
-						@foreach ( var faction in FactionDefinition.All.OrderBy( value => value.Title ) )
-						{
-							<button class="@(faction.ResourcePath == NewFaction ? "primary" : "")"
-								onclick=@(() => NewFaction = faction.ResourcePath)>
-								@faction.Title@(faction.RequiresWhitelist ? " (whitelist)" : "")
-							</button>
-						}
-					</div>
-					<div class="muted">A new character arrives with nothing but the clothes they stand in.</div>
-					<div class="actions">
-						<button class="primary" onclick=@SubmitCharacter>Create</button>
-						<button onclick=@CancelCharacter>Back</button>
-					</div>
-				}
-				@foreach ( var notice in Chat.Lines.Where( value => value.IsNotice && value.Age < 8f ).TakeLast( 2 ) )
-				{
-					<div class="line notice">@notice.Text</div>
-				}
-			</div>
-		</div>
+		<CharacterSelect />
 	}
 	else
 	{
-		@if ( !Player.UiBusy && player.HoveredTarget is IVerbTarget hovered && hovered.Verbs.Count > 0 && player.HoveredTooltip is { } tip )
+		@if ( !Player.UiBusy && player is { HoveredTarget: IVerbTarget { Verbs.Count: > 0 }, HoveredTooltip: not null } )
 		{
-			@* What is looked at, as its own tooltip describes it, and the keys that act on it. *@
-			<div class="verbs">
-				<div class="row tip">
-					<i>@tip.Icon</i>
-					<div class="grow">@tip.Title</div>
-				</div>
-				@if ( !string.IsNullOrEmpty( tip.Description ) )
-				{
-					<div class="muted">@tip.Description</div>
-				}
-				<div class="row prompt">
-					<Image class="glyph" Texture=@Input.GetGlyph( "Use", InputGlyphSize.Medium, false ) />
-					<div>@(hovered.UseOpensMenu ? $"Choose: {string.Join( ", ", hovered.Verbs.Select( value => value.Title ) )}" : hovered.Verbs[0].Title)</div>
-				</div>
-				@if ( !hovered.UseOpensMenu && hovered.Verbs.Count > 1 )
-				{
-					<div class="row prompt muted">
-						<Image class="glyph" Texture=@Input.GetGlyph( Player.MenuAction, InputGlyphSize.Medium, false ) />
-						<div>More: @string.Join( ", ", hovered.Verbs.Skip( 1 ).Select( value => value.Title ) )</div>
-					</div>
-				}
-			</div>
+			<LookPrompt />
 		}
-
 		@if ( player.OfferText.Length > 0 )
 		{
-			<div class="offer">
-				<div class="line">@player.OfferText</div>
-				<div class="row prompt muted">
-					<Image class="glyph" Texture=@Input.GetGlyph( "Slot1", InputGlyphSize.Medium, false ) /><div>Accept</div>
-					<Image class="glyph" Texture=@Input.GetGlyph( "Slot2", InputGlyphSize.Medium, false ) /><div>Refuse</div>
-				</div>
-			</div>
+			<OfferPrompt Answering=@(!ChatOpen && player.MenuTarget is null && OfferingTo is null) />
 		}
-
-		@if ( player.MenuTarget is IVerbTarget offered )
+		@if ( player.MenuTarget is not null )
 		{
-			<div class="center">
-				<div class="card menu">
-					<h1>@MenuTitle( player )</h1>
-					@foreach ( var (verb, index) in offered.Verbs.Select( ( value, index ) => (value, index) ) )
-					{
-						<button class="@(index == 0 ? "primary" : "")" onclick=@(() => Choose( verb ))>@(index + 1). @verb.Title</button>
-					}
-					<button onclick=@(() => player.MenuTarget = null)>Never mind</button>
-				</div>
-			</div>
+			<VerbMenu OfferTo=@(( Player recipient ) => { OfferingTo = recipient; }) />
 		}
-
-		@if ( OfferingTo is { } recipient && player.Inventory is { } goods )
+		@if ( OfferingTo is { } recipient )
 		{
-			<div class="center">
-				<div class="card picker">
-					<h1>Offer to @player.LabelFor( recipient )</h1>
-					@foreach ( var item in goods.Items )
-					{
-						<div class="row">
-							<div class="grow">@Listing( item )</div>
-							@if ( item.Count > 1 )
-							{
-								<button onclick=@(() => Offer( recipient, item, 1 ))>One</button>
-							}
-							<button class="primary" onclick=@(() => Offer( recipient, item, item.Count ))>@(item.Count > 1 ? "All of it" : "Offer")</button>
-						</div>
-					}
-					@foreach ( var door in player.OwnedDoors )
-					{
-						<div class="row">
-							<div class="grow">The title to @door.Name</div>
-							<button class="primary" onclick=@(() => OfferDoor( recipient, door ))>Offer</button>
-						</div>
-					}
-					@if ( goods.Items.Count == 0 && player.OwnedDoors.Count == 0 )
-					{
-						<div class="muted">You have nothing to offer.</div>
-					}
-					<div class="actions">
-						<button onclick=@(() => OfferingTo = null)>Never mind</button>
-					</div>
-					<div class="muted">They are asked first. Nothing changes hands until they accept.</div>
-				</div>
-			</div>
+			<OfferPicker Recipient=@recipient Dismiss=@(() => { OfferingTo = null; }) />
 		}
-
 		@if ( !Player.UiBusy )
 		{
-			<div class="keys">
-				<div class="row prompt"><Image class="glyph" Texture=@Input.GetGlyph( "Chat", InputGlyphSize.Medium, false ) /><div>Talk</div></div>
-				<div class="row prompt"><Image class="glyph" Texture=@Input.GetGlyph( "Menu", InputGlyphSize.Medium, false ) /><div>Inventory</div></div>
-				<div class="row prompt"><Image class="glyph" Texture=@Input.GetGlyph( "Attack1", InputGlyphSize.Medium, false ) /><div>@(ItemDefinition.Find( player.HeldItemPath ) is { Damage: > 0 } weapon ? $"Use the {weapon.Title.ToLowerInvariant()}" : "Strike")</div></div>
-				@if ( player.IsStaff )
-				{
-					<div class="row prompt"><Image class="glyph" Texture=@Input.GetGlyph( "Score", InputGlyphSize.Medium, false ) /><div>Staff</div></div>
-				}
-			</div>
+			<KeyHints />
 		}
-
-		<div class="chat @(ChatOpen ? "open" : "")">
-			<div class="lines">
-				@foreach ( var line in Chat.Lines.TakeLast( ChatOpen ? 14 : 6 ).Where( value => ChatOpen || value.Age < 12f ) )
-				{
-					<div class="line @(line.IsNotice ? "notice" : line.Channel.ToString().ToLowerInvariant())">@line.Text</div>
-				}
-			</div>
-			@if ( ChatOpen )
-			{
-				<TextEntry @ref="ChatEntry" Value:bind="@ChatDraft" MaxLength="@ChatRules.MaximumScalars" onsubmit=@SubmitChat />
-			}
-		</div>
-
+		<ChatBox Open=@ChatOpen Dismiss=@(() => { ChatOpen = false; }) />
 		@if ( StaffOpen && player.IsStaff )
 		{
-			<div class="center">
-				<div class="card staff">
-					<h1>Staff</h1>
-					<div class="muted">Everything typed here is journaled under your name.</div>
-					<TextEntry Value:bind="@StaffDraft" MaxLength="@(256)" onsubmit=@SubmitStaff />
-					<div class="lines">
-						@foreach ( var line in player.StaffLines )
-						{
-							<div class="line">@line</div>
-						}
-					</div>
-					<div class="muted">@Operators.Help</div>
-				</div>
-			</div>
+			<StaffConsole />
 		}
-
-		@if ( (InventoryOpen || player.OpenInventory is not null) && player.Inventory is { } inventory )
+		@if ( (InventoryOpen || player.OpenInventory is not null) && player.Inventory is not null )
 		{
-			@* Dropped outside both grids, a carried item is put down on the ground. *@
-			<div class="center" ondrop=@DropOnGround>
-				@if ( player.OpenInventory is { } other )
-				{
-					<div class="card" ondrop=@DropInOpen>
-						<h1>@player.OpenTitle</h1>
-						<div class="grid" style="width: @(other.Width * Cell)px; height: @(other.Height * Cell)px;">
-							@for ( var y = 0; y < other.Height; y++ )
-							{
-								@for ( var x = 0; x < other.Width; x++ )
-								{
-									<div class="cell" style="left: @(x * Cell)px; top: @(y * Cell)px;"></div>
-								}
-							}
-							@foreach ( var item in other.Items )
-							{
-								var taken = item;
-								<ItemTile class=@TileClass( item, selectable: false ) style=@Place( item ) Item=@item InOpenHolder=@true
-									onclick=@(() => player.RequestTake( taken.Id ))
-									ondragstart=@(( PanelEvent e ) => BeginDrag( e )) ondragend=@(() => EndDrag()) />
-							}
-						</div>
-						<div class="actions">
-							<button onclick=@(() => player.RequestCloseHolder())>Close</button>
-						</div>
-						<div class="muted">Click an item, or drag it across, to take it.</div>
-					</div>
-				}
-				<div class="card" ondrop=@DropOnCard>
-					<h1>@player.CharacterName</h1>
-					<div class="muted">@(player.Faction?.Title ?? "Unaffiliated")</div>
-					<div class="grid" style="width: @(inventory.Width * Cell)px; height: @(inventory.Height * Cell)px;"
-						ondrop=@DropInInventory>
-						@for ( var y = 0; y < inventory.Height; y++ )
-						{
-							@for ( var x = 0; x < inventory.Width; x++ )
-							{
-								<div class="cell" style="left: @(x * Cell)px; top: @(y * Cell)px;"></div>
-							}
-						}
-						@foreach ( var item in inventory.Items )
-						{
-							var carried = item;
-							<ItemTile class=@TileClass( item, selectable: true ) style=@Place( item ) Item=@item InOpenHolder=@false
-								onclick=@(() => Selected = Selected == carried.Id ? null : carried.Id)
-								ondragstart=@(( PanelEvent e ) => BeginDrag( e )) ondragend=@(() => EndDrag())
-								ondrop=@(( PanelEvent e ) => DropOnPile( e, carried )) />
-						}
-					</div>
-					@if ( SelectedDefinition is { IsRadio: true } )
-					{
-						<div class="row">
-							<TextEntry class="grow" Value:bind="@FrequencyDraft" MaxLength="@(5)" Placeholder="100.0 to 199.9" onsubmit=@TuneSelected />
-							<button onclick=@TuneSelected>Tune</button>
-						</div>
-						<div class="muted">Speak into it with /r. Anyone tuned the same hears you; so does anyone beside you.</div>
-					}
-					@if ( SelectedDefinition is { IsKey: true } )
-					{
-						<div class="muted">A key shows its cut. Keys cut the same open the same locks; which ones, you learn by trying.</div>
-					}
-					<div class="actions">
-						@if ( player.OpenInventory is not null )
-						{
-							<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "put" ))>Put in</button>
-						}
-						@if ( SelectedDefinition is { Consumable: true } usable )
-						{
-							<button class="primary" onclick=@(() => ActOnSelected( VerbIds.ItemUse ))>@usable.UseTitle</button>
-						}
-						@if ( SelectedStack is { Count: > 1 } pile )
-						{
-							<button onclick=@(() => SplitSelected( pile ))>Split off @(pile.Count / 2)</button>
-						}
-						<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( VerbIds.ItemEquip ))>Hold</button>
-						<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( VerbIds.ItemDrop ))>Drop</button>
-						<button onclick=@(() => player.RequestLeaveCity())>Leave the city</button>
-					</div>
-					<div class="muted">Click an item to choose it. Drag it to move it, onto a pile of the same thing to add to it, across to put it in, or out of the window to drop it.</div>
-				</div>
-			</div>
-			@if ( DraggedStack is { } lifted )
-			{
-				var at = Panel.MousePosition * Panel.ScaleFromScreen - _grab;
-				<ItemTile class="item ghost" Item=@lifted style=@($"left: {at.x}px; top: {at.y}px; width: {lifted.Width * Cell - 4}px; height: {lifted.Height * Cell - 4}px;") />
-			}
+			<InventoryWindow />
 		}
 	}
 </root>
 
 @code
 {
-	// One grid cell and the gap after it, in panel pixels. A cell, and a one-cell item, is 4 less (see .cell).
-	private const int Cell = 76;
-
-	private bool Creating { get; set; }
-	// The list's length when a character was asked for. The form keeps what was typed until the list grows.
-	private int? _createdFrom;
-	// The character whose deletion, or retirement, is waiting to be confirmed.
-	private Guid? Pending { get; set; }
-	private string NewName { get; set; } = string.Empty;
-	private string NewDescription { get; set; } = string.Empty;
-	private string NewFaction { get; set; } = string.Empty;
-
 	private bool ChatOpen { get; set; }
-	private string ChatDraft { get; set; } = string.Empty;
-	// A property, because the Razor @ref generator only assigns properties.
-	private TextEntry? ChatEntry { get; set; }
-	private bool _focusChat;
-
-	// Static so a test can open a panel to take its picture. There is one HUD.
-	internal static bool InventoryOpen { get; set; }
-	internal static bool StaffOpen { get; set; }
-	private string StaffDraft { get; set; } = string.Empty;
-	private Guid? Selected { get; set; }
+	// Static, as there is one HUD, so the tests can open a panel to take its picture; see Show.
+	private static bool InventoryOpen { get; set; }
+	private static bool StaffOpen { get; set; }
 	/// <summary>Whoever this character is choosing something to offer to.</summary>
 	private Player? OfferingTo { get; set; }
 	private GameObject? _harmCues;
+
+	/// <summary>Opens one of the panels a key opens, or closes them.</summary>
+	public static void Show( HudPanel panel )
+	{
+		InventoryOpen = panel == HudPanel.Inventory;
+		StaffOpen = panel == HudPanel.Staff;
+	}
 
 	protected override void OnStart()
 	{
@@ -352,276 +83,37 @@
 
 	protected override void OnUpdate()
 	{
-		if ( _createdFrom is { } before && Player.Local is { } local && local.Characters.Count > before )
-		{
-			_createdFrom = null;
-			Creating = false;
-			NewName = string.Empty;
-			NewDescription = string.Empty;
-		}
-		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || OfferingTo is not null || Player.Local?.OpenInventory is not null || Player.Local?.MenuTarget is not null || Player.Local is not { HasCharacter: true };
-		if ( Player.Local is not { HasCharacter: true } )
+		var local = Player.Local;
+		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || OfferingTo is not null || local?.OpenInventory is not null || local?.MenuTarget is not null || local is not { HasCharacter: true };
+		if ( local is not { HasCharacter: true } )
 		{
 			ChatOpen = false;
 			InventoryOpen = false;
 			OfferingTo = null;
 			return;
 		}
-		// A driven test client takes no keys; see DevCommands.Driven.
-		if ( Dev.DevCommands.Driven ) return;
-
-		if ( Player.Local.MenuTarget is { } menu )
-		{
-			// The menu is over once something is chosen, the target is gone, or the player backs out.
-			var verbs = (menu as IVerbTarget)?.Verbs;
-			if ( !menu.IsValid() || verbs is null || Input.EscapePressed || Player.Local.IsIncapable )
-			{
-				Input.EscapePressed = false;
-				Player.Local.MenuTarget = null;
-			}
-			else
-			{
-				for ( var index = 0; index < verbs.Count && index < 9; index++ )
-					if ( Input.Pressed( $"Slot{index + 1}" ) ) Choose( verbs[index] );
-			}
-			return;
-		}
-
-		if ( OfferingTo is { } recipient )
-		{
-			if ( !recipient.IsValid() || !recipient.IsPresent || Input.EscapePressed || Player.Local.IsIncapable )
-			{
-				Input.EscapePressed = false;
-				OfferingTo = null;
-			}
-			return;
-		}
-
-		// An offer is answered with a key, so whoever is offered something need not stop to take the cursor.
-		if ( !ChatOpen && Player.Local.OfferText.Length > 0 )
-		{
-			if ( Input.Pressed( "Slot1" ) ) Player.Local.RequestAnswerOffer( true );
-			else if ( Input.Pressed( "Slot2" ) ) Player.Local.RequestAnswerOffer( false );
-		}
+		// A menu or a list of things to offer has the keys until it is closed; each closes itself.
+		if ( local.MenuTarget is not null || OfferingTo is not null ) return;
 
 		if ( !ChatOpen && Input.Pressed( "Chat" ) )
 		{
 			ChatOpen = true;
-			_focusChat = true;
 			Input.Clear( "Chat" );
 		}
 		else if ( ChatOpen && Input.EscapePressed )
 		{
 			Input.EscapePressed = false;
-			CloseChat();
-		}
-
-		// Focused programmatically: the player is embodied and has no cursor to click with.
-		if ( _focusChat && ChatEntry is not null )
-		{
-			ChatEntry.Focus();
-			_focusChat = false;
+			ChatOpen = false;
 		}
 
 		if ( !ChatOpen && Input.Pressed( "Menu" ) ) InventoryOpen = !InventoryOpen;
-		if ( !ChatOpen && Input.Pressed( "Score" ) && Player.Local.IsStaff ) StaffOpen = !StaffOpen;
+		if ( !ChatOpen && Input.Pressed( "Score" ) && local.IsStaff ) StaffOpen = !StaffOpen;
 	}
 
-	/// <summary>What the menu calls its target: a person by the name this character knows them by, if any.</summary>
-	private static string MenuTitle( Player player ) => player.MenuTarget switch
-	{
-		Player person => player.LabelFor( person ),
-		Sleeper sleeper => player.LabelFor( sleeper ),
-		{ } other => other.GameObject.Name,
-		_ => string.Empty
-	};
-
-	private void Choose( Verb verb )
-	{
-		if ( Player.Local is not { MenuTarget: { } target } player ) return;
-		player.MenuTarget = null;
-		// What to offer is chosen from what this character has, so it opens a list instead of asking the host.
-		if ( verb.Id == VerbIds.PersonOffer && target is Player recipient )
-		{
-			OfferingTo = recipient;
-			return;
-		}
-		player.RequestAct( target, verb.Id );
-	}
-
-	private void Offer( Player recipient, ItemStack item, int count )
-	{
-		Player.Local?.RequestOffer( recipient, item.Id, count );
-		OfferingTo = null;
-	}
-
-	private void OfferDoor( Player recipient, OwnedDoor door )
-	{
-		Player.Local?.RequestOfferDoor( recipient, door.Id );
-		OfferingTo = null;
-	}
-
-	/// <summary>How a pile reads in a list: what it is, how many, and for a key its cut.</summary>
-	private static string Listing( ItemStack item )
-	{
-		var definition = ItemDefinition.Find( item.Definition );
-		var title = definition?.Title ?? "Unknown item";
-		if ( item.Count > 1 ) title += $" ×{item.Count}";
-		if ( definition is { IsKey: true } ) title += $", cut {item.Pattern ?? "blank"}";
-		if ( definition is { IsRadio: true } && item.Frequency is { } frequency ) title += $", tuned to {frequency}";
-		return title;
-	}
-
-	/// <summary>A character's faction, and where it stands: dead, or not yet arrived in the city.</summary>
-	private static string Standing( CharacterSummary character ) =>
-		character.IsDead ? $"{character.Faction}, dead"
-		: character.IsWaiting ? $"{character.Faction}, arrives {Player.Until( character.ArrivesAt!.Value - DateTimeOffset.UtcNow )}"
-		: character.Faction;
-
-	private void SubmitChat()
-	{
-		var text = ChatDraft;
-		CloseChat();
-		if ( string.IsNullOrWhiteSpace( text ) || Player.Local is not { } player ) return;
-		player.RequestSay( text );
-	}
-
-	private void CloseChat()
-	{
-		ChatEntry?.Blur();
-		ChatDraft = string.Empty;
-		ChatOpen = false;
-	}
-
-	private void SubmitStaff()
-	{
-		if ( !string.IsNullOrWhiteSpace( StaffDraft ) ) Player.Local?.RequestStaff( StaffDraft );
-		StaffDraft = string.Empty;
-	}
-
-	private void SubmitCharacter()
-	{
-		if ( Player.Local is not { } player ) return;
-		// Cleared once the character exists. A refused name is corrected, not typed again.
-		_createdFrom = player.Characters.Count;
-		player.RequestCreateCharacter( NewName, NewDescription, NewFaction );
-	}
-
-	private void CancelCharacter()
-	{
-		Creating = false;
-		_createdFrom = null;
-	}
-
-	/// <summary>One that never lived is deleted; one that has lived is retired, which is a death.</summary>
-	private void Confirm( CharacterSummary character )
-	{
-		Pending = null;
-		if ( character.Lived ) Player.Local?.RequestRetireCharacter( character.Id );
-		else Player.Local?.RequestDeleteCharacter( character.Id );
-	}
-
-	private ItemStack? SelectedStack => Player.Local?.Inventory?.Items.FirstOrDefault( value => value.Id == Selected );
-	private ItemDefinition? SelectedDefinition => SelectedStack is { } stack ? ItemDefinition.Find( stack.Definition ) : null;
-
-	// The pile being dragged, and where on it the mouse took hold, in panel units.
-	private Guid? _dragging;
-	private bool _draggingFromOpen;
-	private Vector2 _grab;
-
-	/// <summary>Where a pile sits in its grid, and how big it is.</summary>
-	private static string Place( ItemStack item ) =>
-		$"left: {item.X * Cell}px; top: {item.Y * Cell}px; width: {item.Width * Cell - 4}px; height: {item.Height * Cell - 4}px;";
-
-	private string TileClass( ItemStack item, bool selectable ) =>
-		"item" + (selectable && item.Id == Selected ? " selected" : string.Empty) + (item.Id == _dragging ? " lifted" : string.Empty);
-
-	private ItemStack? DraggedStack => _dragging is { } id
-		? (_draggingFromOpen ? Player.Local?.OpenInventory : Player.Local?.Inventory)?.Items.FirstOrDefault( value => value.Id == id )
-		: null;
-
-	private void BeginDrag( PanelEvent e )
-	{
-		if ( e is not DragEvent drag || drag.Target is not ItemTile tile ) return;
-		_dragging = tile.ItemId;
-		_draggingFromOpen = tile.InOpenHolder;
-		_grab = drag.LocalGrabPosition * Panel.ScaleFromScreen;
-	}
-
-	// The engine ends a drag before it delivers the drop, so a drop reads the tile it was handed.
-	private void EndDrag() => _dragging = null;
-
-	/// <summary>A carried pile let go of over another: on one of the same thing it joins it, otherwise the grid places it.</summary>
-	private void DropOnPile( PanelEvent e, ItemStack onto )
-	{
-		if ( e.Target is not ItemTile { InOpenHolder: false } tile || tile.ItemId == onto.Id ) return;
-		var dragged = Player.Local?.Inventory?.Items.FirstOrDefault( value => value.Id == tile.ItemId );
-		if ( dragged is null || dragged.Definition != onto.Definition || onto.Max < 2 ) return;
-		Player.Local?.RequestMoveItem( tile.ItemId, onto.X, onto.Y );
-		e.StopPropagation();
-	}
-
-	/// <summary>Over this character's own grid: a carried pile moves to where it was let go; one from the open holder is taken.</summary>
-	private void DropInInventory( PanelEvent e )
-	{
-		if ( e.Target is not ItemTile tile || Player.Local is not { } player ) return;
-		e.StopPropagation();
-		if ( tile.InOpenHolder )
-		{
-			player.RequestTake( tile.ItemId );
-			return;
-		}
-		// The cell under the pile's top left corner, as it was held.
-		var corner = e.This.MousePosition * Panel.ScaleFromScreen - _grab;
-		player.RequestMoveItem( tile.ItemId, (int)MathF.Round( corner.x / Cell ), (int)MathF.Round( corner.y / Cell ) );
-	}
-
-	/// <summary>Over the open holder: a carried pile is put in it.</summary>
-	private void DropInOpen( PanelEvent e )
-	{
-		e.StopPropagation();
-		if ( e.Target is ItemTile { InOpenHolder: false } tile ) Player.Local?.RequestPut( tile.ItemId );
-	}
-
-	/// <summary>Over this character's own card but not its grid: nothing happens, rather than a drop on the ground.</summary>
-	private void DropOnCard( PanelEvent e ) => e.StopPropagation();
-
-	/// <summary>Outside both: a carried pile is put down on the ground, as the Drop button does.</summary>
-	private void DropOnGround( PanelEvent e )
-	{
-		if ( e.Target is ItemTile { InOpenHolder: false } tile ) Player.Local?.RequestItemAct( tile.ItemId, VerbIds.ItemDrop );
-	}
-
-	private string FrequencyDraft { get; set; } = string.Empty;
-
-	private void TuneSelected()
-	{
-		if ( Selected is { } radio ) Player.Local?.RequestTune( radio, FrequencyDraft );
-		FrequencyDraft = string.Empty;
-	}
-
-	private void SplitSelected( ItemStack pile )
-	{
-		Player.Local?.RequestSplitItem( pile.Id, pile.Count / 2 );
-		Selected = null;
-	}
-
-	private void ActOnSelected( string verb )
-	{
-		if ( Selected is not { } item ) return;
-		if ( verb == "put" ) Player.Local?.RequestPut( item );
-		else Player.Local?.RequestItemAct( item, verb );
-		Selected = null;
-	}
-
-	// Rebuild whenever anything the panel shows has changed.
+	// Rebuild whenever which panels are up changes; each panel watches what it shows.
 	protected override int BuildHash() => HashCode.Combine(
-		HashCode.Combine( Player.Local, Player.Local?.HasCharacter, Player.Local?.PrivateVersion, Player.Local?.CharacterName ),
-		HashCode.Combine( Chat.Version, ChatOpen, InventoryOpen, Selected, Creating, NewFaction, StaffOpen, Player.Local?.MenuTarget ),
-		HashCode.Combine( Pending, _createdFrom, Player.Local?.Characters.Count, OfferingTo, _dragging ),
-		// A dragged pile follows the mouse.
-		_dragging is null ? 0 : Panel.MousePosition.GetHashCode(),
-		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.HoveredTooltip, Player.Local?.IsDown, Player.Local?.IsRestrained, (Player.Local?.HoveredTarget as Player)?.IsDown, (Player.Local?.HoveredTarget as Player)?.IsRestrained ),
-		// Lines and notices fade, and waits run down, so the panel must rebuild as time passes.
-		(int)RealTime.Now );
+		HashCode.Combine( Player.Local, Player.Local?.HasCharacter, Player.Local?.OfferText, Player.Local?.MenuTarget, Player.Local?.IsStaff ),
+		HashCode.Combine( Player.Local?.OpenInventory is null, Player.Local?.Inventory is null, Player.UiBusy ),
+		HashCode.Combine( ChatOpen, InventoryOpen, StaffOpen, OfferingTo ),
+		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.HoveredTooltip is null ) );
 }

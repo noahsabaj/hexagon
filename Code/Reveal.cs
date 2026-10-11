@@ -35,7 +35,7 @@ internal static class Reveal
 
 	/// <summary>Host: the clients whose characters can see this place now.</summary>
 	public static Connection[] Witnesses( Vector3 at ) =>
-		GameManager.Instance is { } game
+		HexagonServices.Current is { } game
 			? Connection.All.Where( value => !value.IsHost && game.Sees( value, at ) ).ToArray()
 			: Array.Empty<Connection>();
 
@@ -44,5 +44,5 @@ internal static class Reveal
 	/// character is. The host has everything.
 	/// </summary>
 	public static bool IsVisibleTo( Connection connection, Vector3 at ) =>
-		!Networking.IsHost || connection.IsHost || GameManager.Instance?.Sees( connection, at ) == true;
+		!Networking.IsHost || connection.IsHost || HexagonServices.Current?.Sees( connection, at ) == true;
 }

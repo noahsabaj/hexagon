@@ -75,7 +75,7 @@ public sealed partial class Player
 	/// <summary>Host: moves one item between two holders, saves both as one change, and tells everyone who can see either.</summary>
 	internal Result HostMove( IHolder from, IHolder to, Guid itemId )
 	{
-		if ( _character is null || GameManager.Instance is not { Transfers: { } transfers } game ) return Result.Fail( ErrorCode.Internal, "The city is not ready." );
+		if ( _character is null || HexagonServices.Current is not { Transfers: { } transfers } game ) return Result.Fail( ErrorCode.Internal, "The city is not ready." );
 		var moved = transfers.Move( from, to, itemId, Actor.Of( _character ) );
 		if ( !moved.Ok ) return moved;
 		game.SaveTogether( from, to );
@@ -166,7 +166,7 @@ public sealed partial class Player
 		if ( !tuned.Ok ) Chat.Tell( caller, tuned.Message );
 	}
 
-	private Result Drop( GameManager game, ItemStack stack )
+	private Result Drop( HexagonServices game, ItemStack stack )
 	{
 		var at = HostPosition + Vector3.Up * 8f + Vector3.Random.WithZ( 0 ) * 24f;
 		var ground = game.Holders!.GetOrCreate( Guid.NewGuid(), HolderKinds.Ground, "Ground", 4, 4 );
@@ -178,7 +178,7 @@ public sealed partial class Player
 	}
 
 	/// <summary>Takes the item in hand, or puts it away if it already is. What is in hand is visible to everyone.</summary>
-	private Result Equip( GameManager game, ItemStack stack )
+	private Result Equip( HexagonServices game, ItemStack stack )
 	{
 		_character!.Equipped = _character.Equipped == stack.Id ? null : stack.Id;
 		game.Roster!.Save( _character );
@@ -186,7 +186,7 @@ public sealed partial class Player
 		return Result.Success();
 	}
 
-	private Result Consume( GameManager game, ItemStack stack, ItemDefinition definition )
+	private Result Consume( HexagonServices game, ItemStack stack, ItemDefinition definition )
 	{
 		if ( definition.Heals > 0 )
 		{

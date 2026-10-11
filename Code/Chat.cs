@@ -48,7 +48,7 @@ public static class Chat
 				(listener.HasCharacter && listener.HostPosition.Distance( origin ) <= range.Value) )
 			.ToArray();
 		// Speech is journaled with exactly who received it, which is what a dispute will ask.
-		GameManager.Instance?.Journal?.Record( JournalKinds.Spoken( message.Channel ), Actor.Of( character ),
+		HexagonServices.Current?.Journal?.Record( JournalKinds.Spoken( message.Channel ), Actor.Of( character ),
 			where: new[] { origin.x, origin.y, origin.z },
 			witnesses: listeners.Where( listener => listener != speaker && listener.HostCharacter is not null ).Select( listener => listener.HostCharacter!.Id ),
 			data: ("text", message.Text) );
@@ -84,7 +84,7 @@ public static class Chat
 		var present = Game.ActiveScene.GetAllComponents<Player>().Where( listener => listener.Network.Owner is not null && listener.HostCharacter is not null ).ToArray();
 		var near = present.Where( listener => listener != speaker && listener.HostPosition.Distance( origin ) <= ChatRules.Range( ChatChannel.Radio )!.Value ).ToArray();
 		var tuned = present.Where( listener => listener != speaker && !near.Contains( listener ) && TunedTo( listener.HostCharacter! ) == frequency ).ToArray();
-		GameManager.Instance?.Journal?.Record( JournalKinds.ChatRadio, Actor.Of( character ),
+		HexagonServices.Current?.Journal?.Record( JournalKinds.ChatRadio, Actor.Of( character ),
 			where: new[] { origin.x, origin.y, origin.z },
 			witnesses: near.Concat( tuned ).Where( listener => listener != speaker ).Select( listener => listener.HostCharacter!.Id ),
 			data: new[] { ("text", text), ("frequency", frequency) } );

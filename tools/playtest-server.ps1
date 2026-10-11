@@ -81,14 +81,29 @@ function Poll([scriptblock] $Ask, [string] $Pattern, [int] $Seconds = 10) {
     }
 }
 
+# Where a place beside something named in the scene is, as the server has it: x, y and z. The side is
+# the object's own front, back, left or right; the distance is from its face on that side; the height
+# is above the floor there. Places are found by what is there, so a test survives the map being moved.
+function Spot([string] $Name, [string] $Side, [double] $Distance, [double] $Height = 60) {
+    $reply = Send 0 "spot|$Name|$Side|$Distance|$Height"
+    if ($reply -notmatch '^(-?\d+) (-?\d+) (-?\d+)') { throw "No place beside '$Name': $reply" }
+    return [int[]] @($Matches[1], $Matches[2], $Matches[3])
+}
+
+# Whether a reply puts someone within reach of a place, on the ground: the first x,y in it, after pos=
+# or at= where there is one, against the place's.
+function Near([string] $Reply, [int[]] $At, [double] $Range = 40) {
+    if ($Reply -notmatch '(?:pos=|at=|^)(-?[\d.]+),(-?[\d.]+)') { return $false }
+    return [Math]::Abs([double] $Matches[1] - $At[0]) -lt $Range -and [Math]::Abs([double] $Matches[2] - $At[1]) -lt $Range
+}
+
 # Moves a character as staff would, and waits until the client playing it has it there. Until then,
 # what that client claims about where it stands is judged against the old place.
-function Teleport([int] $Client, [string] $Name, [int] $X, [int] $Y) {
-    [void](Send 0 "console|hexagon_teleport `"$Name`" $X $Y 60")
+function Teleport([int] $Client, [string] $Name, [int[]] $At) {
+    [void](Send 0 "console|hexagon_teleport `"$Name`" $($At -join ' ')")
     $until = [DateTime]::UtcNow.AddSeconds(10)
     do {
-        if ((Send $Client 'state') -match 'pos=(-?[\d.]+),(-?[\d.]+),' -and
-            [Math]::Abs([double] $Matches[1] - $X) -lt 32 -and [Math]::Abs([double] $Matches[2] - $Y) -lt 32) { return }
+        if (Near (Send $Client 'state') $At 32) { return }
         Start-Sleep -Milliseconds 250
     } while ([DateTime]::UtcNow -lt $until)
 }
@@ -158,8 +173,15 @@ try {
     Expect 'a character already in the city cannot be entered twice' { Send 2 'state' } 'has=False .*already in the city'
     [void](Send 2 'enter|Jane Roe')
     [void](Poll { Send 2 'state' } "has=True name='Jane Roe'")
-    Teleport 1 'John Doe' 240 -150
-    Teleport 2 'Jane Roe' 300 -150
+    # Where the two stand: him beside the first door, and her beside him, behind the crate; a little
+    # way off, in front of it; and well away, along the floor in front of it.
+    $door = Spot 'Door 1' left 30
+    $beside = Spot 'Crate' back 10
+    $apart = Spot 'Crate' front 90
+    $sightAway = Spot 'Crate' front 850
+    $far = Spot 'Crate' front 1150
+    Teleport 1 'John Doe' $door
+    Teleport 2 'Jane Roe' $beside
 
     Write-Host '==> Perception' -ForegroundColor Cyan
     Expect 'the other player is visible, with the description an onlooker would see' { Send 1 'proxies' } "has=True .*seen='A woman in a grey coat"
@@ -178,7 +200,7 @@ try {
     Expect 'once he introduced himself, she knows him' { Send 2 'state' } 'known=\[John Doe\].*John Doe says "I am John"'
     Expect 'telling is one way: he still sees a stranger' (Send 1 'proxies') "label='\[A woman in a grey coat"
     Expect 'the journal names who heard it' { Send 0 'journal|chat.say' } "actor='John Doe' witnesses=1"
-    Teleport 2 'Jane Roe' 440 -150
+    Teleport 2 'Jane Roe' $apart
     Write-Host "       $(Send 0 'who')" -ForegroundColor DarkGray
     [void](Send 1 'say|/w keep this quiet')
     [void](Send 1 'say|Still here')
@@ -188,7 +210,7 @@ try {
     Expect 'a whisper did not reach a listener 200 units away' $heard 'keep this quiet' -Not
     Expect 'ordinary speech still did' $heard 'Still here'
     Expect 'the journal shows the whisper had no witnesses' { Send 0 'journal|chat.whisper' } 'witnesses=0'
-    Teleport 2 'Jane Roe' 1500 -150
+    Teleport 2 'Jane Roe' $far
     [void](Send 1 'say|/y can anyone hear me')
     [void](Send 1 'say|//back in five')
     $heard = Poll { Send 2 'state' } 'back in five'
@@ -203,7 +225,7 @@ try {
     [void](Poll { Send 1 'state' } 'John Doe says "Nobody is near me"')
     Expect 'claiming to stand beside a speaker did not let her listen in' { Send 2 'state' } 'Nobody is near me' -Not
     Expect 'the journal agrees nobody heard' { Send 0 'journal|chat.say' } 'witnesses=0'
-    Expect 'the host sent her back' { Send 2 'state' } 'pos=1[45]\d\d'
+    Expect 'the host sent her back' { $state = Send 2 'state'; "$(Near $state $far) $state" } '^True '
     Expect 'and put the claim on record' { Send 0 'journal' } 'movement\.implausible!=[1-9]'
 
     Write-Host '==> Out of sight is out of the network' -ForegroundColor Cyan
@@ -212,15 +234,15 @@ try {
     # can be out of it without leaving the scene's floor; she is 1260 units from him.
     $sight = [regex]::Match((Send 0 'sight'), 'sight=([\d.]+)').Groups[1].Value
     Expect 'the host can narrow how far anyone sees' (Send 0 'sight|600') 'sight=600'
-    Expect 'out of his sight, he no longer shows her' { Send 1 'pawns' } 'present=False .*at=1[45]\d\d,'
-    Teleport 2 'Jane Roe' 1200 -150
+    Expect 'out of his sight, he no longer shows her' { $pawns = Send 1 'pawns'; "$(Near $pawns $far) $pawns" } '^True .*present=False'
+    Teleport 2 'Jane Roe' $sightAway
     # Her own client has her there now. Were it still sending her to him, he would have her there
     # within a few of its updates, thirty a second; he is watched for a second.
-    $pawns = Poll { Send 1 'pawns' } 'at=1[0-3]\d\d,' 1
-    Expect 'and her client no longer sends him where she goes' $pawns 'present=False .*at=1[45]\d\d,'
+    $pawns = Poll { $pawns = Send 1 'pawns'; "$(Near $pawns $sightAway) $pawns" } '^True ' 1
+    Expect 'and her client no longer sends him where she goes' "$(Near $pawns $far) $pawns" '^True .*present=False'
     Expect 'restoring how far anyone sees' (Send 0 "sight|$sight") "sight=$sight"
-    Expect 'back in his sight, she is sent to him again, where she now is' { Send 1 'pawns' } 'present=True .*at=1[12]\d\d,'
-    Teleport 2 'Jane Roe' 1500 -150
+    Expect 'back in his sight, she is sent to him again, where she now is' { $pawns = Send 1 'pawns'; "$(Near $pawns $sightAway) $pawns" } '^True .*present=True'
+    Teleport 2 'Jane Roe' $far
 
     Write-Host '==> The world is shared' -ForegroundColor Cyan
     [void](Send 1 'door|Door 1|use')
@@ -247,7 +269,7 @@ try {
     [void](Poll { Send 1 'state' } 'John Doe: "is this thing on"')
     Expect 'retuned, she hears nothing' { Send 2 'state' } 'is this thing on' -Not
     Expect 'and the journal agrees' { Send 0 'journal|chat.radio' } "actor='John Doe' witnesses=0"
-    Teleport 2 'Jane Roe' 300 -150
+    Teleport 2 'Jane Roe' $beside
     [void](Send 1 'say|/r standing right here')
     Expect 'beside him she hears a man talking into a radio, whatever hers is tuned to' { Send 2 'state' } 'John Doe radios "standing right here"'
     # Something put down out of sight is not sent, and nor is what it is: every client is told a new
@@ -261,7 +283,7 @@ try {
     Expect 'he is sent what lies there' { Send 1 'state' } 'ground=\[Radio\] '
 
     Write-Host '==> Handing over takes two' -ForegroundColor Cyan
-    Teleport 2 'Jane Roe' 300 -150
+    Teleport 2 'Jane Roe' $beside
     foreach ($gift in 'pistol', 'pistol_round 4', 'zip_tie', 'token 50') { [void](Send 0 "console|hexagon_give `"John Doe`" $gift") }
     [void](Send 0 'console|hexagon_give "Jane Roe" water')
     Expect 'what staff gave him is in his hands, money with the rest' { Send 1 'state' } 'items=\[Radio~101\.5@0,0, Pistol@2,0, Pistol roundx4@4,0, Zip tie@5,0, Tokenx50@0,1\]'
@@ -278,10 +300,10 @@ try {
     Expect 'an offer can be refused, and then nothing moves' { Send 1 'state' } 'Zip tie@5,0.*Your offer is refused\.'
     [void](Send 1 'offer|3|1')
     [void](Poll { Send 2 'state' } "offer='John Doe offers you [^']*Zip tie")
-    Teleport 2 'Jane Roe' 440 -150
+    Teleport 2 'Jane Roe' $apart
     Expect 'an offer lapses once the two have parted' { "$(Send 2 'state') $(Send 1 'state')" } "offer='' .*The offer lapses\..*Zip tie@5,0.*Your offer lapses\."
     Expect 'on the record, with why' { Send 0 'journal|offer.lapse' } 'ok=True .*data=\[reason=apart\]'
-    Teleport 2 'Jane Roe' 300 -150
+    Teleport 2 'Jane Roe' $beside
     [void](Send 0 'console|hexagon_door "Door 2" assign "John Doe"')
     Expect 'staff assigned him a flat' { Send 1 'state' } 'owned=\[Door 2\]'
     [void](Send 1 'offerdoor|Door 2')
@@ -364,7 +386,7 @@ try {
     Expect 'the restore is on record' { Send 0 'journal' } '(?<!\S)operator\.restore=1(?!\S)'
 
     Write-Host '==> Leaving does not end a scene' -ForegroundColor Cyan
-    Teleport 2 'Jane Roe' 300 -150
+    Teleport 2 'Jane Roe' $beside
     [void](Send 0 'console|hexagon_give "John Doe" zip_tie')
     [void](Poll { Send 1 'state' } 'Zip tie@')
     [void](Poll { Send 1 'proxies' } 'down=False restrained=False .*has=True')

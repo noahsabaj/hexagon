@@ -18,9 +18,9 @@ public enum DeathPolicy
 	Permanent
 }
 
-// Violence and its consequences. Hexagon supplies the pipeline: harm, going down, being helped up
-// or finished, and a body that holds what the character carried. What death means is the game's
-// choice, set on the game manager, and unless a game says otherwise it is final.
+// Violence, from the side of whoever does it. What harm does to a character, going down, being helped
+// up or finished, and the body left holding what it carried, is the CharacterService's. What death
+// means is the game's choice, set on HexagonServices, and unless a game says otherwise it is final.
 public sealed partial class Player
 {
 	public const int UnarmedDamage = 8;
@@ -103,158 +103,40 @@ public sealed partial class Player
 		var from = HostPosition + Vector3.Up * 60f;
 		var direction = aim.IsNearZeroLength ? Vector3.Forward : aim.Normal;
 		var trace = Scene.Trace.Ray( from, from + direction * (weapon?.Range ?? UnarmedRange) ).IgnoreGameObjectHierarchy( GameObject ).Run();
-		var hit = trace.Hit ? trace.GameObject?.Root : null;
-		var victim = hit?.GetComponent<Player>() is { _character: not null } person ? person : null;
-		var lying = victim is null ? hit?.GetComponent<Sleeper>() : null;
-		var struck = victim?._character?.HolderLabel ?? lying?.HostCharacter?.HolderLabel;
+		// Whatever was hit takes the harm as the engine deals it, so a person standing or left lying,
+		// and anything else that can be hurt, is struck the same way.
+		var target = trace.Hit ? trace.GameObject?.GetComponentInParent<Component.IDamageable>() : null;
+		var struck = (target as CharacterBody)?.HostCharacter?.HolderLabel;
 		var damage = weapon?.Damage ?? UnarmedDamage;
 		// A miss is an attack all the same: it is on record, with nothing hit.
-		HostRecord( JournalKinds.CombatAttack, struck, data: new[] { ("weapon", weapon?.ResourceName ?? "unarmed"), ("damage", damage.ToString()), ("hit", struck is null ? "nothing" : "person") } );
-		victim?.HostDamage( damage, this, weapon?.Title ?? "fists" );
-		lying?.HostDamage( damage, this, weapon?.Title ?? "fists" );
+		HostRecord( JournalKinds.CombatAttack, struck, data: new[] { ("weapon", weapon?.ResourceName ?? "unarmed"), ("damage", damage.ToString()), ("hit", struck is not null ? "person" : target is not null ? "thing" : "nothing") } );
+		target?.OnDamage( new CharacterHarm { Attacker = GameObject, Damage = damage, Origin = from, Position = trace.HitPosition, Cause = weapon?.Title ?? "fists" } );
 	}
 
-	/// <summary>Host: harms this character. Harm alone never kills; at nothing it goes down.</summary>
-	public void HostDamage( int amount, Player? by, string cause )
+	/// <summary>
+	/// Host: this pawn's character has just died. For good, its player goes back to the menu and only the
+	/// body is left where it fell; otherwise it wakes at the spawn point it was given, with nothing.
+	/// </summary>
+	internal void HostDied( CharacterData character, bool permanent )
 	{
-		if ( !Networking.IsHost || _character is null ) return;
-		var harm = Vitals.Damage( _character, amount );
-		if ( harm == Harm.None ) return;
-		// Whoever goes down lets go of what was in hand, and stays down, where they fell, after a restart.
-		if ( harm == Harm.Downed ) _character.Equipped = null;
-		HostSave();
-		if ( harm == Harm.Downed )
+		var owner = Network.Owner;
+		if ( permanent )
 		{
-			HostClose();
-			HostRecord( JournalKinds.CharacterDowned, by?._character?.HolderLabel, data: new[] { ("cause", cause) } );
-			if ( Network.Owner is { } owner ) Chat.Tell( owner, "You are down. Someone may help you up, or not." );
-		}
-		HostSyncVitals();
-		SendPrivateState();
-	}
-
-	public Result HostRevive()
-	{
-		if ( _character is null ) return Result.Fail( ErrorCode.NotFound, "There is nobody there." );
-		var revived = Vitals.Revive( _character );
-		if ( !revived.Ok ) return revived;
-		GameManager.Instance?.Roster?.Save( _character );
-		HostSyncVitals();
-		SendPrivateState();
-		if ( Network.Owner is { } owner ) Chat.Tell( owner, "You are back on your feet, barely." );
-		return revived;
-	}
-
-	/// <summary>Host: the character dies. What that means is the game manager's policy.</summary>
-	public void HostDie( string cause, Player? by )
-	{
-		if ( !Networking.IsHost || _character is not { } character || GameManager.Instance is not { } game ) return;
-		HostClose();
-		if ( HostDie( game, character, HostPosition, Look, cause, by?._character ) )
-		{
-			var owner = Network.Owner;
-			// Dead, so nothing is left lying where it fell but the body.
 			HostUnload();
-			if ( owner is null ) return;
+			if ( owner is null || HexagonServices.Current is not { } game ) return;
 			SendCharacterList( owner, game );
 			Chat.Tell( owner, $"{character.Name} has died." );
 			return;
 		}
-		HostTeleport( character.Position is { Length: 3 } at ? new Vector3( at[0], at[1], at[2] ) : game.FindSpawn().Position );
-		HostSyncVitals();
+		HostTeleport( character.Position is { Length: 3 } at ? new Vector3( at[0], at[1], at[2] ) : HexagonServices.Current!.FindSpawn().Position );
 		SendPrivateState();
-		if ( Network.Owner is { } waking ) Chat.Tell( waking, "You wake somewhere else, with nothing." );
-	}
-
-	/// <summary>
-	/// Host: a character dies, whether in the city or left lying where its player went. What it
-	/// carried stays where it fell, and the rest is the game manager's policy. True when the
-	/// character is dead, kept where it fell; otherwise it is whole again, saved at a spawn point.
-	/// </summary>
-	internal static bool HostDie( GameManager game, CharacterData character, Vector3 at, string look, string cause, CharacterData? by )
-	{
-		HostRecordAt( JournalKinds.CharacterDeath, Actor.Of( character ), at, by?.HolderLabel, data: new[] { ("cause", cause), ("policy", game.Death.ToString()) } );
-		var permanent = game.Death == DeathPolicy.Permanent;
-		var actor = Actor.Of( character );
-		if ( permanent )
-		{
-			// Kept where it fell: staff restoring it would have it get up here.
-			character.Position = new[] { at.x, at.y, at.z };
-			Vitals.Die( character, DateTimeOffset.UtcNow );
-		}
-		else
-		{
-			Vitals.Respawn( character );
-			character.Equipped = null;
-			var spawn = game.FindSpawn().Position;
-			character.Position = new[] { spawn.x, spawn.y, spawn.z };
-		}
-		// The body is saved with the death, as one change: a crash keeps both or neither.
-		if ( game.DeathDropsBelongings && character.Inventory.Items.Count > 0 ) LeaveBody( game, character, at, look );
-		if ( permanent )
-		{
-			// Whatever no body took leaves the world on the record, not by vanishing with the character.
-			game.Transfers!.DestroyAll( Sinks.CharacterDied, character, actor );
-			Door.HostReleaseOwnedBy( character.Id, actor );
-		}
-		game.Roster!.Save( character );
-		Sleeper.HostRefresh( character );
-		if ( permanent ) HostResendCharacters( game, character.SteamId );
-		return permanent;
-	}
-
-	/// <summary>
-	/// Host: staff undo a death that broke the rules. The character gets up where its body lies, or
-	/// where it fell if it left none, with whatever is still on the body. Anything already taken from
-	/// it is for staff to move back.
-	/// </summary>
-	internal static Result HostRestore( GameManager game, CharacterData character, Actor by )
-	{
-		var restored = game.Roster!.Restore( character, game.Lives );
-		if ( !restored.Ok ) return restored;
-		if ( game.Holders!.BodyOf( character.Id ) is { } body )
-		{
-			if ( body.Position is { Length: 3 } lying ) character.Position = lying;
-			var taken = game.Transfers!.MoveAll( body, character, by );
-			if ( !taken.Ok ) Log.Warning( $"[restore] {character.HolderLabel} could not take back all of its body: {taken.Message}" );
-			game.SaveTogether( character, body );
-			HostRefresh( body );
-			Corpse.RemoveIfEmpty( body );
-		}
-		else game.Roster.Save( character );
-		HostResendCharacters( game, character.SteamId );
-		return restored;
+		if ( owner is not null ) Chat.Tell( owner, "You wake somewhere else, with nothing." );
 	}
 
 	/// <summary>Host: every connection of the account that is in the menu is shown its list as it now is.</summary>
-	internal static void HostResendCharacters( GameManager game, long steamId )
+	internal static void HostResendCharacters( HexagonServices game, long steamId )
 	{
 		foreach ( var player in Game.ActiveScene.GetAllComponents<Player>().Where( value => value._character is null ).ToArray() )
 			if ( player.Network.Owner is { } owner && SteamIdOf( owner ) == steamId ) player.SendCharacterList( owner, game );
-	}
-
-	/// <summary>
-	/// What the character carried stays where it fell, in a holder like any other. The body is the
-	/// size of the inventory and every pile keeps its place, so all of it goes: nothing is left on
-	/// someone who has died.
-	/// </summary>
-	private static void LeaveBody( GameManager game, CharacterData character, Vector3 at, string look )
-	{
-		var body = game.Holders!.GetOrCreate( Guid.NewGuid(), HolderKinds.Corpse, "Body", character.Inventory.Width, character.Inventory.Height );
-		body.Position = new[] { at.x, at.y, at.z };
-		body.Look = look;
-		body.Character = character.Id;
-		var moved = game.Transfers!.MoveAll( character, body, Actor.Of( character ) );
-		if ( !moved.Ok ) Log.Warning( $"[death] {character.HolderLabel} kept some of what it carried: {moved.Message}" );
-		game.SaveTogether( character, body );
-		Corpse.Spawn( body );
-	}
-
-	/// <summary>Host: time passes for someone who is down. Bleeding out is the game manager's policy.</summary>
-	private void HostVitalsTick( GameManager game )
-	{
-		if ( _character is not { IsDown: true } character || !Vitals.Bleed( character, Time.Delta, game.DownedSeconds ) ) return;
-		if ( game.BleedOutKills ) HostDie( "bled out", null );
-		else HostRevive();
 	}
 }

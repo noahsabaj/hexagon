@@ -1,8 +1,10 @@
+#if DEBUG
 #nullable enable
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Hexagon.Logic;
 using Sandbox;
 
 namespace Hexagon.Dev;
@@ -11,7 +13,7 @@ namespace Hexagon.Dev;
 /// Lets the editor's automation play the game. It is never placed in a scene: a test adds it at
 /// runtime and writes <see cref="Command"/>, and each command calls the same client request the
 /// HUD would, so it travels the real RPC path and is judged by the real host rules. It refuses to
-/// run outside the editor. The automation attaches it to the editor's copy of the scene, so it
+/// run outside the editor, and exists only in a build made for development. The automation attaches it to the editor's copy of the scene, so it
 /// always reaches the running game through <c>Game.ActiveScene</c> and <c>Player.Local</c>.
 /// </summary>
 [Title( "Hexagon Dev Driver" ), Category( "Hexagon" ), Icon( "smart_toy" )]
@@ -158,8 +160,7 @@ public static class DevCommands
 	/// </summary>
 	public static bool Driven { get; private set; }
 
-	/// <summary>Set while a test has put the camera somewhere itself, to look at a character from outside.</summary>
-	public static bool CameraHeld => HeldCamera is not null;
+	/// <summary>Where a test has put the camera itself, to look at a character from outside. See <see cref="DevSystem"/>.</summary>
 	public static Transform? HeldCamera { get; private set; }
 
 	/// <summary>
@@ -183,7 +184,7 @@ public static class DevCommands
 		if ( args[0] == "roster" )
 		{
 			// Everything saved, as one line, so a test can compare a server with a copy of it.
-			if ( GameManager.Instance is not { Roster: { } roster, Holders: { } holders } ) return "no roster";
+			if ( HexagonServices.Current is not { Roster: { } roster, Holders: { } holders } ) return "no roster";
 			return "characters=[" + string.Join( ", ", roster.All.OrderBy( value => value.Name ).Select( value =>
 				$"{value.Name}:{value.Inventory.Items.Sum( item => item.Count )}i:{value.Health}hp:{value.Known.Count}known{(value.IsDead ? ":dead" : string.Empty)}" ) ) + $"] holders={holders.Count}";
 		}
@@ -191,7 +192,7 @@ public static class DevCommands
 		{
 			// policy alone says what the game's rules on lives are. policy|living|<n> or policy|hours|<n>
 			// changes one, so a test on one account can play more than one life at a time.
-			if ( !Networking.IsHost || GameManager.Instance is not { } game ) return "refused: not the host";
+			if ( !Networking.IsHost || HexagonServices.Current is not { } game ) return "refused: not the host";
 			if ( args.Length > 2 && args[1] == "living" ) game.LivingCharacters = int.Parse( args[2] );
 			else if ( args.Length > 2 && args[1] == "hours" ) game.NewLifeHours = float.Parse( args[2], System.Globalization.CultureInfo.InvariantCulture );
 			else if ( args.Length > 1 && !args[1].StartsWith( '#' ) ) return $"unknown policy '{args[1]}'";
@@ -201,14 +202,14 @@ public static class DevCommands
 		{
 			// sight alone says how far characters see; sight|<units> changes it, so a test can step out
 			// of sight without leaving the scene's floor.
-			if ( !Networking.IsHost || GameManager.Instance is not { } game ) return "refused: not the host";
+			if ( !Networking.IsHost || HexagonServices.Current is not { } game ) return "refused: not the host";
 			if ( args.Length > 1 && !args[1].StartsWith( '#' ) ) game.SightRange = float.Parse( args[1], System.Globalization.CultureInfo.InvariantCulture );
 			return $"sight={game.SightRange}";
 		}
 		if ( args[0] == "journal" )
 		{
 			// Today's journal as kind=count, refusals marked, so a test can assert what was remembered.
-			var entries = GameManager.Instance?.Journal?.Read( DateTimeOffset.UtcNow );
+			var entries = HexagonServices.Current?.Journal?.Read( DateTimeOffset.UtcNow );
 			if ( entries is null ) return "no journal";
 			// journal|<kind> describes the latest entry of that kind instead.
 			if ( args.Length > 1 && !args[1].StartsWith( '#' ) )
@@ -226,10 +227,16 @@ public static class DevCommands
 			ConsoleSystem.Run( args[1] );
 			return "ran";
 		}
+		if ( args[0] == "spot" )
+		{
+			// spot|<object>|<side>|<distance>|<height>: a place beside something named in the scene, as x y z.
+			if ( Spot( args ) is not { } spot ) return $"nothing named '{args.ElementAtOrDefault( 1 )}'";
+			return $"{spot.x:0} {spot.y:0} {spot.z:0}";
+		}
 		if ( args[0] == "hostid" ) return $"local={Connection.Local?.SteamId.ValueUnsigned} host={Connection.Host?.SteamId.ValueUnsigned} address={Connection.Local?.Address} name={Connection.Local?.DisplayName}";
 		if ( args[0] == "convar" ) return ConsoleSystem.GetValue( args[1] ) ?? "unset";
-		// A scene played before the editor had the game's code in has none of its components.
-		if ( GameManager.Instance is null ) return "no game manager";
+		// A scene played before the editor had the game's code in has none of its systems or components.
+		if ( HexagonServices.Current is null ) return "no hexagon system";
 		if ( Player.Local is not { } player ) return "no local player";
 		try
 		{
@@ -275,21 +282,26 @@ public static class DevCommands
 						: null;
 					return player.MenuTarget is null ? "menu closed" : "menu open";
 				case "panel":
-					UI.Hud.InventoryOpen = args[1] == "inventory";
-					UI.Hud.StaffOpen = args[1] == "staff";
+					UI.Hud.Show( args[1] switch { "inventory" => UI.HudPanel.Inventory, "staff" => UI.HudPanel.Staff, _ => UI.HudPanel.None } );
 					return "sent panel";
 				case "camera":
-					// camera|x|y|z|tx|ty|tz puts the view at a point, looking at another. camera alone gives it back.
+					// camera|<object>|<side>|<distance>|<height>|<looked at>|<height> puts the view beside something
+					// named, looking at something else named, or at this client's own character as "self", that
+					// high above where it stands. camera alone gives it back.
 					HeldCamera = null;
 					if ( args.Length >= 7 && !args[1].StartsWith( '#' ) )
 					{
-						var eye = new Vector3( float.Parse( args[1] ), float.Parse( args[2] ), float.Parse( args[3] ) );
-						HeldCamera = new Transform( eye, Rotation.LookAt( new Vector3( float.Parse( args[4] ), float.Parse( args[5] ), float.Parse( args[6] ) ) - eye ) );
+						if ( Spot( args ) is not { } eye ) return $"nothing named '{args[1]}'";
+						var seen = args[5] == "self" ? player.WorldPosition : Middle( args[5] );
+						if ( seen is not { } looked ) return $"nothing named '{args[5]}'";
+						HeldCamera = new Transform( eye, Rotation.LookAt( looked.WithZ( looked.z + float.Parse( args[6], Invariant ) ) - eye ) );
 					}
 					return "sent camera";
 				case "face":
-					var toward = new Vector3( float.Parse( args[1] ), float.Parse( args[2] ), float.Parse( args[3] ) ) - player.GetComponent<PlayerController>().EyePosition;
-					player.GetComponent<PlayerController>().EyeAngles = Rotation.LookAt( toward ).Angles();
+					// face|<object> turns this client's character toward the middle of something named.
+					if ( Middle( args[1] ) is not { } middle ) return $"nothing named '{args[1]}'";
+					var controller = player.GetComponent<PlayerController>();
+					controller.EyeAngles = Rotation.LookAt( middle - controller.EyePosition ).Angles();
 					return "sent face";
 				case "tune":
 					var radio = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
@@ -345,12 +357,12 @@ public static class DevCommands
 					// A verb on the nearest other character, on someone left lying where they were, or on a body.
 					Component? subject = args[1].StartsWith( "corpse." )
 						? Game.ActiveScene.GetAllComponents<Corpse>().FirstOrDefault()
-						: Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed ) );
+						: Person( player );
 					if ( subject is null ) return "nobody there";
 					player.RequestAct( subject, args[1] );
 					return $"sent {args[1]}";
 				case "attack":
-					Component? foe = Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed ) );
+					Component? foe = Person( player );
 					player.RequestAttack( foe is null ? Vector3.Forward : foe.WorldPosition - player.WorldPosition );
 					return "sent attack";
 				case "equip":
@@ -381,7 +393,7 @@ public static class DevCommands
 				case "introduce":
 					var stranger = Nearest( player, Others( player ) );
 					if ( stranger is null ) return "nobody to meet";
-					player.RequestAct( stranger, VerbIds.PersonIntroduce );
+					player.RequestAct( stranger.GetComponent<CharacterBody>(), VerbIds.PersonIntroduce );
 					return "sent introduce";
 				case "proxies":
 					// What this client was told about everyone else. Names and factions must be empty.
@@ -400,7 +412,7 @@ public static class DevCommands
 				case "net":
 					return string.Join( " ; ", Game.ActiveScene.GetAllComponents<Door>().Select( value =>
 						$"{value.GameObject.Name}: active={value.Network.Active} proxy={value.IsProxy} owner={value.Network.Owner?.DisplayName} mode={value.GameObject.NetworkMode}" ) )
-						+ $" | host={Networking.IsHost} netactive={Networking.IsActive} manager={GameManager.Instance is not null} roster={GameManager.Instance?.Roster is not null}";
+						+ $" | host={Networking.IsHost} netactive={Networking.IsActive} manager={HexagonServices.Current is not null} roster={HexagonServices.Current?.Roster is not null}";
 				case "goto":
 					player.WorldPosition = new Vector3( float.Parse( args[1] ), float.Parse( args[2] ), float.Parse( args[3] ) );
 					return "moved";
@@ -434,9 +446,54 @@ public static class DevCommands
 	private static IEnumerable<Player> Others( Player player ) =>
 		Game.ActiveScene.GetAllComponents<Player>().Where( value => value != player && value.IsProxy && value.IsPresent );
 
+	private static readonly System.Globalization.CultureInfo Invariant = System.Globalization.CultureInfo.InvariantCulture;
+
+	/// <summary>The first object in the running scene with this name.</summary>
+	private static GameObject? Named( string name ) =>
+		Game.ActiveScene?.Directory.FindByName( name, caseinsensitive: false ).FirstOrDefault( value => value.IsValid() );
+
+	/// <summary>The middle of something named, as its bounds have it.</summary>
+	private static Vector3? Middle( string name ) => Named( name )?.GetBounds().Center;
+
+	/// <summary>
+	/// A place beside something named, so a test says where its characters stand by what is there
+	/// rather than by coordinates: <c>&lt;name&gt;|&lt;side&gt;|&lt;distance&gt;|&lt;height&gt;</c> after the command.
+	/// The side is the object's own front, back, left or right; the distance is from its face on that
+	/// side; the height is above the floor found there.
+	/// </summary>
+	private static Vector3? Spot( string[] args )
+	{
+		if ( args.Length < 2 || Named( args[1] ) is not { } named ) return null;
+		var side = args.ElementAtOrDefault( 2 ) ?? "front";
+		var distance = args.Length > 3 ? float.Parse( args[3], Invariant ) : 30f;
+		var height = args.Length > 4 ? float.Parse( args[4], Invariant ) : 0f;
+		var rotation = named.WorldRotation;
+		var direction = side switch
+		{
+			"back" => rotation.Backward,
+			"left" => rotation.Left,
+			"right" => rotation.Right,
+			_ => rotation.Forward
+		};
+		direction = direction.WithZ( 0 ).Normal;
+		var bounds = named.GetBounds();
+		// From the middle to the face on that side, then on.
+		var reach = MathF.Abs( direction.x ) * bounds.Extents.x + MathF.Abs( direction.y ) * bounds.Extents.y;
+		var at = bounds.Center + direction * (reach + distance);
+		// The floor there: traced down from the object's middle height, under any roof above it.
+		var floor = Game.ActiveScene.Trace.Ray( at, at.WithZ( bounds.Mins.z - 512f ) )
+			.WithoutTags( "player", "item", "corpse", "sleeper" ).Run();
+		return at.WithZ( (floor.Hit ? floor.HitPosition.z : bounds.Mins.z) + height );
+	}
+
+	/// <summary>The nearest other person this client can see: someone in the city, or someone left lying where they were.</summary>
+	private static CharacterBody? Person( Player player ) =>
+		(Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed ) ))?.GetComponent<CharacterBody>();
+
 	private static T? Nearest<T>( Player player, IEnumerable<T> candidates ) where T : Component =>
 		candidates.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();
 
-	private static string Pile( Hexagon.Logic.ItemStack value ) =>
+	private static string Pile( ItemStack value ) =>
 		$"{ItemDefinition.Find( value.Definition )?.Title}{(value.Count > 1 ? $"x{value.Count}" : string.Empty)}{(value.Frequency is { } frequency ? $"~{frequency}" : string.Empty)}{(value.Pattern is { } cut ? $"#{cut}" : string.Empty)}";
 }
+#endif

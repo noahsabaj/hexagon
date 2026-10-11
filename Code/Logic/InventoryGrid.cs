@@ -20,6 +20,11 @@ public static class InventoryGrid
 			y < other.Y + other.Height && other.Y < y + height );
 	}
 
+	/// <summary>The pile that could take more and covers a cell, other than the one being put down there.</summary>
+	public static ItemStack? PileAt( InventoryData inventory, int x, int y, Guid except ) =>
+		inventory.Items.FirstOrDefault( value => value.Id != except && value.Max > 1 &&
+			x >= value.X && x < value.X + value.Width && y >= value.Y && y < value.Y + value.Height );
+
 	/// <summary>Rearranges within one inventory. Nothing changes hands, so nothing is journaled.</summary>
 	public static Result Move( InventoryData inventory, Guid itemId, int x, int y )
 	{
