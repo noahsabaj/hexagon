@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Hexagon.Logic;
 using Sandbox;
@@ -118,7 +119,11 @@ public sealed class CharacterService
 	}
 
 	/// <summary>The character's look, as its body shows it.</summary>
-	public static string LookOf( CharacterData character ) => Looks.Of( FactionDefinition.Find( character.Faction ) );
+	public static string LookOf( CharacterData character ) => Looks.Of( character );
+
+	/// <summary>A body's look: the body its character was made with, and whatever it still wears.</summary>
+	public string LookOf( HolderData body ) =>
+		Looks.Of( body.Character is { } id && Roster.Find( id ) is { } character ? character.Body : new List<string>(), body.Inventory );
 
 	/// <summary>
 	/// The character dies where it is. What it carried stays where it fell, and the rest is the game's
@@ -167,10 +172,11 @@ public sealed class CharacterService
 	{
 		var body = _game.Holders!.GetOrCreate( Guid.NewGuid(), HolderKinds.Corpse, "Body", character.Inventory.Width, character.Inventory.Height );
 		body.Position = new[] { at.x, at.y, at.z };
-		body.Look = LookOf( character );
 		body.Character = character.Id;
 		var moved = _game.Transfers!.MoveAll( character, body, Actor.Of( character ) );
 		if ( !moved.Ok ) Log.Warning( $"[death] {character.HolderLabel} kept some of what it carried: {moved.Message}" );
+		// The body still wears what the character wore.
+		body.Look = LookOf( body );
 		_game.SaveTogether( character, body );
 		Corpse.Spawn( body );
 	}

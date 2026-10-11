@@ -16,17 +16,14 @@ public static class Admission
 	/// <summary>
 	/// Entering the city. <paramref name="inCity"/>: the asking pawn already has a character in it.
 	/// <paramref name="loadedElsewhere"/>: this character is in the city on some connection.
-	/// <paramref name="whitelistedOut"/>: the faction is whitelisted and the account no longer is, with its title.
 	/// </summary>
-	public static string? ToEnter( CharacterData? character, long steamId, DateTimeOffset now, bool inCity, bool loadedElsewhere, string? whitelistedOut ) =>
+	public static string? ToEnter( CharacterData? character, long steamId, DateTimeOffset now, bool inCity, bool loadedElsewhere ) =>
 		inCity ? "Leave the city first."
 		: character is null || character.SteamId != steamId ? NotFound
 		: character.IsDead ? $"{character.Name} is dead."
 		// Dying and making someone new does not put a player back in the scene at once.
 		: character.ArrivesAt is { } arrives && arrives > now ? $"{character.Name} arrives in the city {Until( arrives - now )}."
 		: loadedElsewhere ? "That character is already in the city."
-		// A whitelist taken away takes the faction's characters with it until it is given back.
-		: whitelistedOut is not null ? $"You are no longer whitelisted for {whitelistedOut}."
 		: null;
 
 	/// <summary>Ending a life that has been lived. <paramref name="loaded"/>: it is in the city, on any connection.</summary>

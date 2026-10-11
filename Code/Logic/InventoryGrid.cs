@@ -7,7 +7,8 @@ namespace Hexagon.Logic;
 
 /// <summary>
 /// Placement rules for a grid inventory. Items enter and leave an inventory only through
-/// <see cref="Transfers"/>, so there is no add or remove here.
+/// <see cref="Transfers"/>, so there is no add or remove here. What is worn is in the inventory but
+/// not in the grid: it takes no cells.
 /// </summary>
 public static class InventoryGrid
 {
@@ -15,14 +16,14 @@ public static class InventoryGrid
 	{
 		if ( width < 1 || height < 1 || x < 0 || y < 0 ) return false;
 		if ( x + width > inventory.Width || y + height > inventory.Height ) return false;
-		return !inventory.Items.Any( other => other.Id != ignore &&
+		return !inventory.Items.Any( other => !other.Worn && other.Id != ignore &&
 			x < other.X + other.Width && other.X < x + width &&
 			y < other.Y + other.Height && other.Y < y + height );
 	}
 
 	/// <summary>The pile that could take more and covers a cell, other than the one being put down there.</summary>
 	public static ItemStack? PileAt( InventoryData inventory, int x, int y, Guid except ) =>
-		inventory.Items.FirstOrDefault( value => value.Id != except && value.Max > 1 &&
+		inventory.Items.FirstOrDefault( value => value.Id != except && value.Max > 1 && !value.Worn &&
 			x >= value.X && x < value.X + value.Width && y >= value.Y && y < value.Y + value.Height );
 
 	/// <summary>Rearranges within one inventory. Nothing changes hands, so nothing is journaled.</summary>
@@ -30,6 +31,7 @@ public static class InventoryGrid
 	{
 		var item = inventory.Items.FirstOrDefault( value => value.Id == itemId );
 		if ( item is null ) return Result.Fail( ErrorCode.NotFound, "That item is not in this inventory." );
+		if ( item.Worn ) return Result.Fail( ErrorCode.Conflict, Wearing.TakeOffFirst );
 		if ( !Fits( inventory, x, y, item.Width, item.Height, ignore: itemId ) )
 			return Result.Fail( ErrorCode.Conflict, "That space is taken." );
 		item.X = x;

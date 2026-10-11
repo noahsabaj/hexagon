@@ -19,13 +19,11 @@ namespace Hexagon;
 /// </summary>
 public static class Operators
 {
-	public const string Help = "whitelist <steamid> <faction> | unwhitelist <steamid> <faction> | give \"<name>\" <item> [count] [pattern] | " +
+	public const string Help = "give \"<name>\" <item> [count] [pattern] | " +
 		"take \"<name>\" <item> [count] | move \"<from>\" \"<to>\" <item> [count] | " +
 		"teleport \"<name>\" <x> <y> <z> | bring \"<name>\" | goto \"<name>\" | hurt \"<name>\" <amount> | revive \"<name>\" | release \"<name>\" | " +
-		"restore \"<name>\" | faction \"<name>\" <faction> | door [\"<door>\"] <open|close|lock|unlock|release|assign \"<name>\"> | door | who | journal [text] [count] [days]";
+		"restore \"<name>\" | faction \"<name>\" <faction|none> | door [\"<door>\"] <open|close|lock|unlock|release|assign \"<name>\"> | door | who | journal [text] [count] [days]";
 
-	[ConCmd( "hexagon_whitelist" )] public static void Whitelist( string steamId, string faction ) => FromConsole( "whitelist", steamId, faction );
-	[ConCmd( "hexagon_unwhitelist" )] public static void Unwhitelist( string steamId, string faction ) => FromConsole( "unwhitelist", steamId, faction );
 	[ConCmd( "hexagon_give" )] public static void Give( string characterName, string item, int count = 0, string pattern = "" ) => FromConsole( "give", characterName, item, Count( count ), pattern );
 	[ConCmd( "hexagon_take" )] public static void Take( string characterName, string item, int count = 0 ) => FromConsole( "take", characterName, item, Count( count ) );
 	[ConCmd( "hexagon_move" )] public static void MoveBetween( string from, string to, string item, int count = 0 ) => FromConsole( "move", from, to, item, Count( count ) );
@@ -88,27 +86,6 @@ public static class Operators
 
 		switch ( words[0].ToLowerInvariant() )
 		{
-			case "whitelist":
-			case "unwhitelist":
-			{
-				if ( !long.TryParse( Word( 1 ), out var id ) || id <= 0 ) return new[] { $"Usage: {words[0]} <steamid64> <faction>" };
-				if ( Faction( Word( 2 ) ) is not { } faction ) return new[] { NoFaction( Word( 2 ) ) };
-				var account = game.Account( id );
-				var adding = words[0].Equals( "whitelist", StringComparison.OrdinalIgnoreCase );
-				account.Whitelists.Remove( faction.ResourcePath );
-				if ( adding ) account.Whitelists.Add( faction.ResourcePath );
-				game.SaveAccount( account );
-				journal.Record( $"operator.{words[0].ToLowerInvariant()}", by, $"account:{id}", data: ("faction", faction.ResourceName) );
-				var reply = new List<string> { $"{id} may {(adding ? "now" : "no longer")} create {faction.Title} characters." };
-				if ( adding ) return reply;
-				// A whitelist taken away takes the faction's characters out of the city with it.
-				foreach ( var player in game.Scene.GetAllComponents<Player>().Where( value => value.HostCharacter is { } held && held.SteamId == id && held.Faction == faction.ResourcePath ).ToArray() )
-				{
-					reply.Add( $"{player.HostCharacter!.Name} was sent back to the menu." );
-					player.HostSendToMenu( $"You are no longer whitelisted for {faction.Title}." );
-				}
-				return reply;
-			}
 			case "give":
 			{
 				if ( Character( Word( 1 ) ) is not { } target ) return new[] { "Usage: give \"<living character's name>\" <item> [count] [pattern]." };
@@ -205,16 +182,17 @@ public static class Operators
 			}
 			case "faction":
 			{
-				if ( Character( Word( 1 ) ) is not { } character ) return new[] { "Usage: faction \"<character name>\" <faction>." };
-				if ( Faction( Word( 2 ) ) is not { } faction ) return new[] { NoFaction( Word( 2 ) ) };
-				var was = FactionDefinition.Find( character.Faction )?.ResourceName ?? character.Faction;
-				character.Faction = faction.ResourcePath;
-				journal.Record( JournalKinds.OperatorFaction, by, character.HolderLabel, data: new[] { ("from", was), ("to", faction.ResourceName) } );
+				// Staff appoint; the faction's own people recruit. Nothing about the character changes but
+				// what it belongs to: a uniform is handed over and put on like anything else.
+				if ( Character( Word( 1 ) ) is not { } character ) return new[] { "Usage: faction \"<character name>\" <faction|none>." };
+				var none = Word( 2 ).Equals( "none", StringComparison.OrdinalIgnoreCase );
+				if ( !none && Faction( Word( 2 ) ) is null ) return new[] { NoFaction( Word( 2 ) ) };
+				var faction = none ? null : Faction( Word( 2 ) );
+				var was = FactionDefinition.Find( character.Faction )?.ResourceName ?? (character.Faction.Length == 0 ? "none" : character.Faction);
+				character.Faction = faction?.ResourcePath ?? string.Empty;
+				journal.Record( JournalKinds.OperatorFaction, by, character.HolderLabel, data: new[] { ("from", was), ("to", faction?.ResourceName ?? "none") } );
 				Changed( game, character );
-				var reply = new List<string> { $"{character.Name} is now {faction.Title}." };
-				if ( faction.RequiresWhitelist && !game.Account( character.SteamId ).Whitelists.Contains( faction.ResourcePath ) )
-					reply.Add( $"Their account is not whitelisted for {faction.Title}, so once they leave they cannot come back as {character.Name} until it is." );
-				return reply;
+				return new[] { faction is null ? $"{character.Name} belongs to no faction now." : $"{character.Name} is now {faction.Title}." };
 			}
 			case "door":
 			{

@@ -24,10 +24,10 @@ public sealed class DecisionTests
 		theirs.SteamId = 8;
 		foreach ( var refusal in new[]
 		{
-			Admission.ToEnter( theirs, Mine, Now, inCity: false, loadedElsewhere: false, whitelistedOut: null ),
+			Admission.ToEnter( theirs, Mine, Now, inCity: false, loadedElsewhere: false ),
 			Admission.ToRetire( theirs, Mine, loaded: false ),
 			Admission.ToDelete( theirs, Mine ),
-			Admission.ToEnter( null, Mine, Now, inCity: false, loadedElsewhere: false, whitelistedOut: null ),
+			Admission.ToEnter( null, Mine, Now, inCity: false, loadedElsewhere: false ),
 		} )
 			Assert.AreEqual( Admission.NotFound, refusal );
 	}
@@ -36,18 +36,17 @@ public sealed class DecisionTests
 	public void EnteringTheCityIsRefusedToTheDeadTheWaitingTheLoadedAndTheUnlisted()
 	{
 		var character = Character();
-		Assert.IsNull( Admission.ToEnter( character, Mine, Now, inCity: false, loadedElsewhere: false, whitelistedOut: null ) );
-		Assert.AreEqual( "Leave the city first.", Admission.ToEnter( character, Mine, Now, inCity: true, loadedElsewhere: false, whitelistedOut: null ) );
-		Assert.AreEqual( "That character is already in the city.", Admission.ToEnter( character, Mine, Now, inCity: false, loadedElsewhere: true, whitelistedOut: null ) );
-		Assert.AreEqual( "You are no longer whitelisted for Civil Protection.", Admission.ToEnter( character, Mine, Now, false, false, "Civil Protection" ) );
+		Assert.IsNull( Admission.ToEnter( character, Mine, Now, inCity: false, loadedElsewhere: false ) );
+		Assert.AreEqual( "Leave the city first.", Admission.ToEnter( character, Mine, Now, inCity: true, loadedElsewhere: false ) );
+		Assert.AreEqual( "That character is already in the city.", Admission.ToEnter( character, Mine, Now, inCity: false, loadedElsewhere: true ) );
 
 		character.ArrivesAt = Now.AddHours( 5.5 );
-		Assert.AreEqual( "John Doe arrives in the city in 6 hours.", Admission.ToEnter( character, Mine, Now, false, false, null ) );
+		Assert.AreEqual( "John Doe arrives in the city in 6 hours.", Admission.ToEnter( character, Mine, Now, false, false ) );
 		character.ArrivesAt = Now.AddSeconds( -1 );
-		Assert.IsNull( Admission.ToEnter( character, Mine, Now, false, false, null ), "a wait that is over is no wait" );
+		Assert.IsNull( Admission.ToEnter( character, Mine, Now, false, false ), "a wait that is over is no wait" );
 
 		character.DiedAt = Now;
-		Assert.AreEqual( "John Doe is dead.", Admission.ToEnter( character, Mine, Now, false, false, null ) );
+		Assert.AreEqual( "John Doe is dead.", Admission.ToEnter( character, Mine, Now, false, false ) );
 	}
 
 	[TestMethod]

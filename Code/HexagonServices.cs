@@ -56,6 +56,13 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 	/// <summary>How long after a death the account's next character may enter the city.</summary>
 	[Property, Group( "Death" )] public float NewLifeHours { get; set; } = 24f;
 
+	/// <summary>The bodies a new character may be made with besides the citizen: the engine's human skins, each with its own model.</summary>
+	[Property, Group( "Characters" )] public List<Clothing> Bodies { get; set; } = new();
+	/// <summary>Whether the engine's citizen is offered as a body too. With no other body listed, it always is.</summary>
+	[Property, Group( "Characters" )] public bool OffersCitizen { get; set; } = true;
+	/// <summary>Hair and facial hair a new character may be made with. It is part of the body, not clothing: nobody takes it off.</summary>
+	[Property, Group( "Characters" )] public List<Clothing> Hair { get; set; } = new();
+
 	/// <summary>The limits on lives that the roster applies.</summary>
 	public LifeRules Lives => new( Math.Max( 1, LivingCharacters ), TimeSpan.FromHours( Math.Max( 0f, NewLifeHours ) ) );
 

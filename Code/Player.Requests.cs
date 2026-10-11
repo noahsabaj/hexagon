@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Hexagon.Logic;
 using Sandbox;
@@ -18,37 +19,40 @@ public sealed partial class Player
 		if ( Authorize( nameof( RequestCharacters ), out var caller, out var game, needsCharacter: false ) ) SendCharacterList( caller, game );
 	}
 
+	/// <summary>
+	/// Makes a character, belonging to no faction: one is joined in the world. It has the body chosen
+	/// for life, and arrives wearing the clothes chosen from the game's wardrobe, and nothing else.
+	/// </summary>
 	[Rpc.Host]
-	public void RequestCreateCharacter( string name, string description, string factionPath )
+	public void RequestCreateCharacter( string name, string description, string body, string pieces )
 	{
 		if ( !Authorize( nameof( RequestCreateCharacter ), out var caller, out var game, needsCharacter: false ) ) return;
-		if ( FactionDefinition.Find( factionPath ) is not { } faction )
+		var chosen = Appearance.Choose( game, body ?? string.Empty, Appearance.Split( pieces ) );
+		if ( !chosen.Ok )
 		{
-			HostRecord( JournalKinds.CharacterCreate, ok: false, data: new[] { ("reason", "faction"), ("faction", Clip( factionPath ?? string.Empty )) } );
-			Chat.Tell( caller, "That faction does not exist." );
+			HostRecord( JournalKinds.CharacterCreate, ok: false, data: new[] { ("reason", "appearance"), ("detail", Clip( chosen.Message )) } );
+			Chat.Tell( caller, chosen.Message );
 			return;
 		}
-		var steamId = SteamIdOf( caller );
-		if ( faction.RequiresWhitelist && !game.Account( steamId ).Whitelists.Contains( faction.ResourcePath ) )
-		{
-			HostRecord( JournalKinds.CharacterCreate, faction.ResourceName, ok: false, ("reason", "whitelist") );
-			Chat.Tell( caller, $"You are not whitelisted for {faction.Title}." );
-			return;
-		}
-
-		// A new character arrives with nothing but its clothes. Whatever it needs, it finds or is given.
-		var created = game.Roster!.Create( steamId, name, description, faction.ResourcePath, DateTimeOffset.UtcNow, game.Lives );
+		var created = game.Roster!.Create( SteamIdOf( caller ), name, description, DateTimeOffset.UtcNow, game.Lives, chosen.Value.Body );
 		if ( !created.Ok )
 		{
 			// The name is kept: an attempt to pass as someone else is worth knowing about.
-			HostRecord( JournalKinds.CharacterCreate, faction.ResourceName, ok: false, ("reason", created.Code.ToString()), ("name", Clip( name ?? string.Empty )) );
+			HostRecord( JournalKinds.CharacterCreate, ok: false, data: new[] { ("reason", created.Code.ToString()), ("name", Clip( name ?? string.Empty )) } );
 			Chat.Tell( caller, created.Message );
 			return;
 		}
-		var data = created.Value.ArrivesAt is { } arrives
-			? new[] { ("faction", faction.ResourceName), ("arrives", arrives.ToString( "u" )) }
-			: new[] { ("faction", faction.ResourceName) };
-		game.Journal!.Record( JournalKinds.CharacterCreate, Actor.Of( created.Value ), created.Value.HolderLabel, data: data );
+		var character = created.Value;
+		// A new character arrives with nothing but its clothes. Whatever it needs, it finds or is given.
+		foreach ( var clothes in chosen.Value.Clothes )
+		{
+			var worn = clothes.IssueTo( game.Transfers!, Sources.Arrival, character, Actor.Of( character ), worn: true );
+			if ( !worn.Ok ) Log.Warning( $"[create] {character.HolderLabel} arrives without the {clothes.Title}: {worn.Message}" );
+		}
+		game.Roster.Save( character );
+		var data = new List<(string, string)> { ("body", body is { Length: > 0 } ? body : "citizen"), ("clothes", chosen.Value.Clothes.Count.ToString()) };
+		if ( character.ArrivesAt is { } arrives ) data.Add( ("arrives", arrives.ToString( "u" )) );
+		game.Journal!.Record( JournalKinds.CharacterCreate, Actor.Of( character ), character.HolderLabel, data: data.ToArray() );
 		SendCharacterList( caller, game );
 	}
 
@@ -107,10 +111,8 @@ public sealed partial class Player
 		if ( !Authorize( nameof( RequestEnterCity ), out var caller, out var game, needsCharacter: false ) ) return;
 		var character = game.Roster!.Find( characterId );
 		var steamId = SteamIdOf( caller );
-		var faction = character is null ? null : FactionDefinition.Find( character.Faction );
 		var now = DateTimeOffset.UtcNow;
-		var whitelistedOut = faction is { RequiresWhitelist: true } && !game.Account( steamId ).Whitelists.Contains( faction.ResourcePath ) ? faction.Title : null;
-		var refusal = Admission.ToEnter( character, steamId, now, inCity: _character is not null, loadedElsewhere: HostLoaded( characterId ) is not null, whitelistedOut );
+		var refusal = Admission.ToEnter( character, steamId, now, inCity: _character is not null, loadedElsewhere: HostLoaded( characterId ) is not null );
 		if ( character is null || refusal is not null )
 		{
 			HostRecord( JournalKinds.CityEnter, $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );

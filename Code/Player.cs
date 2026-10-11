@@ -484,7 +484,8 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		if ( _character is null )
 		{
 			var summaries = game.Roster!.OwnedBy( SteamIdOf( caller ) )
-				.Select( value => new CharacterSummary( value.Id, value.Name, FactionDefinition.Find( value.Faction )?.Title ?? value.Faction,
+				.Select( value => new CharacterSummary( value.Id, value.Name,
+					FactionDefinition.Find( value.Faction )?.Title ?? (value.Faction.Length == 0 ? "Unaffiliated" : value.Faction),
 					value.FirstEntered is not null, value.DiedAt, value.ArrivesAt ) )
 				.ToArray();
 			using ( Rpc.FilterInclude( caller ) ) ReceiveCharacters( JsonSerializer.Serialize( summaries ) );

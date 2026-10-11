@@ -74,8 +74,8 @@ public sealed class StoreTests
 	{
 		var files = new MemoryFiles();
 		var roster = new CharacterRoster( new DocumentStore( files ) );
-		var alice = roster.Create( 1, "Alice Smith", "A tired resident of the city.", "citizen", default ).Value;
-		var bob = roster.Create( 2, "Bob Jones", "A tired resident of the city.", "citizen", default ).Value;
+		var alice = roster.Create( 1, "Alice Smith", "A tired resident of the city.", default ).Value;
+		var bob = roster.Create( 2, "Bob Jones", "A tired resident of the city.", default ).Value;
 		alice.Inventory = Holding( 10 );
 		roster.Save( alice );
 

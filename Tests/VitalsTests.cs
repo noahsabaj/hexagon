@@ -44,7 +44,7 @@ public sealed class VitalsTests
 	{
 		var files = new MemoryFiles();
 		var roster = new CharacterRoster( new DocumentStore( files ) );
-		var character = roster.Create( 1, "John Doe", "A tired resident of the city.", "citizen", default ).Value;
+		var character = roster.Create( 1, "John Doe", "A tired resident of the city.", default ).Value;
 		Assert.IsFalse( Vitals.Bleed( character, 100, 180 ), "someone standing does not bleed" );
 		Assert.AreEqual( 0, character.SecondsDown );
 		Vitals.Damage( character, 100 );
@@ -67,7 +67,7 @@ public sealed class VitalsTests
 	{
 		var files = new MemoryFiles();
 		var roster = new CharacterRoster( new DocumentStore( files ) );
-		var character = roster.Create( 1, "John Doe", "A tired resident of the city.", "citizen", default ).Value;
+		var character = roster.Create( 1, "John Doe", "A tired resident of the city.", default ).Value;
 		Vitals.Damage( character, 100 );
 		character.IsRestrained = true;
 		roster.Save( character );

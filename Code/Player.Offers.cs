@@ -30,6 +30,11 @@ public sealed partial class Player
 			HostInvalid( nameof( RequestOffer ), "count", count.ToString() );
 			return;
 		}
+		if ( stack.Worn )
+		{
+			Chat.Tell( caller, Wearing.TakeOffFirst );
+			return;
+		}
 		HostMakeOffer( caller, recipient, new Offer( this, itemId, count, null, Describe( stack, count ), 0 ),
 			("item", itemId.ToString( "N" )), ("definition", stack.Definition), ("count", count.ToString()) );
 	}
@@ -110,6 +115,7 @@ public sealed partial class Player
 	{
 		if ( from.Inventory.Items.FirstOrDefault( value => value.Id == offer.ItemId ) is not { } stack || stack.Count < offer.Count )
 			return Result.Fail( ErrorCode.NotFound, "They no longer have it." );
+		if ( stack.Worn ) return Result.Fail( ErrorCode.Conflict, "They are wearing it now." );
 		var moved = game.Transfers!.Move( from, _character!, offer.ItemId, Actor.Of( from ), offer.Count );
 		if ( !moved.Ok ) return moved;
 		game.SaveTogether( from, _character! );

@@ -33,7 +33,7 @@ hexagon_staff <steamid64> 1
 ```
 
 Staff status can only be given from the console. From then on that player presses Tab in game and
-types the same commands without the `hexagon_` prefix: `who`, `whitelist`, `give`, `take`, `move`,
+types the same commands without the `hexagon_` prefix: `who`, `give`, `take`, `move`,
 `bring`, `goto`, `teleport`, `hurt`, `revive`, `release`, `restore`, `faction`, `door`, `journal`. The
 [README](../README.md#operator-commands) lists what each does. Every line is journaled under their
 name before it runs, and every line typed at the console is journaled as the console.
@@ -60,7 +60,7 @@ who took what from the body, for `move` to give it back.
 
 Stop the server with Ctrl+C or by closing it, and start it again with the same data root.
 **Checked** (in the editor play test): characters, what they know, health, being down or bound,
-what is in hand, inventories, crates, bodies, dropped items, doors and their owners, and whitelists
+what is in hand and worn, inventories, crates, bodies, dropped items, and doors and their owners
 all return. Characters come back where they stood. Players rejoin and pick their character again.
 Someone who was down or bound when it stopped is back where they were, lying or standing bound,
 until their player returns, and can be helped up, freed or searched meanwhile.
@@ -89,7 +89,8 @@ first.
 Section 4 of [v0.1.md](v0.1.md), as a script for the evening:
 
 1. Host on a machine nobody is playing on. Three people join on their own accounts.
-2. Make one of them staff. They whitelist another for Civil Protection, in game.
+2. Make one of them staff. They appoint another to Civil Protection, in game, who takes the uniform
+   from the locker and puts it on.
 3. Play for an hour: talk, trade, lock doors, use the radio, have one fight and one arrest.
 4. Have one argument about who did what, and settle it from `journal` without leaving the game.
 5. Restart the server in the middle. Everyone rejoins and checks where they are and what they have.

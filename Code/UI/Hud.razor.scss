@@ -27,6 +27,46 @@ Hud {
 		background-color: rgba( 18, 24, 30, 0.96 );
 		border: 1px solid rgba( 120, 170, 200, 0.35 );
 		border-radius: 6px;
+
+		// Wide enough for a row of choices to hold a whole kind, and scrolled when a game offers more
+		// than fits on the screen.
+		&.wide {
+			width: 1120px;
+			max-height: 96%;
+			overflow: scroll;
+		}
+	}
+
+	// One look on offer when a character is made: its picture, and its name under it, all the same size
+	// so the rows line up.
+	.choice {
+		flex-direction: column;
+		justify-content: center;
+		align-items: center;
+		width: 100px;
+		height: 112px;
+		padding: 6px;
+		margin-bottom: 8px;
+		font-size: 12px;
+		text-align: center;
+
+		img {
+			width: 56px;
+			height: 56px;
+			object-fit: contain;
+		}
+	}
+
+	// What is worn: on the body, in a row of its own rather than in the grid.
+	.wearing {
+		min-height: 76px;
+
+		.item {
+			position: relative;
+			width: 72px;
+			height: 72px;
+			margin-right: 4px;
+		}
 	}
 
 	h1 {
@@ -176,6 +216,12 @@ Hud {
 			opacity: 0.85;
 		}
 
+		.icon {
+			width: 48px;
+			height: 48px;
+			object-fit: contain;
+		}
+
 		// What tells two of a thing apart: a key's cut, a radio's dial. Small enough for one cell.
 		.detail {
 			font-size: 10px;
@@ -203,6 +249,16 @@ Hud {
 		margin-right: 6px;
 		margin-left: 6px;
 	}
+}
+
+// The engine's tooltip, raised by a panel of the HUD: the title of an item shown by its picture, for one.
+.tooltip {
+	padding: 4px 8px;
+	background-color: rgba( 10, 14, 18, 0.92 );
+	border: 1px solid rgba( 159, 211, 238, 0.4 );
+	border-radius: 3px;
+	font-size: 13px;
+	color: #e8ecef;
 }
 
 .tip {
