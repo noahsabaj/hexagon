@@ -43,7 +43,10 @@ if (Get-Process -Name 'sbox-dev' -ErrorAction SilentlyContinue) {
 # s&box writes the C# project when it opens the game. Open it hidden, wait for the file to settle, close it.
 Write-Host '==> Generating the s&box project' -ForegroundColor Cyan
 if (Test-Path -LiteralPath $project) { Remove-Item -LiteralPath $project -Force }
-$editor = Start-Process -FilePath $sboxDev -ArgumentList "-project `"$manifest`"" -PassThru -WindowStyle Hidden
+# RenderDoc, when it is on the PATH, is loaded into the editor and slows every native library the
+# engine loads while starting, so the editor is started without it.
+$pathWithoutRenderDoc = ($env:Path -split ';' | Where-Object { $_ -and -not (Test-Path -LiteralPath (Join-Path $_ 'renderdoc.dll')) }) -join ';'
+$editor = Start-Process -FilePath $sboxDev -ArgumentList "-project `"$manifest`"" -PassThru -WindowStyle Hidden -Environment @{ Path = $pathWithoutRenderDoc }
 try {
     $deadline = [DateTime]::UtcNow.AddSeconds($GenerateTimeoutSeconds)
     $signature = $null

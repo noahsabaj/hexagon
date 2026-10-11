@@ -50,7 +50,17 @@ public static class DevCommands
 	[ConVar( "hexagon_dev" )]
 	public static bool Enabled { get; set; }
 
-	/// <summary>Server console: <c>hexagon_dev_send 1 "say|Hello"</c>. Client 0 is the server itself; clients count from 1 in join order.</summary>
+	/// <summary>
+	/// Which client this is, so a test can start several at once and still tell them apart:
+	/// <c>+hexagon_dev_client 2</c>. The client tells the host once its player exists; see <see cref="Announce"/>.
+	/// </summary>
+	[ConVar( "hexagon_dev_client" )]
+	public static int ClientNumber { get; set; }
+
+	// Host: the connection that said it was each client.
+	private static readonly Dictionary<int, Guid> _numbered = new();
+
+	/// <summary>Server console: <c>hexagon_dev_send 1 "say|Hello"</c>. Client 0 is the server itself; client 1 is the one started with <c>+hexagon_dev_client 1</c>.</summary>
 	[ConCmd( "hexagon_dev_send" )]
 	public static void Send( int client, string command )
 	{
@@ -64,10 +74,10 @@ public static class DevCommands
 			Log.Info( $"[dev] 0 {command} => {Run( command.Split( '|' ) )}" );
 			return;
 		}
-		var target = GameManager.Instance?.Clients.ElementAtOrDefault( client - 1 );
+		var target = _numbered.TryGetValue( client, out var id ) ? Connection.Find( id ) : null;
 		if ( target is null )
 		{
-			Log.Info( $"[dev] {client} {command} => no such client ({GameManager.Instance?.Clients.Count} connected)" );
+			Log.Info( $"[dev] {client} {command} => no such client ({Connection.All.Count( value => !value.IsHost )} connected)" );
 			return;
 		}
 		using ( Rpc.FilterInclude( target ) ) Relay( client, command );
@@ -108,6 +118,22 @@ public static class DevCommands
 				if ( bar > 0 && int.TryParse( line[..bar], out var client ) ) Send( client, line[(bar + 1)..] );
 			}
 		}
+	}
+
+	/// <summary>
+	/// Client: tells the host which client this is, once its player exists. Marking the convar as user
+	/// info, for the engine to pass on, was not enough: it is set while the game's code loads, and from a
+	/// client that started quickly the number never reached the host.
+	/// </summary>
+	public static void Announce()
+	{
+		if ( Enabled && ClientNumber > 0 && !Networking.IsHost ) Numbered( ClientNumber );
+	}
+
+	[Rpc.Host( NetFlags.Reliable )]
+	private static void Numbered( int number )
+	{
+		if ( Enabled && Rpc.Caller is { } caller ) _numbered[number] = caller.Id;
 	}
 
 	[Rpc.Broadcast( NetFlags.HostOnly | NetFlags.Reliable )]

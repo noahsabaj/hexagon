@@ -138,6 +138,7 @@ pwsh tools/playtest.ps1
 Boots the editor, enters play mode, and plays a full scenario through the real RPC path,
 including a restart, in a throwaway data folder. It saves pictures of what it saw as
 `hexagon-look-*.png` in the temp folder. A failed run keeps its data folder, journal included.
+Takes about two and a half minutes.
 
 ```bash
 pwsh tools/playtest-server.ps1
@@ -145,8 +146,8 @@ pwsh tools/playtest-server.ps1
 
 Starts a real dedicated server and joins two real game clients to it, then asks each client what
 it was actually told: that the other player's name never arrived, that a whisper stopped at its
-range, that a door one opened is open for the other. Needs Steam running and takes several
-minutes, most of it the clients starting.
+range, that a door one opened is open for the other. Needs Steam running and takes about three
+minutes.
 
 ```bash
 pwsh tools/generate-confusables.ps1

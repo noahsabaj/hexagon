@@ -28,6 +28,11 @@ $script:sent = 0
 
 if (Get-Process -Name 'sbox', 'sbox-server', 'sbox-dev' -ErrorAction SilentlyContinue) { throw 'Close s&box, its editor and any dedicated server first.' }
 
+# RenderDoc, when it is on the PATH, is loaded into each game client, and with it every native
+# library the engine loads while starting is slow: a client took two to four minutes to reach its
+# menu, and 13 seconds without it. The clients are started without it.
+$pathWithoutRenderDoc = ($env:Path -split ';' | Where-Object { $_ -and -not (Test-Path -LiteralPath (Join-Path $_ 'renderdoc.dll')) }) -join ';'
+
 function Read-Log { if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log) } else { @() } }
 
 function Wait-Until([string] $What, [scriptblock] $Condition) {
@@ -96,15 +101,16 @@ try {
     # Both clients are one Steam account, so this city lets that account live two lives at once.
     Expect 'a game may allow an account more than one life' (Send 0 'policy|living|2') 'death=Permanent living=2 hours=24'
 
-    Write-Host '==> Starting two clients, one after the other (a few minutes)' -ForegroundColor Cyan
-    # The server numbers clients in the order they join. Started together, they can join in either
-    # order, and stopping the second process could stop client 1. So each starts once the one before
-    # it has joined, and the second process is client 2.
-    foreach ($index in 1, 2) {
-        $clients += Start-Process -FilePath (Join-Path $SboxRoot 'sbox.exe') -WorkingDirectory $SboxRoot -PassThru -WindowStyle Minimized `
-            -ArgumentList "+connect local +hexagon_dev 1 -sw -720"
-        Wait-Until "client $index to have a pawn" { (Send $index 'who') -match 'local=True' }
+    Write-Host '==> Starting two clients' -ForegroundColor Cyan
+    # Each client is told its number and tells the server once it has joined, so they start
+    # together, either may join first, and the second process is client 2. A minimized window never
+    # presents and every frame waited for it, so a client ran at a few frames a second; -nowindow
+    # gives it a window that is never shown, and it runs at full speed.
+    foreach ($number in 1, 2) {
+        $clients += Start-Process -FilePath (Join-Path $SboxRoot 'sbox.exe') -WorkingDirectory $SboxRoot -PassThru -WindowStyle Hidden `
+            -Environment @{ Path = $pathWithoutRenderDoc } -ArgumentList "+connect local +hexagon_dev 1 +hexagon_dev_client $number -nowindow"
     }
+    foreach ($number in 1, 2) { Wait-Until "client $number to have a pawn" { (Send $number 'who') -match 'local=True' } }
 
     Write-Host '==> Two characters, one city' -ForegroundColor Cyan
     [void](Send 1 "create|John Doe|$description|citizen")

@@ -129,6 +129,7 @@ public sealed partial class Player : Component, Component.IPressable, Component.
 			Local = this;
 			// Statics outlive a session in the editor, so a new one starts with a clean log.
 			Chat.Clear();
+			Dev.DevCommands.Announce();
 		}
 		ApplyPresence();
 		if ( !IsProxy ) RequestCharacters();
