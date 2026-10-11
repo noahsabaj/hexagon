@@ -186,7 +186,7 @@ public sealed partial class Player
 	/// <summary>Host: staff took away what this character needs to be in the city. It is saved, and its player is back in the menu.</summary>
 	internal void HostSendToMenu( string message )
 	{
-		if ( _character is null || GameManager.Instance is not { } game ) return;
+		if ( _character is null || HexagonServices.Current is not { } game ) return;
 		HostSave();
 		HostRecord( JournalKinds.CityLeave, data: ("reason", "sent") );
 		HostUnload();
@@ -212,7 +212,7 @@ public sealed partial class Player
 		HostClose();
 		HostDropOffer( "left" );
 		// Someone down or bound does not get up because their player went: they stay where they are.
-		if ( _character is { } character && GameManager.Instance?.Roster?.Contains( character ) == true ) Sleeper.HostLeave( character, HostPosition );
+		if ( _character is { } character && HexagonServices.Current?.Roster?.Contains( character ) == true ) Sleeper.HostLeave( character, HostPosition );
 		_character = null;
 		HasCharacter = false;
 		CharacterId = Guid.Empty;

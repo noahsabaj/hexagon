@@ -367,9 +367,6 @@
 			OfferingTo = null;
 			return;
 		}
-		// A driven test client takes no keys; see DevCommands.Driven.
-		if ( Dev.DevCommands.Driven ) return;
-
 		if ( Player.Local.MenuTarget is { } menu )
 		{
 			// The menu is over once something is chosen, the target is gone, or the player backs out.

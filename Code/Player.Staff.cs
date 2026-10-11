@@ -20,7 +20,7 @@ public sealed partial class Player
 	/// <summary>Host: tells the owner what its account may do.</summary>
 	public void HostSendAccount()
 	{
-		if ( !Networking.IsHost || Network.Owner is not { } owner || GameManager.Instance is not { } game ) return;
+		if ( !Networking.IsHost || Network.Owner is not { } owner || HexagonServices.Current is not { } game ) return;
 		using ( Rpc.FilterInclude( owner ) ) ReceiveAccount( game.Account( SteamIdOf( owner ) ).IsStaff );
 	}
 

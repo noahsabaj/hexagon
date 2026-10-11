@@ -11,18 +11,23 @@ using Sandbox.Network;
 namespace Hexagon;
 
 /// <summary>
-/// The one scene object that runs the server: it opens the lobby, gives each connection a pawn,
-/// and owns the host's saved state. Everything it holds exists on the host only.
+/// What runs the city: it opens the lobby, gives each connection a pawn, and owns the host's saved
+/// state. It is one of the engine's scene systems, so every scene has it without anything placed in
+/// it, and a game sets its rules under Project Settings, Systems, for every scene or for one. The
+/// services exist on the host only, from the moment the engine says the host's scene is loaded.
 /// </summary>
-[Title( "Hexagon Game Manager" ), Category( "Hexagon" ), Icon( "location_city" )]
-public sealed class GameManager : Component, Component.INetworkListener
+[Title( "Hexagon" ), Category( "Hexagon" ), Icon( "location_city" )]
+public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneStartup, Component.INetworkListener
 {
-	public static GameManager? Instance { get; private set; }
-
 	/// <summary>Where the world's own document is kept.</summary>
 	public const string WorldPath = "world.json";
 
-	/// <summary>Host-only. Null on clients.</summary>
+	public HexagonServices( Scene scene ) : base( scene )
+	{
+		Listen( Stage.FinishFixedUpdate, 0, Tick, "Hexagon" );
+	}
+
+	/// <summary>Host-only. Null on clients, and until the host's scene is loaded.</summary>
 	public CharacterRoster? Roster { get; private set; }
 	public DocumentStore? Store { get; private set; }
 	public Journal? Journal { get; private set; }
@@ -52,6 +57,9 @@ public sealed class GameManager : Component, Component.INetworkListener
 	/// <summary>The limits on lives that the roster applies.</summary>
 	public LifeRules Lives => new( Math.Max( 1, LivingCharacters ), TimeSpan.FromHours( Math.Max( 0f, NewLifeHours ) ) );
 
+	/// <summary>Whether the host's services are running.</summary>
+	public bool IsRunning => Roster is not null;
+
 	private readonly Dictionary<long, AccountData> _accounts = new();
 	// What each connection may still ask this second, whichever pawn its requests name.
 	private readonly Dictionary<Guid, RateLimiter> _budgets = new();
@@ -62,26 +70,32 @@ public sealed class GameManager : Component, Component.INetworkListener
 	private bool _worldRestored;
 	private RealTimeSince _sinceRefusals;
 
-	protected override void OnAwake() => Instance = this;
-
-	protected override void OnDestroy()
+	public override void Dispose()
 	{
-		// The city closing is the last chance to keep what changed since the last autosave.
+		// The city closing is the last chance to keep what changed since the last autosave. Its
+		// pawns have kept where they stood as they went; the scene empties before its systems go.
 		if ( Roster is not null ) SaveAll();
-		if ( Instance == this ) Instance = null;
+		base.Dispose();
 	}
 
-	protected override async Task OnLoad()
+	void ISceneStartup.OnHostInitialize()
 	{
-		if ( Scene.IsEditor || Networking.IsActive ) return;
+		if ( Scene.IsEditor ) return;
+		Open();
+		if ( !Networking.IsActive ) _ = OpenLobby();
+	}
+
+	private async Task OpenLobby()
+	{
 		LoadingScreen.Title = "Opening the city";
-		await Task.DelayRealtimeSeconds( 0.1f );
-		Networking.CreateLobby( new LobbyConfig() );
+		await GameTask.DelayRealtimeSeconds( 0.1f );
+		if ( !Networking.IsActive ) Networking.CreateLobby( new LobbyConfig() );
 	}
 
-	protected override void OnStart()
+	/// <summary>Host: loads what the city keeps, and starts its services.</summary>
+	private void Open()
 	{
-		if ( !Networking.IsHost ) return;
+		if ( Roster is not null ) return;
 		var files = new SandboxFileStore();
 		Store = new DocumentStore( files, message => Log.Warning( $"[store] {message}" ) );
 		Journal = new Journal( files, warn: message => Log.Warning( $"[journal] {message}" ) );
@@ -101,10 +115,9 @@ public sealed class GameManager : Component, Component.INetworkListener
 			Log.Warning( "The engine's platform chat is on for this game. It reaches every player by account name, whatever the distance; turn it off in the project's settings." );
 	}
 
-	protected override void OnFixedUpdate()
+	private void Tick()
 	{
-		Dev.DevCommands.PollInbox();
-		if ( !Networking.IsHost || Roster is null ) return;
+		if ( Scene.IsEditor || !Networking.IsHost || Roster is null ) return;
 		if ( !_worldRestored && Networking.IsActive ) RestoreWorld();
 		See();
 		if ( _sinceRefusals > 1f ) ReportRefusals();
@@ -139,7 +152,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 		foreach ( var character in Roster.All.Where( value => value.IsDown ).ToArray() ) Roster.Save( character );
 	}
 
-	void INetworkListener.OnActive( Connection connection )
+	void Component.INetworkListener.OnActive( Connection connection )
 	{
 		// The project settings already deny these; repeat it per connection so a bad setting fails closed.
 		if ( !connection.IsHost )
@@ -166,7 +179,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 		}
 	}
 
-	void INetworkListener.OnDisconnected( Connection connection )
+	void Component.INetworkListener.OnDisconnected( Connection connection )
 	{
 		_budgets.Remove( connection.Id );
 		Journal?.Record( JournalKinds.ConnectionLeave, new Actor( (long)connection.SteamId.ValueUnsigned, Name: connection.DisplayName ) );
@@ -178,7 +191,7 @@ public sealed class GameManager : Component, Component.INetworkListener
 		}
 	}
 
-	void INetworkListener.OnBecameHost( Connection previousHost )
+	void Component.INetworkListener.OnBecameHost( Connection previousHost )
 	{
 		// A new host has none of the saved state, so it would run an empty city. Stop instead.
 		Log.Warning( "Hexagon does not support host migration; leaving the session." );

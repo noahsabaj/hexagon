@@ -22,7 +22,7 @@ public sealed partial class Player
 	{
 		if ( down )
 		{
-			var finish = GameManager.Instance?.FinishRequires is { Length: > 0 } needed ? needed : null;
+			var finish = HexagonServices.Current?.FinishRequires is { Length: > 0 } needed ? needed : null;
 			return new[] { new Verb( VerbIds.PersonRevive, "Help up" ), new Verb( VerbIds.PersonSearch, "Search" ), new Verb( VerbIds.PersonFinish, "Finish", finish ) };
 		}
 		if ( restrained ) return new[] { new Verb( VerbIds.PersonSearch, "Search" ), new Verb( VerbIds.PersonRelease, "Release" ) };
@@ -72,7 +72,7 @@ public sealed partial class Player
 	{
 		var told = Recognition.Introduce( other, _character! );
 		if ( !told.Ok ) return told;
-		GameManager.Instance?.Roster?.Save( _character! );
+		HexagonServices.Current?.Roster?.Save( _character! );
 		SendPrivateState();
 		if ( Network.Owner is { } owner ) Chat.Tell( owner, $"{Recognition.Stranger( other.Description )} is {other.Name}." );
 		if ( actor.Network.Owner is { } teller ) Chat.Tell( teller, "You introduce yourself." );
@@ -94,7 +94,7 @@ public sealed partial class Player
 		// The tie is used up: a restraint is cut off, not untied.
 		var tie = other.Inventory.Items.FirstOrDefault( item => ItemDefinition.Find( item.Definition )?.Grants.Contains( Capability.Restrain ) == true );
 		if ( tie is null ) return Result.Fail( ErrorCode.Denied, "You have nothing to bind them with." );
-		var game = GameManager.Instance!;
+		var game = HexagonServices.Current!;
 		game.Transfers!.Destroy( Sinks.Consumed, other, tie.Id, Actor.Of( other ), count: 1 );
 		_character!.IsRestrained = true;
 		_character.Equipped = null;
@@ -109,7 +109,7 @@ public sealed partial class Player
 	{
 		if ( _character is not { IsRestrained: true } character ) return Result.Fail( ErrorCode.Conflict, "Their hands are not bound." );
 		character.IsRestrained = false;
-		GameManager.Instance?.Roster?.Save( character );
+		HexagonServices.Current?.Roster?.Save( character );
 		return HostShowRestraint( "Your hands are free." );
 	}
 

@@ -223,7 +223,7 @@ function Start-Play {
         }
         # Attach the driver once, then wait for the pawn: adding it again on every retry fails once it exists.
         Wait-Until 'the driver component' { [void](Invoke-Tool 'add_component' @{ id = $hud; type = 'DevDriver' }); $true }
-        # A scene played while the editor was still taking the code in has no game manager, so nobody
+        # A scene played while the editor was still taking the code in has no Hexagon system, so nobody
         # ever arrives. That is the editor, not the game: the scene is played again, as soon as the
         # driver says so. A game that lets nobody in still fails, at the deadline.
         $arrival = [DateTime]::UtcNow.AddSeconds(60)
@@ -234,7 +234,7 @@ function Start-Play {
             try {
                 $reply = Send 'state'
                 if ($reply -match '^has=') { return }
-                if ($reply -eq 'no game manager') { $unmanaged++ }
+                if ($reply -eq 'no hexagon system') { $unmanaged++ }
                 $script:lastProblem = "driver said: $reply"
             }
             catch { $script:lastProblem = $_.Exception.Message }

@@ -17,7 +17,7 @@ internal static class HostScene
 	/// </summary>
 	public static bool Join( Component component )
 	{
-		if ( !Networking.IsHost || !Networking.IsActive || GameManager.Instance?.Roster is null ) return false;
+		if ( !Networking.IsHost || !Networking.IsActive || HexagonServices.Current?.Roster is null ) return false;
 		if ( !component.Network.Active ) component.GameObject.NetworkSpawn();
 		return true;
 	}
@@ -79,7 +79,7 @@ public sealed class Container : Component, Component.IPressable, IVerbTarget
 	/// <summary>Host: what it holds, stocked as its author placed it the first time it is asked for.</summary>
 	private HolderData Holder()
 	{
-		var game = GameManager.Instance!;
+		var game = HexagonServices.Current!;
 		if ( game.Holders!.Find( GameObject.Id ) is { } existing ) return existing;
 		var holder = game.Holders.GetOrCreate( GameObject.Id, HolderKinds.Container, Title, Width, Height );
 		foreach ( var stocked in Stock.Where( value => value.Item.IsValid() ) )
@@ -174,7 +174,7 @@ public sealed class Corpse : Component, Component.IPressable, Component.INetwork
 	/// <summary>Host: an emptied body is removed, along with its holder.</summary>
 	public static void RemoveIfEmpty( IHolder holder )
 	{
-		if ( holder is not HolderData { Kind: HolderKinds.Corpse } data || GameManager.Instance?.Holders is not { } holders ) return;
+		if ( holder is not HolderData { Kind: HolderKinds.Corpse } data || HexagonServices.Current?.Holders is not { } holders ) return;
 		if ( !holders.Delete( data.Id ).Ok ) return;
 		foreach ( var corpse in Game.ActiveScene.GetAllComponents<Corpse>().Where( value => value.HolderId == data.Id ).ToArray() )
 			corpse.GameObject.Destroy();
@@ -193,7 +193,7 @@ public sealed class Corpse : Component, Component.IPressable, Component.INetwork
 
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
-		if ( GameManager.Instance!.Holders!.Find( HolderId ) is not { } holder ) return Result.Fail( ErrorCode.NotFound, "There is nothing left." );
+		if ( HexagonServices.Current!.Holders!.Find( HolderId ) is not { } holder ) return Result.Fail( ErrorCode.NotFound, "There is nothing left." );
 		actor.HostOpen( this, holder, holder.Title );
 		return Result.Success();
 	}
@@ -297,7 +297,7 @@ public sealed class WorldItem : Component, Component.IPressable, Component.INetw
 
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
-		var game = GameManager.Instance!;
+		var game = HexagonServices.Current!;
 		if ( game.Holders!.Find( HolderId ) is not { } holder || holder.Inventory.Items.FirstOrDefault() is not { } stack )
 			return Result.Fail( ErrorCode.NotFound, "It is gone." );
 		var taken = actor.HostTakeFrom( holder, stack.Id );

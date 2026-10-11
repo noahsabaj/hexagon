@@ -98,7 +98,7 @@ public static class Operators
 	}
 
 	/// <summary>Host: carries out one command and returns what to tell whoever gave it.</summary>
-	public static IReadOnlyList<string> Execute( GameManager game, Actor by, Player? asker, string[] words )
+	public static IReadOnlyList<string> Execute( HexagonServices game, Actor by, Player? asker, string[] words )
 	{
 		if ( words.Length == 0 ) return new[] { Help };
 		var journal = game.Journal!;
@@ -352,7 +352,7 @@ public static class Operators
 	}
 
 	/// <summary>Host: a character staff changed is saved, and whoever can see it is shown the change.</summary>
-	private static void Changed( GameManager game, CharacterData character )
+	private static void Changed( HexagonServices game, CharacterData character )
 	{
 		game.Roster!.Save( character );
 		Player.HostRefresh( character );
@@ -365,9 +365,9 @@ public static class Operators
 		return $"Moved {target.HostCharacter.Name}.";
 	}
 
-	private static bool TryHost( out GameManager game )
+	private static bool TryHost( out HexagonServices game )
 	{
-		game = GameManager.Instance!;
+		game = HexagonServices.Current!;
 		if ( Networking.IsHost && game?.Roster is not null ) return true;
 		Log.Warning( "This command only works on the host." );
 		return false;

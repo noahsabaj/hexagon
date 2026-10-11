@@ -1,3 +1,4 @@
+#if DEBUG
 #nullable enable
 
 using System;
@@ -11,7 +12,7 @@ namespace Hexagon.Dev;
 /// Lets the editor's automation play the game. It is never placed in a scene: a test adds it at
 /// runtime and writes <see cref="Command"/>, and each command calls the same client request the
 /// HUD would, so it travels the real RPC path and is judged by the real host rules. It refuses to
-/// run outside the editor. The automation attaches it to the editor's copy of the scene, so it
+/// run outside the editor, and exists only in a build made for development. The automation attaches it to the editor's copy of the scene, so it
 /// always reaches the running game through <c>Game.ActiveScene</c> and <c>Player.Local</c>.
 /// </summary>
 [Title( "Hexagon Dev Driver" ), Category( "Hexagon" ), Icon( "smart_toy" )]
@@ -158,8 +159,7 @@ public static class DevCommands
 	/// </summary>
 	public static bool Driven { get; private set; }
 
-	/// <summary>Set while a test has put the camera somewhere itself, to look at a character from outside.</summary>
-	public static bool CameraHeld => HeldCamera is not null;
+	/// <summary>Where a test has put the camera itself, to look at a character from outside. See <see cref="DevSystem"/>.</summary>
 	public static Transform? HeldCamera { get; private set; }
 
 	/// <summary>
@@ -183,7 +183,7 @@ public static class DevCommands
 		if ( args[0] == "roster" )
 		{
 			// Everything saved, as one line, so a test can compare a server with a copy of it.
-			if ( GameManager.Instance is not { Roster: { } roster, Holders: { } holders } ) return "no roster";
+			if ( HexagonServices.Current is not { Roster: { } roster, Holders: { } holders } ) return "no roster";
 			return "characters=[" + string.Join( ", ", roster.All.OrderBy( value => value.Name ).Select( value =>
 				$"{value.Name}:{value.Inventory.Items.Sum( item => item.Count )}i:{value.Health}hp:{value.Known.Count}known{(value.IsDead ? ":dead" : string.Empty)}" ) ) + $"] holders={holders.Count}";
 		}
@@ -191,7 +191,7 @@ public static class DevCommands
 		{
 			// policy alone says what the game's rules on lives are. policy|living|<n> or policy|hours|<n>
 			// changes one, so a test on one account can play more than one life at a time.
-			if ( !Networking.IsHost || GameManager.Instance is not { } game ) return "refused: not the host";
+			if ( !Networking.IsHost || HexagonServices.Current is not { } game ) return "refused: not the host";
 			if ( args.Length > 2 && args[1] == "living" ) game.LivingCharacters = int.Parse( args[2] );
 			else if ( args.Length > 2 && args[1] == "hours" ) game.NewLifeHours = float.Parse( args[2], System.Globalization.CultureInfo.InvariantCulture );
 			else if ( args.Length > 1 && !args[1].StartsWith( '#' ) ) return $"unknown policy '{args[1]}'";
@@ -201,14 +201,14 @@ public static class DevCommands
 		{
 			// sight alone says how far characters see; sight|<units> changes it, so a test can step out
 			// of sight without leaving the scene's floor.
-			if ( !Networking.IsHost || GameManager.Instance is not { } game ) return "refused: not the host";
+			if ( !Networking.IsHost || HexagonServices.Current is not { } game ) return "refused: not the host";
 			if ( args.Length > 1 && !args[1].StartsWith( '#' ) ) game.SightRange = float.Parse( args[1], System.Globalization.CultureInfo.InvariantCulture );
 			return $"sight={game.SightRange}";
 		}
 		if ( args[0] == "journal" )
 		{
 			// Today's journal as kind=count, refusals marked, so a test can assert what was remembered.
-			var entries = GameManager.Instance?.Journal?.Read( DateTimeOffset.UtcNow );
+			var entries = HexagonServices.Current?.Journal?.Read( DateTimeOffset.UtcNow );
 			if ( entries is null ) return "no journal";
 			// journal|<kind> describes the latest entry of that kind instead.
 			if ( args.Length > 1 && !args[1].StartsWith( '#' ) )
@@ -228,8 +228,8 @@ public static class DevCommands
 		}
 		if ( args[0] == "hostid" ) return $"local={Connection.Local?.SteamId.ValueUnsigned} host={Connection.Host?.SteamId.ValueUnsigned} address={Connection.Local?.Address} name={Connection.Local?.DisplayName}";
 		if ( args[0] == "convar" ) return ConsoleSystem.GetValue( args[1] ) ?? "unset";
-		// A scene played before the editor had the game's code in has none of its components.
-		if ( GameManager.Instance is null ) return "no game manager";
+		// A scene played before the editor had the game's code in has none of its systems or components.
+		if ( HexagonServices.Current is null ) return "no hexagon system";
 		if ( Player.Local is not { } player ) return "no local player";
 		try
 		{
@@ -400,7 +400,7 @@ public static class DevCommands
 				case "net":
 					return string.Join( " ; ", Game.ActiveScene.GetAllComponents<Door>().Select( value =>
 						$"{value.GameObject.Name}: active={value.Network.Active} proxy={value.IsProxy} owner={value.Network.Owner?.DisplayName} mode={value.GameObject.NetworkMode}" ) )
-						+ $" | host={Networking.IsHost} netactive={Networking.IsActive} manager={GameManager.Instance is not null} roster={GameManager.Instance?.Roster is not null}";
+						+ $" | host={Networking.IsHost} netactive={Networking.IsActive} manager={HexagonServices.Current is not null} roster={HexagonServices.Current?.Roster is not null}";
 				case "goto":
 					player.WorldPosition = new Vector3( float.Parse( args[1] ), float.Parse( args[2] ), float.Parse( args[3] ) );
 					return "moved";
@@ -440,3 +440,4 @@ public static class DevCommands
 	private static string Pile( Hexagon.Logic.ItemStack value ) =>
 		$"{ItemDefinition.Find( value.Definition )?.Title}{(value.Count > 1 ? $"x{value.Count}" : string.Empty)}{(value.Frequency is { } frequency ? $"~{frequency}" : string.Empty)}{(value.Pattern is { } cut ? $"#{cut}" : string.Empty)}";
 }
+#endif

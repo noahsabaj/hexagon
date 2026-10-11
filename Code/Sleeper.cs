@@ -40,7 +40,7 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 	private bool? _shownDown;
 
 	/// <summary>Host: the character lying, or standing bound, here.</summary>
-	public CharacterData? HostCharacter => Networking.IsHost ? GameManager.Instance?.Roster?.Find( CharacterId ) : null;
+	public CharacterData? HostCharacter => Networking.IsHost ? HexagonServices.Current?.Roster?.Find( CharacterId ) : null;
 
 	public IReadOnlyList<Verb> Verbs => IsDown || IsRestrained ? Player.VerbsFor( IsDown, IsRestrained ) : Array.Empty<Verb>();
 	float IVerbTarget.Reach => Player.PersonReach;
@@ -79,7 +79,7 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 	public static void HostRefresh( CharacterData character )
 	{
 		if ( !Networking.IsHost || Find( character.Id ) is not { } sleeper ) return;
-		if ( GameManager.Instance?.Roster?.Contains( character ) != true || !(character.IsDown || character.IsRestrained) )
+		if ( HexagonServices.Current?.Roster?.Contains( character ) != true || !(character.IsDown || character.IsRestrained) )
 		{
 			sleeper.GameObject.Destroy();
 			return;
@@ -111,7 +111,7 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 
 	protected override void OnFixedUpdate()
 	{
-		if ( !Networking.IsHost || GameManager.Instance is not { Roster: { } roster } game ) return;
+		if ( !Networking.IsHost || HexagonServices.Current is not { Roster: { } roster } game ) return;
 		// Gone, up and free, or back in its own body in the city: there is nobody left lying here.
 		if ( roster.Find( CharacterId ) is not { } character || !(character.IsDown || character.IsRestrained) || Player.HostLoaded( CharacterId ) is not null )
 		{
@@ -170,7 +170,7 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
-		if ( HostCharacter is not { } character || GameManager.Instance is not { Roster: { } roster } game || actor.HostCharacter is not { } other )
+		if ( HostCharacter is not { } character || HexagonServices.Current is not { Roster: { } roster } game || actor.HostCharacter is not { } other )
 			return Result.Fail( ErrorCode.NotFound, "There is nobody there." );
 		switch ( verb.Id )
 		{
@@ -207,7 +207,7 @@ public sealed class Sleeper : Component, Component.IPressable, Component.INetwor
 	/// <summary>Host: harm done to someone who cannot get away from it.</summary>
 	internal void HostDamage( int amount, Player by, string cause )
 	{
-		if ( HostCharacter is not { } character || GameManager.Instance?.Roster is not { } roster ) return;
+		if ( HostCharacter is not { } character || HexagonServices.Current?.Roster is not { } roster ) return;
 		var harm = Vitals.Damage( character, amount );
 		if ( harm == Harm.None ) return;
 		if ( harm == Harm.Downed ) character.Equipped = null;

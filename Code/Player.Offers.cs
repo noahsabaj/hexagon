@@ -112,7 +112,7 @@ public sealed partial class Player
 	}
 
 	/// <summary>Host: the offered things pass from the giver's hands to this character's, as one saved change.</summary>
-	private Result HostTakeOffered( GameManager game, CharacterData from, Offer offer )
+	private Result HostTakeOffered( HexagonServices game, CharacterData from, Offer offer )
 	{
 		if ( from.Inventory.Items.FirstOrDefault( value => value.Id == offer.ItemId ) is not { } stack || stack.Count < offer.Count )
 			return Result.Fail( ErrorCode.NotFound, "They no longer have it." );

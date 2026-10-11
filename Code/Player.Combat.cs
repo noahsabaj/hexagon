@@ -138,7 +138,7 @@ public sealed partial class Player
 		if ( _character is null ) return Result.Fail( ErrorCode.NotFound, "There is nobody there." );
 		var revived = Vitals.Revive( _character );
 		if ( !revived.Ok ) return revived;
-		GameManager.Instance?.Roster?.Save( _character );
+		HexagonServices.Current?.Roster?.Save( _character );
 		HostSyncVitals();
 		SendPrivateState();
 		if ( Network.Owner is { } owner ) Chat.Tell( owner, "You are back on your feet, barely." );
@@ -148,7 +148,7 @@ public sealed partial class Player
 	/// <summary>Host: the character dies. What that means is the game manager's policy.</summary>
 	public void HostDie( string cause, Player? by )
 	{
-		if ( !Networking.IsHost || _character is not { } character || GameManager.Instance is not { } game ) return;
+		if ( !Networking.IsHost || _character is not { } character || HexagonServices.Current is not { } game ) return;
 		HostClose();
 		if ( HostDie( game, character, HostPosition, Look, cause, by?._character ) )
 		{
@@ -171,7 +171,7 @@ public sealed partial class Player
 	/// carried stays where it fell, and the rest is the game manager's policy. True when the
 	/// character is dead, kept where it fell; otherwise it is whole again, saved at a spawn point.
 	/// </summary>
-	internal static bool HostDie( GameManager game, CharacterData character, Vector3 at, string look, string cause, CharacterData? by )
+	internal static bool HostDie( HexagonServices game, CharacterData character, Vector3 at, string look, string cause, CharacterData? by )
 	{
 		HostRecordAt( JournalKinds.CharacterDeath, Actor.Of( character ), at, by?.HolderLabel, data: new[] { ("cause", cause), ("policy", game.Death.ToString()) } );
 		var permanent = game.Death == DeathPolicy.Permanent;
@@ -208,7 +208,7 @@ public sealed partial class Player
 	/// where it fell if it left none, with whatever is still on the body. Anything already taken from
 	/// it is for staff to move back.
 	/// </summary>
-	internal static Result HostRestore( GameManager game, CharacterData character, Actor by )
+	internal static Result HostRestore( HexagonServices game, CharacterData character, Actor by )
 	{
 		var restored = game.Roster!.Restore( character, game.Lives );
 		if ( !restored.Ok ) return restored;
@@ -227,7 +227,7 @@ public sealed partial class Player
 	}
 
 	/// <summary>Host: every connection of the account that is in the menu is shown its list as it now is.</summary>
-	internal static void HostResendCharacters( GameManager game, long steamId )
+	internal static void HostResendCharacters( HexagonServices game, long steamId )
 	{
 		foreach ( var player in Game.ActiveScene.GetAllComponents<Player>().Where( value => value._character is null ).ToArray() )
 			if ( player.Network.Owner is { } owner && SteamIdOf( owner ) == steamId ) player.SendCharacterList( owner, game );
@@ -238,7 +238,7 @@ public sealed partial class Player
 	/// size of the inventory and every pile keeps its place, so all of it goes: nothing is left on
 	/// someone who has died.
 	/// </summary>
-	private static void LeaveBody( GameManager game, CharacterData character, Vector3 at, string look )
+	private static void LeaveBody( HexagonServices game, CharacterData character, Vector3 at, string look )
 	{
 		var body = game.Holders!.GetOrCreate( Guid.NewGuid(), HolderKinds.Corpse, "Body", character.Inventory.Width, character.Inventory.Height );
 		body.Position = new[] { at.x, at.y, at.z };
@@ -251,7 +251,7 @@ public sealed partial class Player
 	}
 
 	/// <summary>Host: time passes for someone who is down. Bleeding out is the game manager's policy.</summary>
-	private void HostVitalsTick( GameManager game )
+	private void HostVitalsTick( HexagonServices game )
 	{
 		if ( _character is not { IsDown: true } character || !Vitals.Bleed( character, Time.Delta, game.DownedSeconds ) ) return;
 		if ( game.BleedOutKills ) HostDie( "bled out", null );
