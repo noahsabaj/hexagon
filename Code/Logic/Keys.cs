@@ -65,7 +65,7 @@ public static class Keys
 		Items = inventory.Items.Select( item => item.Pattern is not { } pattern ? item : new ItemStack
 		{
 			Id = item.Id, Definition = item.Definition, X = item.X, Y = item.Y, Width = item.Width, Height = item.Height,
-			Count = item.Count, Max = item.Max, Frequency = item.Frequency, Pattern = Cut( pattern )
+			Count = item.Count, Max = item.Max, Frequency = item.Frequency, Pattern = Cut( pattern ), Worn = item.Worn
 		} ).ToList()
 	};
 }

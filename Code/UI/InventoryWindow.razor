@@ -23,7 +23,7 @@
 							<div class="cell" style="left: @(x * Cell)px; top: @(y * Cell)px;"></div>
 						}
 					}
-					@foreach ( var item in other.Items )
+					@foreach ( var item in Wearing.Carried( other ) )
 					{
 						var taken = item;
 						<ItemTile class=@TileClass( item, selectable: false ) style=@Place( item ) Item=@item InOpenHolder=@true
@@ -31,15 +31,41 @@
 							ondragstart=@(( PanelEvent e ) => BeginDrag( e )) ondragend=@(() => EndDrag()) />
 					}
 				</div>
+				@if ( Wearing.Worn( other ).Any() )
+				{
+					<label>Wearing</label>
+					<div class="row wrap wearing">
+						@foreach ( var item in Wearing.Worn( other ) )
+						{
+							var taken = item;
+							<ItemTile class="item" Item=@item InOpenHolder=@true onclick=@(() => player.RequestTake( taken.Id ))
+								ondragstart=@(( PanelEvent e ) => BeginDrag( e )) ondragend=@(() => EndDrag()) />
+						}
+					</div>
+				}
 				<div class="actions">
 					<button onclick=@(() => player.RequestCloseHolder())>Close</button>
 				</div>
-				<div class="muted">Click an item, or drag it across, to take it.</div>
+				<div class="muted">Click an item, or drag it across, to take it. What they wear comes off them.</div>
 			</div>
 		}
 		<div class="card" ondrop=@DropOnCard>
 			<h1>@player.CharacterName</h1>
 			<div class="muted">@(player.Faction?.Title ?? "Unaffiliated")</div>
+			<label>Wearing</label>
+			<div class="row wrap wearing" ondrop=@DropOnWorn>
+				@foreach ( var item in Wearing.Worn( inventory ) )
+				{
+					var piece = item;
+					<ItemTile class=@TileClass( item, selectable: true ) Item=@item InOpenHolder=@false
+						onclick=@(() => Selected = Selected == piece.Id ? null : piece.Id)
+						ondragstart=@(( PanelEvent e ) => BeginDrag( e )) ondragend=@(() => EndDrag()) />
+				}
+				@if ( !Wearing.Worn( inventory ).Any() )
+				{
+					<div class="muted">Nothing. Drag clothes here to put them on.</div>
+				}
+			</div>
 			<div class="grid" style="width: @(inventory.Width * Cell)px; height: @(inventory.Height * Cell)px;"
 				ondrop=@DropInInventory>
 				@for ( var y = 0; y < inventory.Height; y++ )
@@ -49,7 +75,7 @@
 						<div class="cell" style="left: @(x * Cell)px; top: @(y * Cell)px;"></div>
 					}
 				}
-				@foreach ( var item in inventory.Items )
+				@foreach ( var item in Wearing.Carried( inventory ) )
 				{
 					var carried = item;
 					<ItemTile class=@TileClass( item, selectable: true ) style=@Place( item ) Item=@item InOpenHolder=@false
@@ -71,23 +97,35 @@
 				<div class="muted">A key shows its cut. Keys cut the same open the same locks; which ones, you learn by trying.</div>
 			}
 			<div class="actions">
-				@if ( player.OpenInventory is not null )
+				@if ( SelectedStack is { Worn: true } )
 				{
-					<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "put" ))>Put in</button>
+					@* Something worn is only taken off: anything else is done with it once it is carried. *@
+					<button class="primary" onclick=@(() => ActOnSelected( VerbIds.ItemWear ))>Take off</button>
 				}
-				@if ( SelectedDefinition is { Consumable: true } usable )
+				else
 				{
-					<button class="primary" onclick=@(() => ActOnSelected( VerbIds.ItemUse ))>@usable.UseTitle</button>
+					@if ( SelectedDefinition is { Wearable: not null } )
+					{
+						<button class="primary" onclick=@(() => ActOnSelected( VerbIds.ItemWear ))>Put on</button>
+					}
+					@if ( player.OpenInventory is not null )
+					{
+						<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "put" ))>Put in</button>
+					}
+					@if ( SelectedDefinition is { Consumable: true } usable )
+					{
+						<button class="primary" onclick=@(() => ActOnSelected( VerbIds.ItemUse ))>@usable.UseTitle</button>
+					}
+					@if ( SelectedStack is { Count: > 1 } pile )
+					{
+						<button onclick=@(() => SplitSelected( pile ))>Split off @(pile.Count / 2)</button>
+					}
+					<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( VerbIds.ItemEquip ))>Hold</button>
+					<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( VerbIds.ItemDrop ))>Drop</button>
 				}
-				@if ( SelectedStack is { Count: > 1 } pile )
-				{
-					<button onclick=@(() => SplitSelected( pile ))>Split off @(pile.Count / 2)</button>
-				}
-				<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( VerbIds.ItemEquip ))>Hold</button>
-				<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( VerbIds.ItemDrop ))>Drop</button>
 				<button onclick=@(() => player.RequestLeaveCity())>Leave the city</button>
 			</div>
-			<div class="muted">Click an item to choose it. Drag it to move it, onto a pile of the same thing to add to it, across to put it in, or out of the window to drop it.</div>
+			<div class="muted">Click an item to choose it. Drag it to move it, onto a pile of the same thing to add to it, across to put it in, or out of the window to drop it. What you wear comes off into your pockets, if there is room.</div>
 		</div>
 		@if ( DraggedStack is { } lifted )
 		{
@@ -145,7 +183,7 @@
 		e.StopPropagation();
 	}
 
-	/// <summary>Over this character's own grid: a carried pile moves to where it was let go; one from the open holder is taken.</summary>
+	/// <summary>Over this character's own grid: a carried pile moves to where it was let go; one from the open holder is taken; one worn is taken off.</summary>
 	private void DropInInventory( PanelEvent e )
 	{
 		if ( e.Target is not ItemTile tile || Player.Local is not { } player ) return;
@@ -153,6 +191,11 @@
 		if ( tile.InOpenHolder )
 		{
 			player.RequestTake( tile.ItemId );
+			return;
+		}
+		if ( tile.Item is { Worn: true } )
+		{
+			player.RequestItemAct( tile.ItemId, VerbIds.ItemWear );
 			return;
 		}
 		// The cell under the pile's top left corner, as it was held.
@@ -165,6 +208,14 @@
 	{
 		e.StopPropagation();
 		if ( e.Target is ItemTile { InOpenHolder: false } tile ) Player.Local?.RequestPut( tile.ItemId );
+	}
+
+	/// <summary>Over what this character wears: something carried is put on.</summary>
+	private void DropOnWorn( PanelEvent e )
+	{
+		e.StopPropagation();
+		if ( e.Target is ItemTile { InOpenHolder: false, Item: { Worn: false } carried } tile && ItemDefinition.Find( carried.Definition ) is { Wearable: not null } )
+			Player.Local?.RequestItemAct( tile.ItemId, VerbIds.ItemWear );
 	}
 
 	/// <summary>Over this character's own card but not its grid: nothing happens, rather than a drop on the ground.</summary>

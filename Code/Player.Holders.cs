@@ -70,6 +70,8 @@ public sealed partial class Player
 			using ( Rpc.FilterInclude( owner ) ) player.ReceiveOpenHolder( player._openTarget, player._openTitle, Shown( holder ) );
 		}
 		if ( holder is CharacterData character ) Sleeper.HostRefresh( character );
+		// A body that had something taken off it looks it.
+		if ( holder is HolderData { Kind: HolderKinds.Corpse } body ) Corpse.HostRelook( body );
 	}
 
 	/// <summary>Host: moves one item between two holders, saves both as one change, and tells everyone who can see either.</summary>
@@ -121,6 +123,11 @@ public sealed partial class Player
 			Chat.Tell( caller, "That is not there any more." );
 			return;
 		}
+		if ( !taking && _character.Inventory.Items.First( value => value.Id == itemId ).Worn )
+		{
+			Chat.Tell( caller, Wearing.TakeOffFirst );
+			return;
+		}
 		var moved = taking ? HostMove( open, _character, itemId ) : HostMove( _character, open, itemId );
 		if ( !moved.Ok ) Chat.Tell( caller, moved.Message );
 		Corpse.RemoveIfEmpty( open );
@@ -140,6 +147,8 @@ public sealed partial class Player
 		var definition = ItemDefinition.Find( stack.Definition );
 		Result outcome;
 		if ( IsIncapable ) outcome = Result.Fail( ErrorCode.Denied, "You cannot do that now." );
+		else if ( stack.Worn && verbId != VerbIds.ItemWear ) outcome = Result.Fail( ErrorCode.Conflict, Wearing.TakeOffFirst );
+		else if ( verbId == VerbIds.ItemWear && definition?.Wearable is { } wearable ) outcome = Wear( game, stack, wearable );
 		else if ( verbId == VerbIds.ItemDrop ) outcome = Drop( game, stack );
 		else if ( verbId == VerbIds.ItemUse && definition is { Consumable: true } ) outcome = Consume( game, stack, definition );
 		else if ( verbId == VerbIds.ItemEquip ) outcome = Equip( game, stack );
@@ -175,6 +184,29 @@ public sealed partial class Player
 		if ( moved.Ok ) WorldItem.Spawn( ground );
 		else game.Holders.Delete( ground.Id );
 		return moved;
+	}
+
+	/// <summary>
+	/// Puts on something carried, or takes off something worn, which needs room for it. Nothing is
+	/// taken off to make way: what is in the way is taken off first, by the one wearing it.
+	/// </summary>
+	private Result Wear( HexagonServices game, ItemStack stack, Clothing wearable )
+	{
+		var character = _character!;
+		Result changed;
+		if ( stack.Worn ) changed = Wearing.TakeOff( character.Inventory, stack.Id );
+		else if ( Wearing.Worn( character.Inventory ).Select( value => ItemDefinition.Find( value.Definition ) )
+			.FirstOrDefault( value => value?.Wearable is { } other && !wearable.CanBeWornWith( other ) ) is { } clash )
+			changed = Result.Fail( ErrorCode.Conflict, $"Take off the {clash.InSentence} first." );
+		else
+		{
+			if ( character.Equipped == stack.Id ) character.Equipped = null;
+			changed = Wearing.PutOn( character.Inventory, stack.Id );
+		}
+		if ( !changed.Ok ) return changed;
+		game.Roster!.Save( character );
+		HostRefresh( character );
+		return changed;
 	}
 
 	/// <summary>Takes the item in hand, or puts it away if it already is. What is in hand is visible to everyone.</summary>

@@ -36,16 +36,23 @@ itself to.
   scripts and invisible characters, so one player cannot pass for another.
 - **Recognition.** Strangers are what they look like until they introduce themselves. What each
   character knows is its own and is never sent to anyone else.
-- **Factions**, as `.faction` assets: a name, a look and an optional whitelist. A faction is
-  people: it grants no abilities, and a new member arrives with nothing but their clothes.
+- **Making a character.** Everyone is made the same way: a body for life, the engine's citizen or
+  a human skin the game lists; hair the game lists; and clothes from the game's wardrobe to arrive
+  in, carrying nothing else. Nobody is made into a faction.
+- **Factions**, as `.faction` assets: a name and a tint. A faction is people: it grants nothing and
+  changes nothing about its members. They are recruited, or appointed by staff, and are handed a
+  uniform to put on like anything else.
 - **Items**, as `.item` assets in a grid inventory. An item can grant capabilities (a zip tie
   restrains), be a key cut to a lock, be used up (food, a bandage), be held in view of everyone, or
   be a weapon that uses ammunition. Identical items pile up in one slot, and every one of them is
   accounted for. Money is an item too.
 - **Radio.** A radio is tuned on the radio. `/r` reaches radios tuned the same, as a voice without
   a face, and anyone beside the speaker as ordinary speech.
-- **Looks.** A faction sets its members' body and outfit, an item its model and how it is held.
-  Appearance goes to everyone; the faction behind a uniform does not.
+- **Clothes** are items, worn on the body rather than carried in the grid, and put on and taken off
+  by hand. The engine decides what cannot be worn together; nothing comes off by itself to make way.
+  Clothes can be taken off someone down or bound, or off a body, and worn as a disguise.
+- **Looks.** A character's look is its body, its hair and what it wears; an item has its model and
+  how it is held. Appearance goes to everyone; the faction behind a uniform does not.
 - **Holders.** A crate, a locker, a dropped item and a body are one kind of thing, so dropping,
   storing, looting and searching are the same transfer. A scene's author can stock a container,
   which is filled once, the first time it is opened, and never refills.
@@ -69,8 +76,8 @@ itself to.
 - **Restraints and search**, conserving every item.
 - **Staff tools** in game: the console's own commands, journaled under the staff member's name,
   including restoring a character whose death broke the rules.
-- **Persistence.** Characters, what they know, their health and state, holders, doors and
-  whitelists survive a restart. So does the journal. A change to two documents, such as a hand-over,
+- **Persistence.** Characters, what they know and wear, their health and state, holders and doors
+  survive a restart. So does the journal. A change to two documents, such as a hand-over,
   is saved as one.
 - **A default HUD**: character menu, chat, inventory, the open holder, verbs, offers, staff panel.
   In the city it shows only prompts and chat; a prompt draws the key as the player has it bound.
@@ -191,7 +198,6 @@ Typed in the host's console as `hexagon_<command>`, or by staff in game (Tab) wi
 | Command | Effect |
 | --- | --- |
 | `staff <steamid64> <0\|1>` | Console only. Let an account use these commands in game |
-| `whitelist <steamid64> <faction>` / `unwhitelist` | Allow or stop an account creating characters in a whitelisted faction. Taking it away sends that faction's characters on the account back to the menu |
 | `give "<character name>" <item> [count] [pattern]` | Issue items, from the `operator` source. A key is cut to the pattern given |
 | `take "<character name>" <item> [count]` | Take them out of the world, through the `operator` sink. No count takes all |
 | `move "<from>" "<to>" <item> [count]` | Move them from one character to another, as any transfer |
@@ -199,7 +205,7 @@ Typed in the host's console as `hexagon_<command>`, or by staff in game (Tab) wi
 | `hurt "<character name>" <amount>` / `revive "<character name>"` | Harm a character in the city, or help one up, here or not |
 | `release "<character name>"` | Free a character's bound hands, here or not |
 | `restore "<character name>"` | Undo a death that broke the rules. The character gets up where its body lies, with whatever is still on it. Refused while the account has all the living characters it may |
-| `faction "<character name>" <faction>` | Change a character's faction |
+| `faction "<character name>" <faction\|none>` | Appoint a character to a faction, or take it out of one. Nothing else about the character changes |
 | `door ["<door>"] <open\|close\|lock\|unlock\|release\|assign "<character name>">` | Work a door whatever key it asks for, give its title to a character, or take the title back. The keys are not part of the title. In game an unnamed door is the one beside you; `door` alone lists them |
 | `who` | Who is playing whom, and where, and who was left down or bound. The one place a name is shown to someone never told it |
 | `journal [text] [count] [days]` | The latest entries containing the text, from the last two days unless told otherwise |

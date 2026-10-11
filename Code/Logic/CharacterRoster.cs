@@ -57,8 +57,9 @@ public sealed class CharacterRoster
 	/// <summary>
 	/// A new character, made at once, but entering the city only once the wait after the account's
 	/// last death has passed: dying and making someone new does not put a player back in the scene.
+	/// It belongs to no faction: one is joined in the world. Its <paramref name="body"/> is its for life.
 	/// </summary>
-	public Result<CharacterData> Create( long steamId, string? name, string? description, string faction, DateTimeOffset now, LifeRules? rules = null )
+	public Result<CharacterData> Create( long steamId, string? name, string? description, DateTimeOffset now, LifeRules? rules = null, IEnumerable<string>? body = null )
 	{
 		rules ??= LifeRules.Default;
 		var cleanName = NameRules.NormalizeName( name );
@@ -81,7 +82,7 @@ public sealed class CharacterRoster
 			SteamId = steamId,
 			Name = cleanName.Value,
 			Description = cleanDescription.Value,
-			Faction = faction,
+			Body = body?.ToList() ?? new List<string>(),
 			CreatedAt = now,
 			ArrivesAt = arrives > now ? arrives : null
 		};

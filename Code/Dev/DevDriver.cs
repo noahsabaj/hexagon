@@ -24,7 +24,7 @@ public sealed class DevDriver : Component
 	/// <summary>What happened to the last command, for the automation to read back.</summary>
 	[Property] public string LastResult { get; set; } = string.Empty;
 
-	/// <summary>Arguments are separated by '|', for example <c>create|John Doe|A tired resident of the city.|citizen</c>.</summary>
+	/// <summary>Arguments are separated by '|', for example <c>create|John Doe|A tired resident of the city.|citizen|flatcap,boots</c>.</summary>
 	[Property]
 	public string Command
 	{
@@ -243,9 +243,38 @@ public static class DevCommands
 			switch ( args[0] )
 			{
 				case "create":
-					var faction = FactionDefinition.All.FirstOrDefault( value => value.ResourceName == args[3] );
-					player.RequestCreateCharacter( args[1], args[2], faction?.ResourcePath ?? args[3] );
+					// create|<name>|<description>|<body>|<pieces>: the body as citizen or a human skin's name, and
+					// the pieces, hair and clothes from the wardrobe, by name and separated by commas.
+					// A test's trailing tag is not an argument.
+					var game = HexagonServices.Current!;
+					var chosen = args.Skip( 3 ).TakeWhile( value => !value.StartsWith( '#' ) ).ToArray();
+					var body = chosen.ElementAtOrDefault( 0 ) is not { Length: > 0 } skin || skin == "citizen" ? string.Empty
+						: Appearance.Bodies( game ).FirstOrDefault( value => value.Length > 0 && ResourceLibrary.Get<Clothing>( value )?.ResourceName == skin ) ?? skin;
+					var pieces = (chosen.ElementAtOrDefault( 1 ) ?? string.Empty).Split( ',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries )
+						.Select( name => Appearance.Wardrobe.FirstOrDefault( value => value.ResourceName == name )?.ResourcePath
+							?? Appearance.Hair( game ).FirstOrDefault( value => value.ResourceName == name )?.ResourcePath ?? name );
+					player.RequestCreateCharacter( args[1], args[2], body, Appearance.Join( pieces ) );
 					return "sent create";
+				case "wear":
+					// wear|<title> puts on something carried, or takes it off if it is worn.
+					var clothes = player.Inventory?.Items.FirstOrDefault( value => ItemDefinition.Find( value.Definition )?.Title == args[1] );
+					if ( clothes is null ) return "no such item";
+					player.RequestItemAct( clothes.Id, VerbIds.ItemWear );
+					return clothes.Worn ? "sent take off" : "sent put on";
+				case "item":
+					// item|<verb>|<title>: an item verb on something carried or worn, found by its title.
+					var named = player.Inventory?.Items.FirstOrDefault( value => ItemDefinition.Find( value.Definition )?.Title == args[2] );
+					if ( named is null ) return "no such item";
+					player.RequestItemAct( named.Id, $"item.{args[1]}" );
+					return $"sent item {args[1]}";
+				case "strip":
+					// strip|<title> takes something the open holder wears off it.
+					var worn = player.OpenInventory is { } opened
+						? Wearing.Worn( opened ).FirstOrDefault( value => ItemDefinition.Find( value.Definition )?.Title == args[1] )
+						: null;
+					if ( worn is null ) return "nothing like that worn there";
+					player.RequestTake( worn.Id );
+					return "sent strip";
 				case "enter":
 					var target = player.Characters.FirstOrDefault( value => value.Name == args[1] );
 					if ( target is null ) return $"no character named '{args[1]}' in: {string.Join( ", ", player.Characters.Select( value => value.Name ) )}";
@@ -268,7 +297,7 @@ public static class DevCommands
 					player.RequestSay( args[1] );
 					return "sent say";
 				case "move":
-					var item = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					var item = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
 					if ( item is null ) return "no such item";
 					player.RequestMoveItem( item.Id, int.Parse( args[2] ), int.Parse( args[3] ) );
 					return "sent move";
@@ -282,7 +311,7 @@ public static class DevCommands
 						: null;
 					return player.MenuTarget is null ? "menu closed" : "menu open";
 				case "panel":
-					UI.Hud.Show( args[1] switch { "inventory" => UI.HudPanel.Inventory, "staff" => UI.HudPanel.Staff, _ => UI.HudPanel.None } );
+					UI.Hud.Show( args[1] switch { "inventory" => UI.HudPanel.Inventory, "staff" => UI.HudPanel.Staff, "newcharacter" => UI.HudPanel.NewCharacter, _ => UI.HudPanel.None } );
 					return "sent panel";
 				case "camera":
 					// camera|<object>|<side>|<distance>|<height>|<looked at>|<height> puts the view beside something
@@ -304,18 +333,18 @@ public static class DevCommands
 					controller.EyeAngles = Rotation.LookAt( middle - controller.EyePosition ).Angles();
 					return "sent face";
 				case "tune":
-					var radio = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					var radio = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
 					if ( radio is null ) return "no such item";
 					player.RequestTune( radio.Id, args[2] );
 					return "sent tune";
 				case "split":
-					var whole = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					var whole = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
 					if ( whole is null ) return "no such item";
 					player.RequestSplitItem( whole.Id, int.Parse( args[2] ) );
 					return "sent split";
 				case "merge":
-					var part = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
-					var onto = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[2] ) );
+					var part = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
+					var onto = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[2] ) );
 					if ( part is null || onto is null ) return "no such item";
 					player.RequestMoveItem( part.Id, onto.X, onto.Y );
 					return "sent merge";
@@ -326,7 +355,7 @@ public static class DevCommands
 					return $"sent door {args[2]}";
 				case "drop":
 				case "use":
-					var held = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					var held = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
 					if ( held is null ) return "no such item";
 					player.RequestItemAct( held.Id, $"item.{args[0]}" );
 					return $"sent {args[0]}";
@@ -341,12 +370,12 @@ public static class DevCommands
 					player.RequestAct( container, ((IVerbTarget)container).Verbs[0].Id );
 					return "sent open";
 				case "take":
-					var wanted = player.OpenInventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					var wanted = Carried( player.OpenInventory ).ElementAtOrDefault( int.Parse( args[1] ) );
 					if ( wanted is null ) return "no such item";
 					player.RequestTake( wanted.Id );
 					return "sent take";
 				case "put":
-					var given = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					var given = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
 					if ( given is null ) return "no such item";
 					player.RequestPut( given.Id );
 					return "sent put";
@@ -366,13 +395,13 @@ public static class DevCommands
 					player.RequestAttack( foe is null ? Vector3.Forward : foe.WorldPosition - player.WorldPosition );
 					return "sent attack";
 				case "equip":
-					var inHand = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					var inHand = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
 					if ( inHand is null ) return "no such item";
 					player.RequestItemAct( inHand.Id, VerbIds.ItemEquip );
 					return "sent equip";
 				case "offer":
 					// offer|<item index>|<count> offers some of a pile to the nearest other character.
-					var gift = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					var gift = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
 					var taker = Nearest( player, Others( player ) );
 					if ( gift is null || taker is null ) return gift is null ? "no such item" : "nobody there";
 					player.RequestOffer( taker, gift.Id, args.Length > 2 ? int.Parse( args[2] ) : gift.Count );
@@ -398,7 +427,7 @@ public static class DevCommands
 				case "proxies":
 					// What this client was told about everyone else. Names and factions must be empty.
 					return string.Join( " ; ", Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy )
-						.Select( value => $"down={value.IsDown} restrained={value.IsRestrained} held='{ItemDefinition.Find( value.HeldItemPath )?.Title}' health={value.Health} has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}' seen='{value.CharacterDescription}' label='{player.LabelFor( value )}'" ) );
+						.Select( value => $"down={value.IsDown} restrained={value.IsRestrained} held='{ItemDefinition.Find( value.HeldItemPath )?.Title}' health={value.Health} has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}' seen='{value.CharacterDescription}' label='{player.LabelFor( value )}' look=[{string.Join( ",", Looks.Pieces( value.Look ) )}]" ) );
 				case "pawns":
 					// Every pawn this client holds for someone else, including those the network has made
 					// inactive: whether it shows them, and where each was when it was last sent. What is no
@@ -423,13 +452,15 @@ public static class DevCommands
 				case "state":
 					return $"has={player.HasCharacter} name='{player.CharacterName}' faction='{player.Faction?.Title}' " +
 						$"characters=[{string.Join( ", ", player.Characters.Select( value => value.Name + (value.IsDead ? "(dead)" : value.IsWaiting ? "(waits)" : string.Empty) ) )}] " +
-						$"items=[{string.Join( ", ", player.Inventory?.Items.Select( value => $"{Pile( value )}@{value.X},{value.Y}" ) ?? Array.Empty<string>() )}] " +
+						$"items=[{string.Join( ", ", Carried( player.Inventory ).Select( value => $"{Pile( value )}@{value.X},{value.Y}" ) )}] " +
+						$"wearing=[{string.Join( ", ", Worn( player.Inventory ) )}] look=[{string.Join( ",", Looks.Pieces( player.Look ) )}] " +
 						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked},swinging={value.IsSwinging}" ) )}] " +
 						$"owned=[{string.Join( ", ", player.OwnedDoors.Select( value => value.Name ) )}] offer='{player.OfferText}' " +
 						$"health={player.Health} down={player.IsDown} restrained={player.IsRestrained} held='{ItemDefinition.Find( player.HeldItemPath )?.Title}' bodies={Game.ActiveScene.GetAllComponents<Corpse>().Count( value => value.IsRevealed )} " +
 						$"staff={player.IsStaff} said=[{string.Join( " / ", player.StaffLines.TakeLast( 4 ) )}] " +
 						$"known=[{string.Join( ", ", player.Known.Values.OrderBy( value => value ) )}] " +
-						$"open=[{player.OpenTitle}: {string.Join( ", ", player.OpenInventory?.Items.Select( Pile ) ?? Array.Empty<string>() )}] " +
+						$"open=[{player.OpenTitle}: {string.Join( ", ", Carried( player.OpenInventory ).Select( Pile ) )}] openworn=[{string.Join( ", ", Worn( player.OpenInventory ) )}] " +
+						$"bodylooks=[{string.Join( " / ", Game.ActiveScene.GetAllComponents<Corpse>().Where( value => value.IsRevealed ).Select( value => string.Join( ",", Looks.Pieces( value.Look ) ) ) )}] " +
 						$"ground=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<WorldItem>().Where( value => value.IsRevealed ).Select( value => value.Definition?.Title ).OrderBy( value => value ) )}] " +
 						$"sleepers={Game.ActiveScene.GetAllComponents<Sleeper>().Count( value => value.IsRevealed )} pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";
 				default:
@@ -492,6 +523,13 @@ public static class DevCommands
 
 	private static T? Nearest<T>( Player player, IEnumerable<T> candidates ) where T : Component =>
 		candidates.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();
+
+	/// <summary>What is carried, in the order a test counts it: what is worn is not in the grid.</summary>
+	private static IReadOnlyList<ItemStack> Carried( InventoryData? inventory ) =>
+		inventory is null ? Array.Empty<ItemStack>() : Wearing.Carried( inventory ).ToList();
+
+	private static IEnumerable<string> Worn( InventoryData? inventory ) =>
+		inventory is null ? Array.Empty<string>() : Wearing.Worn( inventory ).Select( value => ItemDefinition.Find( value.Definition )?.Title ?? value.Definition );
 
 	private static string Pile( ItemStack value ) =>
 		$"{ItemDefinition.Find( value.Definition )?.Title}{(value.Count > 1 ? $"x{value.Count}" : string.Empty)}{(value.Frequency is { } frequency ? $"~{frequency}" : string.Empty)}{(value.Pattern is { } cut ? $"#{cut}" : string.Empty)}";

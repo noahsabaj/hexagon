@@ -1,4 +1,5 @@
 @using System
+@using System.Collections.Generic
 @using System.Linq
 @using Hexagon.Logic
 @using Sandbox
@@ -10,7 +11,7 @@
 <root class="center">
 	@if ( Player.Local is { } player )
 	{
-		<div class="card">
+		<div class="card @(Creating ? "wide" : "")">
 			<h1>@(Creating ? "New character" : "Your characters")</h1>
 			@if ( !Creating )
 			{
@@ -56,17 +57,55 @@
 				<TextEntry Value:bind="@NewName" MaxLength="@NameRules.MaximumNameLength" />
 				<label>Description (at least @NameRules.MinimumDescriptionLength characters)</label>
 				<TextEntry Value:bind="@NewDescription" MaxLength="@NameRules.MaximumDescriptionLength" />
-				<label>Faction</label>
-				<div class="row wrap">
-					@foreach ( var faction in FactionDefinition.All.OrderBy( value => value.Title ) )
+				@if ( HexagonServices.Current is { } game )
+				{
+					<label>Body, yours for life</label>
+					<div class="row wrap">
+						@foreach ( var body in Appearance.Bodies( game ) )
+						{
+							var chosen = body;
+							<button class="choice @(body == NewBody ? "primary" : "")" onclick=@(() => NewBody = chosen)>
+								@if ( Appearance.IconOf( body ) is { } picture )
+								{
+									<img src="@picture" />
+								}
+								<div>@BodyName( game, body )</div>
+							</button>
+						}
+					</div>
+					@if ( Appearance.Hair( game ).Any() )
 					{
-						<button class="@(faction.ResourcePath == NewFaction ? "primary" : "")"
-							onclick=@(() => NewFaction = faction.ResourcePath)>
-							@faction.Title@(faction.RequiresWhitelist ? " (whitelist)" : "")
-						</button>
+						<label>Hair</label>
+						<div class="row wrap">
+							@foreach ( var hair in Appearance.Hair( game ) )
+							{
+								var style = hair.ResourcePath;
+								<button class="choice @(Pieces.Contains( style ) ? "primary" : "")" onclick=@(() => Toggle( style, hair: true ))>
+									@if ( Appearance.IconOf( style ) is { } picture )
+									{
+										<img src="@picture" />
+									}
+									<div>@hair.Title</div>
+								</button>
+							}
+						</div>
 					}
-				</div>
-				<div class="muted">A new character arrives with nothing but the clothes they stand in.</div>
+					<label>Clothes to arrive in</label>
+					<div class="row wrap">
+						@foreach ( var clothes in Appearance.Wardrobe )
+						{
+							var piece = clothes.ResourcePath;
+							<button class="choice @(Pieces.Contains( piece ) ? "primary" : "")" onclick=@(() => Toggle( piece, hair: false ))>
+								@if ( clothes.IconPath is { } picture )
+								{
+									<img src="@picture" />
+								}
+								<div>@clothes.Title</div>
+							</button>
+						}
+					</div>
+				}
+				<div class="muted">You arrive in the city wearing the clothes you choose, and carrying nothing. Everyone arrives belonging to no faction: one is joined in the city.</div>
 				<div class="actions">
 					<button class="primary" onclick=@SubmitCharacter>Create</button>
 					<button onclick=@CancelCharacter>Back</button>
@@ -83,21 +122,50 @@
 @code
 {
 	private bool Creating { get; set; }
+	/// <summary>Set by <see cref="Hud.Show"/>: the form opens as its button would open it.</summary>
+	internal static bool FormAsked { get; set; }
 	// The list's length when a character was asked for. The form keeps what was typed until the list grows.
 	private int? _createdFrom;
 	// The character whose deletion, or retirement, is waiting to be confirmed.
 	private Guid? Pending { get; set; }
 	private string NewName { get; set; } = string.Empty;
 	private string NewDescription { get; set; } = string.Empty;
-	private string NewFaction { get; set; } = string.Empty;
+	// The citizen, until another body is chosen.
+	private string NewBody { get; set; } = string.Empty;
+	private List<string> Pieces { get; } = new();
 
 	public override void Tick()
 	{
+		if ( FormAsked )
+		{
+			FormAsked = false;
+			Creating = true;
+			Pending = null;
+		}
 		if ( _createdFrom is not { } before || Player.Local is not { } local || local.Characters.Count <= before ) return;
 		_createdFrom = null;
 		Creating = false;
 		NewName = string.Empty;
 		NewDescription = string.Empty;
+		NewBody = string.Empty;
+		Pieces.Clear();
+	}
+
+	/// <summary>A body by name: the citizen, or a human body numbered in the order the game lists them.</summary>
+	private static string BodyName( HexagonServices game, string body ) =>
+		body.Length == 0 ? "Citizen" : $"Body {Appearance.Bodies( game ).Where( value => value.Length > 0 ).ToList().IndexOf( body ) + 1}";
+
+	/// <summary>
+	/// Chooses a piece, or puts it back. Like the engine's own dresser, choosing one takes back any
+	/// chosen piece of the same kind it cannot be worn with: a second hat, or a second hairstyle.
+	/// </summary>
+	private void Toggle( string piece, bool hair )
+	{
+		if ( Pieces.Remove( piece ) ) return;
+		if ( Appearance.ClothingOf( piece ) is { } clothing )
+			Pieces.RemoveAll( other => (Appearance.ClothingOf( other ) is { } worn && !clothing.CanBeWornWith( worn ))
+				&& (ItemDefinition.Find( other ) is null) == hair );
+		Pieces.Add( piece );
 	}
 
 	/// <summary>A character's faction, and where it stands: dead, or not yet arrived in the city.</summary>
@@ -111,7 +179,7 @@
 		if ( Player.Local is not { } player ) return;
 		// Cleared once the character exists. A refused name is corrected, not typed again.
 		_createdFrom = player.Characters.Count;
-		player.RequestCreateCharacter( NewName, NewDescription, NewFaction );
+		player.RequestCreateCharacter( NewName, NewDescription, NewBody, Appearance.Join( Pieces ) );
 	}
 
 	private void CancelCharacter()
@@ -131,6 +199,6 @@
 	// Notices fade, and waits run down, so the menu rebuilds as time passes.
 	protected override int BuildHash() => HashCode.Combine(
 		HashCode.Combine( Player.Local, Player.Local?.PrivateVersion, Player.Local?.Characters.Count ),
-		HashCode.Combine( Creating, Pending, NewFaction, _createdFrom, Chat.Version ),
+		HashCode.Combine( Creating, Pending, NewBody, string.Join( ';', Pieces ), _createdFrom, Chat.Version ),
 		(int)RealTime.Now );
 }

@@ -165,8 +165,8 @@ try {
 
     # tools/test.ps1 starts the editor play test when this line appears.
     Write-Host '==> Two characters, one city' -ForegroundColor Cyan
-    [void](Send 1 "create|John Doe|$description|citizen")
-    [void](Send 2 "create|Jane Roe|A woman in a grey coat, watching the street.|citizen")
+    [void](Send 1 "create|John Doe|$description|citizen|flat_cap,shirt_and_waistcoat,trousers,boots")
+    [void](Send 2 "create|Jane Roe|A woman in a grey coat, watching the street.|human02|hair_bobcut,flannel_shirt,cardigan,jeans,boots")
     [void](Send 1 'enter|John Doe')
     [void](Poll { Send 1 'state' } "has=True name='John Doe'")
     [void](Send 2 'enter|John Doe')
@@ -188,7 +188,8 @@ try {
     $seen = Send 1 'proxies'
     Expect 'her name and faction were never sent' $seen "name='' faction=''"
     Expect 'nor is the name anywhere in what the client holds' $seen 'Jane' -Not
-    Expect 'each client knows its own name' (Send 2 'state') "name='Jane Roe' faction='Citizen'"
+    Expect 'what she wears, on the body she has, is there for anyone to see' $seen 'look=\[human02,hair_bobcut,flannel_shirt,cardigan_dark,jeans,black_boots\]'
+    Expect 'each client knows its own name, and that she belongs to no faction' (Send 2 'state') "name='Jane Roe' faction='' "
 
     Write-Host '==> Speech reaches who is in range, and nobody else' -ForegroundColor Cyan
     [void](Send 1 'say|Morning')
@@ -333,11 +334,16 @@ try {
 
     Write-Host '==> Searching is opening a holder' -ForegroundColor Cyan
     [void](Send 1 'act|person.search')
-    Expect 'he sees what she carries' { Send 1 'state' } 'open=\[Belongings: Water, Tokenx30\]'
+    Expect 'he sees what she carries' { Send 1 'state' } 'open=\[Belongings: Water, Tokenx30\] openworn=\[Flannel shirt, Cardigan, Jeans, Black boots\] '
     Expect 'and she is told' { Send 2 'state' } 'going through your belongings'
     [void](Send 1 'take|1')
     Expect 'what he took left her inventory' { Send 2 'state' } 'items=\[Water@0,0\] '
     Expect 'and joined his own pile' { Send 1 'state' } 'Tokenx50@0,1'
+    [void](Send 1 'strip|Cardigan')
+    Expect 'what she wore can be taken off her too' { Send 2 'state' } 'items=\[Water@0,0\] wearing=\[Flannel shirt, Jeans, Black boots\] '
+    Expect 'and he sees it gone from her' { Send 1 'proxies' } 'look=\[human02,hair_bobcut,flannel_shirt,jeans,black_boots\]'
+    [void](Send 1 'wear|Cardigan')
+    Expect 'once he puts it on, she sees him in it' { Send 2 'proxies' } 'look=\[flatcap,waistcoat_and_shirt,trousers\.smart,black_boots,cardigan_dark\]'
     [void](Send 1 'act|person.revive')
     Expect 'helped up, she is no longer searchable' { "$(Send 2 'state') $(Send 1 'state')" } 'health=25 down=False .*open=\[: \]'
 
@@ -365,7 +371,8 @@ try {
     # He is beside her, so he sees her body as she falls, not once everyone else may be sent it.
     Expect 'he sees her body at once' (Poll { Send 1 'state' } 'bodies=1 ' 2) 'bodies=1 '
     [void](Send 1 'act|corpse.search')
-    Expect 'what she carried is on her body' { Send 1 'state' } 'bodies=1 .*open=\[Body: Water\]'
+    Expect 'what she carried is on her body, and what she wore' { Send 1 'state' } 'bodies=1 .*open=\[Body: Water\] openworn=\[Flannel shirt, Jeans, Black boots\] '
+    Expect 'and the body is seen in it' (Send 1 'state') 'bodylooks=\[human02,hair_bobcut,flannel_shirt,jeans,black_boots\] '
     [void](Send 1 'close')
 
     Write-Host '==> The next life waits; staff can undo a death' -ForegroundColor Cyan
@@ -381,7 +388,7 @@ try {
     [void](Send 0 'console|hexagon_restore "Jane Roe"')
     Expect 'once there is room, she is alive again' { Send 2 'state' } 'characters=\[John Doe, Jane Roe\] '
     [void](Send 2 'enter|Jane Roe')
-    Expect 'she gets up where she fell, barely, with what was still on her' { Send 2 'state' } 'items=\[Water@0,0\] .*owned=\[\] .*health=25 down=False .*bodies=0 '
+    Expect 'she gets up where she fell, barely, with what was still on her' { Send 2 'state' } 'items=\[Water@0,0\] wearing=\[Flannel shirt, Jeans, Black boots\] .*owned=\[\] .*health=25 down=False .*bodies=0 '
     Expect 'and the body is gone for him too' { Send 1 'state' } 'bodies=0 '
     Expect 'the restore is on record' { Send 0 'journal' } '(?<!\S)operator\.restore=1(?!\S)'
 

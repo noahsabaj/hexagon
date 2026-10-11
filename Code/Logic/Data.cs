@@ -14,7 +14,13 @@ public sealed class CharacterData : IHolder
 	public long SteamId { get; set; }
 	public string Name { get; set; } = string.Empty;
 	public string Description { get; set; } = string.Empty;
+	/// <summary>The faction it belongs to, or empty: everyone is made belonging to none, and joins one in the world.</summary>
 	public string Faction { get; set; } = string.Empty;
+	/// <summary>
+	/// The body it was made with, for life: the parts of the person that are not clothes, such as a
+	/// skin and hair, as the engine's clothing assets name them. What it wears is in its inventory.
+	/// </summary>
+	public List<string> Body { get; set; } = new();
 	public InventoryData Inventory { get; set; } = new();
 	public DateTimeOffset CreatedAt { get; set; }
 	/// <summary>The earliest it may enter the city: a while after the death that came before it. Null when none did.</summary>
@@ -63,13 +69,13 @@ public sealed class ItemStack
 	public string? Frequency { get; set; }
 	/// <summary>The pattern a key is cut to. It belongs to the key, so it goes wherever the key goes. See <see cref="Keys"/>.</summary>
 	public string? Pattern { get; set; }
+	/// <summary>Worn rather than carried: it takes no room in the grid, and anyone can see it. See <see cref="Wearing"/>.</summary>
+	public bool Worn { get; set; }
 }
 
 public sealed class AccountData
 {
 	public long SteamId { get; set; }
-	/// <summary>Faction ids this account may create characters in, beyond the open ones.</summary>
-	public List<string> Whitelists { get; set; } = new();
 	/// <summary>May use the operator commands in game. Granted only from the server console.</summary>
 	public bool IsStaff { get; set; }
 }

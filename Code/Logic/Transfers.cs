@@ -21,6 +21,8 @@ public static class Sources
 	public const string Operator = "operator";
 	/// <summary>Placed by a scene's author: what the world as built holds, such as a stocked crate. It is placed once and never refills.</summary>
 	public const string Scene = "scene";
+	/// <summary>What a new character arrives wearing, chosen as it is made: the one thing a character has that nobody gave it.</summary>
+	public const string Arrival = "arrival";
 }
 
 /// <summary>Where items may leave the world.</summary>
@@ -55,13 +57,16 @@ public sealed class Transfers
 
 	/// <summary>
 	/// Identical things pile up: <paramref name="max"/> to a slot, as the item's asset says. All of them
-	/// arrive or none do. A key is issued already cut to its <paramref name="pattern"/>.
+	/// arrive or none do. A key is issued already cut to its <paramref name="pattern"/>. One issued
+	/// <paramref name="worn"/> arrives on its wearer, one at a time, and takes no room.
 	/// </summary>
-	public Result<ItemStack> Issue( string source, IHolder to, string definition, int width, int height, Actor by, int count = 1, int max = 1, string? pattern = null )
+	public Result<ItemStack> Issue( string source, IHolder to, string definition, int width, int height, Actor by, int count = 1, int max = 1, string? pattern = null, bool worn = false )
 	{
-		var placed = count < 1
-			? Result<ItemStack>.Fail( ErrorCode.Invalid, "The count must be positive." )
-			: Add( to.Inventory, new ItemStack { Id = Guid.NewGuid(), Definition = definition, Width = width, Height = height, Max = Math.Max( 1, max ), Pattern = pattern }, count );
+		var template = new ItemStack { Id = Guid.NewGuid(), Definition = definition, Width = width, Height = height, Max = Math.Max( 1, max ), Pattern = pattern };
+		var placed = count < 1 ? Result<ItemStack>.Fail( ErrorCode.Invalid, "The count must be positive." )
+			: worn && count > 1 ? Result<ItemStack>.Fail( ErrorCode.Invalid, "Only one of a thing is worn at a time." )
+			: worn ? PutOnArriving( to.Inventory, template )
+			: Add( to.Inventory, template, count );
 		var data = new[] { ("source", source), ("item", placed.Ok ? placed.Value.Id.ToString( "N" ) : string.Empty), ("definition", definition), ("count", count.ToString()) };
 		_journal.Record( JournalKinds.ItemIssue, by, to.HolderLabel, placed.Ok, data: pattern is null ? data : data.Append( ("pattern", pattern) ).ToArray() );
 		return placed;
@@ -70,6 +75,7 @@ public sealed class Transfers
 	/// <summary>
 	/// A whole pile that lands in a slot of its own keeps its id, so the journal can follow one
 	/// object through every hand. Part of a pile, or one that joins another, is followed by count.
+	/// Something worn that is taken off its wearer by someone else arrives carried.
 	/// </summary>
 	public Result Move( IHolder from, IHolder to, Guid itemId, Actor by, int count = 0 )
 	{
@@ -91,8 +97,8 @@ public sealed class Transfers
 	/// Everything one holder has goes to another, as when a body is left where a character fell. Each
 	/// pile keeps its place where that place is free, so a holder at least as large as the giver takes
 	/// all of it; packing them one at a time into the first free cell does not always fit what fitted
-	/// before. A pile whose place is taken is moved like any other. Fails, having moved what it could,
-	/// if anything is left behind.
+	/// before. A pile whose place is taken is moved like any other. What is worn stays worn: the body
+	/// still has it on. Fails, having moved what it could, if anything is left behind.
 	/// </summary>
 	public Result MoveAll( IHolder from, IHolder to, Actor by )
 	{
@@ -100,7 +106,7 @@ public sealed class Transfers
 		var left = 0;
 		foreach ( var item in from.Inventory.Items.ToArray() )
 		{
-			if ( !InventoryGrid.Fits( to.Inventory, item.X, item.Y, item.Width, item.Height ) )
+			if ( !item.Worn && !InventoryGrid.Fits( to.Inventory, item.X, item.Y, item.Width, item.Height ) )
 			{
 				if ( !Move( from, to, item.Id, by ).Ok ) left++;
 				continue;
@@ -109,6 +115,7 @@ public sealed class Transfers
 			kept.Count = item.Count;
 			kept.X = item.X;
 			kept.Y = item.Y;
+			kept.Worn = item.Worn;
 			to.Inventory.Items.Add( kept );
 			from.Inventory.Items.Remove( item );
 			_journal.Record( JournalKinds.ItemMove, by, to.HolderLabel,
@@ -137,6 +144,7 @@ public sealed class Transfers
 		var item = holder.Inventory.Items.FirstOrDefault( value => value.Id == itemId );
 		if ( item is null ) return Result<ItemStack>.Fail( ErrorCode.NotFound, "That item is not there." );
 		if ( count < 1 || count >= item.Count ) return Result<ItemStack>.Fail( ErrorCode.Invalid, "That is not part of it." );
+		if ( item.Worn ) return Result<ItemStack>.Fail( ErrorCode.Conflict, Wearing.TakeOffFirst );
 		var part = Like( item, Guid.NewGuid() );
 		part.Count = count;
 		var placed = Place( holder.Inventory, part );
@@ -152,6 +160,7 @@ public sealed class Transfers
 		var item = holder.Inventory.Items.FirstOrDefault( value => value.Id == itemId );
 		var into = holder.Inventory.Items.FirstOrDefault( value => value.Id == intoId );
 		if ( item is null || into is null || item == into ) return Result.Fail( ErrorCode.NotFound, "That item is not there." );
+		if ( item.Worn || into.Worn ) return Result.Fail( ErrorCode.Conflict, Wearing.TakeOffFirst );
 		var count = Alike( item, into ) ? Math.Min( item.Count, into.Max - into.Count ) : 0;
 		if ( count < 1 ) return Result.Fail( ErrorCode.Conflict, "Those do not go together." );
 		into.Count += count;
@@ -196,7 +205,7 @@ public sealed class Transfers
 		var topped = new System.Collections.Generic.List<(ItemStack Pile, int Was)>();
 		var started = new System.Collections.Generic.List<ItemStack>();
 		ItemStack? last = null;
-		foreach ( var pile in inventory.Items.Where( value => Alike( value, template ) && value.Count < value.Max ) )
+		foreach ( var pile in inventory.Items.Where( value => !value.Worn && Alike( value, template ) && value.Count < value.Max ) )
 		{
 			if ( count == 0 ) break;
 			var room = Math.Min( count, pile.Max - pile.Count );
@@ -220,6 +229,14 @@ public sealed class Transfers
 			last = pile;
 		}
 		return Result<ItemStack>.Success( last! );
+	}
+
+	/// <summary>Something arrives already worn, so it needs no cell.</summary>
+	private static Result<ItemStack> PutOnArriving( InventoryData inventory, ItemStack item )
+	{
+		item.Worn = true;
+		inventory.Items.Add( item );
+		return Result<ItemStack>.Success( item );
 	}
 
 	/// <summary>Puts the item in the first free cell, scanning rows then columns.</summary>

@@ -158,7 +158,7 @@ public sealed class Corpse : Component, Component.IPressable, Component.INetwork
 		var corpse = body.AddComponent<Corpse>();
 		corpse.HolderId = holder.Id;
 		body.NetworkSpawn( Reveal.Options );
-		var look = holder.Look ?? string.Empty;
+		var look = HexagonServices.Current?.Characters?.LookOf( holder ) ?? holder.Look ?? string.Empty;
 		corpse.Tell( look );
 		using ( Rpc.FilterInclude( Reveal.Witnesses( body.WorldPosition ) ) ) corpse.TellWitnesses( look );
 		return corpse;
@@ -168,6 +168,20 @@ public sealed class Corpse : Component, Component.IPressable, Component.INetwork
 
 	[Rpc.Broadcast( NetFlags.HostOnly | NetFlags.Reliable )]
 	private void TellWitnesses( string look ) => Tell( look );
+
+	/// <summary>Host: something the body wore was taken off it, and whoever can see it sees the change.</summary>
+	public static void HostRelook( HolderData holder )
+	{
+		if ( !Networking.IsHost || HexagonServices.Current?.Characters is not { } characters ) return;
+		var look = characters.LookOf( holder );
+		holder.Look = look;
+		foreach ( var corpse in Game.ActiveScene.GetAllComponents<Corpse>().Where( value => value.HolderId == holder.Id ) )
+		{
+			corpse.Tell( look );
+			if ( corpse.IsShown ) corpse.ShownLook = look;
+			else using ( Rpc.FilterInclude( Reveal.Witnesses( corpse.WorldPosition ) ) ) corpse.TellWitnesses( look );
+		}
+	}
 
 	bool INetworkVisible.IsVisibleToConnection( Connection connection, in BBox worldBounds ) => Reveal.IsVisibleTo( connection, WorldPosition );
 

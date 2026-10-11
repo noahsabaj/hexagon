@@ -60,11 +60,12 @@
 	private Player? OfferingTo { get; set; }
 	private GameObject? _harmCues;
 
-	/// <summary>Opens one of the panels a key opens, or closes them.</summary>
+	/// <summary>Opens one of the panels a key or a button opens, or closes them.</summary>
 	public static void Show( HudPanel panel )
 	{
 		InventoryOpen = panel == HudPanel.Inventory;
 		StaffOpen = panel == HudPanel.Staff;
+		CharacterSelect.FormAsked = panel == HudPanel.NewCharacter;
 	}
 
 	protected override void OnStart()

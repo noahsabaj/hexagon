@@ -127,13 +127,32 @@ formatted per listener: the name if they know it, otherwise the speaker's descri
 Out-of-character chat carries the player's name, not the character's. A faction is told only to its
 own member. Staff are the exception, through `who` and the journal, and both are journaled.
 
-## What is worn is seen; who issued it is not
+## Everyone arrives the same way
 
-A faction sets a body and an outfit, an item sets a model and how it is held, and both are synced to
-everyone who can see them as a look, because they are appearance. So a uniform says "dressed as Civil
-Protection", which is what an onlooker would know, and a stolen uniform says the same. A body lies as
-its character looked. An item with no model is a small block in its tint, in the world and in the
-hand.
+A character is made with a body that is its own for life: the engine's citizen, or one of the human
+skins a game lists, each with its own model. It chooses hair the game lists and clothes from the
+game's wardrobe, which are items the game marks as such, and arrives wearing them and carrying
+nothing. The clothes are issued from the named source `arrival`, so they are accounted for like
+anything else. It belongs to no faction. A faction is joined in the city, by recruitment, or by
+staff appointing someone with `faction`. There are no whitelists: a whitelist decides who belongs to
+a faction outside the world, before anyone in it has met them.
+
+## Clothes are items, and what is worn is seen
+
+Clothing is an item whose asset names the engine clothing piece it is worn as. Put on, it stays in
+the inventory marked worn and takes no cells. Taking it off needs room for it, and something worn is
+taken off before it is dropped, put away, offered or moved about. Nothing is taken off to make way:
+the engine says which pieces cannot be worn together, and the wearer takes off what is in the way
+first. Nothing about a character changes by itself, either. Joining a faction changes what the
+character belongs to and nothing else; a uniform is handed over and put on like anything else.
+
+A look is the body a character was made with, its hair, and what it wears over them, and a hat hides
+the hair under it. It is synced to everyone who can see it, because it is appearance. So a uniform
+says "dressed as Civil Protection", which is what an onlooker would know, and a stolen uniform says
+the same. Searching someone down or bound, or a body, shows what they wear, and taking a piece takes
+it off them, which everyone sees. A body lies in what its character wore. What is in a hand is seen
+the same way. An item with no model is a small block in its tint, in the world and in the hand, and
+an item with no picture is its title in an inventory; clothing shows the engine's own picture.
 
 ## The host trusts the connection and its own measurements
 
@@ -202,8 +221,8 @@ be deleted while anything is in it. A container can have a lock, and a scene's a
 
 `Transfers` is the only way an item changes hands: between holders, in from a named source, out
 through a named sink, each journaled. Things enter from `operator`, staff giving them on the record,
-or `scene`, a container a scene's author stocked, which is filled the first time it is opened and never
-refills. They leave through `consumed`, `operator`, `character.deleted`, `character.retired`, or
+`scene`, a container a scene's author stocked, which is filled the first time it is opened and never
+refills, or `arrival`, the clothes a new character chose to arrive in. They leave through `consumed`, `operator`, `character.deleted`, `character.retired`, or
 `character.died` when a death leaves no body. A new character arrives with only its clothes. There are
 no wages, vendors or starting kits: they made money from nothing and so made it worthless. Money is
 an item like any other, money only because people take it.
@@ -219,7 +238,7 @@ or none of it does. Deliveries, production and forgery come later.
 
 A permission that lives in an object can be stolen, lent and confiscated; a flag on a faction cannot.
 So the host asks `Player.HostCan( capability )`, answered only from what the character carries, and
-a faction is a title, a description, a look and an optional whitelist. A door or a container has a
+a faction is a title, a description and a tint, and grants and changes nothing. A door or a container has a
 `LockPattern`, and a key item is cut to a pattern when it is made, by staff's `give` or by a scene's
 stock. Any key cut to a lock works it, whoever holds it, so a ministry's doors can share one pattern
 while each flat has its own. A client is told a key's cut, a short code anyone holding two keys can
@@ -274,12 +293,10 @@ under their name or as the console, refusals included, and reading the journal i
 
 A dispute ends with something put back, so staff can: `take` sends items out through the `operator`
 sink, `move` carries them between characters by the same transfers as anything else, `release` frees
-bound hands, `revive` helps someone up, `faction` changes a character's faction, `door` works a door
-whatever key it asks for or assigns and releases its title, and `restore` undoes a death that broke
-the rules. Commands that name a character find it whether or not it is in the city, except
-`teleport`, `bring`, `goto` and `hurt`, which need it there. Taking a whitelist away sends that
-account's characters of the faction back to the menu, and entering one is refused until it is given
-back.
+bound hands, `revive` helps someone up, `faction` appoints a character to a faction or, with `none`,
+takes it out of one, `door` works a door whatever key it asks for or assigns and releases its title,
+and `restore` undoes a death that broke the rules. Commands that name a character find it whether or
+not it is in the city, except `teleport`, `bring`, `goto` and `hurt`, which need it there.
 
 ## The journal is evidence, never state
 
@@ -383,10 +400,11 @@ merging, `tools/test.ps1` runs verify and both play tests as one, in three to fo
 ## What is thin, and known
 
 - Weapons hit by a host ray along the attacker's claimed aim. There is no recoil, spread or cover.
-- The engine ships no weapon models, so HL2RP's pistol is a block held in a pistol stance. Clothing is
-  not yet an item.
+- The engine ships no weapon models, so HL2RP's pistol is a block held in a pistol stance.
+- A new character's body, hair and clothes are chosen from pictures; there is no preview of the
+  character wearing them yet.
 - The HUD has been looked at in pictures, not yet played by a person.
-- An in-game whitelist application flow is not built. A radio is not overheard beside a listener.
+- A radio is not overheard beside a listener.
 - Sight is a distance, not a line: a client is sent everyone within `SightRange` of its character,
   through walls. Doors and containers are scene objects, sent to every client.
 - The engine tells every client who is connected, by Steam name, and which connection owns each pawn

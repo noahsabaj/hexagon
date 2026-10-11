@@ -39,8 +39,6 @@ public sealed partial class Player
 	public bool IsIncapable => IsDown || IsRestrained;
 
 	private RealTimeSince _sinceAttack;
-	// The faction whose look the body has on, so staff moving a character to another one changes what is seen.
-	private string? _dressedAs;
 
 	private ItemStack? HostHeld => _character?.Equipped is { } id ? _character.Inventory.Items.FirstOrDefault( value => value.Id == id ) : null;
 
@@ -50,10 +48,9 @@ public sealed partial class Player
 		IsDown = _character?.IsDown ?? false;
 		IsRestrained = _character?.IsRestrained ?? false;
 		HeldItemPath = HostHeld?.Definition ?? string.Empty;
-		var faction = _character?.Faction;
-		if ( faction == _dressedAs ) return;
-		_dressedAs = faction;
-		Look = faction is null ? string.Empty : Looks.Of( FactionDefinition.Find( faction ) );
+		// The body and what is worn on it: it changes only when someone puts something on or takes it off.
+		var look = _character is null ? string.Empty : Looks.Of( _character );
+		if ( Look != look ) Look = look;
 	}
 
 	[Rpc.Host]

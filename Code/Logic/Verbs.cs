@@ -34,6 +34,8 @@ public static class VerbIds
 	public const string ItemUse = "item.use";
 	public const string ItemEquip = "item.equip";
 	public const string ItemTune = "item.tune";
+	/// <summary>Putting on something carried, or taking off something worn.</summary>
+	public const string ItemWear = "item.wear";
 }
 
 /// <summary>

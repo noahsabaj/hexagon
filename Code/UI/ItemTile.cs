@@ -45,7 +45,12 @@ public sealed class ItemTile : Panel
 		DeleteChildren( true );
 		if ( _item is null ) return;
 		var definition = ItemDefinition.Find( _item.Definition );
-		Add.Label( definition?.Title ?? "Unknown item", "title" );
+		var title = definition?.Title ?? "Unknown item";
+		// A picture where there is one, clothing has the engine's own. It stands in for the title, which
+		// hovering shows.
+		Tooltip = definition?.IconPath is null ? null : title;
+		if ( definition?.IconPath is { } icon ) Add.Image( icon, "icon" );
+		else Add.Label( title, "title" );
 		if ( definition is { IsRadio: true } ) Add.Label( _item.Frequency ?? "untuned", "detail" );
 		if ( definition is { IsKey: true } ) Add.Label( _item.Pattern ?? "blank", "detail" );
 		if ( _item.Count > 1 ) Add.Label( $"×{_item.Count}", "count" );

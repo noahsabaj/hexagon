@@ -49,7 +49,8 @@ $script:nonce = 0
 # short for the moment a request takes to arrive. Reading its own state, or moving its own view, asks
 # the host for nothing.
 $requests = 'create', 'enter', 'leave', 'delete', 'retire', 'say', 'introduce', 'door', 'open', 'take', 'put', 'close',
-    'pickup', 'drop', 'use', 'equip', 'move', 'split', 'merge', 'tune', 'act', 'attack', 'offer', 'offerdoor', 'answer', 'staff'
+    'pickup', 'drop', 'use', 'equip', 'move', 'split', 'merge', 'tune', 'act', 'attack', 'offer', 'offerdoor', 'answer', 'staff',
+    'wear', 'strip', 'item'
 $script:allowance = 10.0
 $script:counted = [DateTime]::UtcNow
 $script:lastProblem = 'none'
@@ -131,17 +132,18 @@ function Send([string] $Command) {
     $script:nonce++
     $tagged = "$Command|#$($script:nonce)"
     $write = [ordered]@{ id = $hud; type = 'DevDriver'; properties = @{ Command = $tagged } }
-    try { [void](Invoke-Tool 'set_component' $write) }
-    catch {
-        # Swapping the code in, the editor briefly cannot describe the driver, and fails while checking
-        # the write, before setting anything: the command never ran, so it is sent again once the
-        # code is in. Anything else, the driver's own failures included, is a failure.
-        $problem = $_.Exception.Message
-        if ($problem -notmatch 'NullReferenceException' -or $problem -notmatch 'ApplyComponentProperties' -or $problem -match 'set_Command') { throw }
-        Write-Host "       the editor was swapping the code in; sending '$Command' again" -ForegroundColor DarkGray
-        Start-Sleep -Seconds 2
-        Wait-Built
-        [void](Invoke-Tool 'set_component' $write)
+    # The editor runs a call on whichever of its loops takes it up first. The menu's loop looks types up
+    # among the menu's, and so does the editor while it swaps the code in: neither can describe the
+    # driver, and the write fails while being checked, before anything is set. The command never ran,
+    # so it is sent again. Anything else, the driver's own failures included, is a failure.
+    for ($attempt = 1; ; $attempt++) {
+        try { [void](Invoke-Tool 'set_component' $write); break }
+        catch {
+            $problem = $_.Exception.Message
+            if ($attempt -ge 20 -or $problem -notmatch 'NullReferenceException' -or $problem -notmatch 'ApplyComponentProperties' -or $problem -match 'set_Command') { throw }
+            if ($attempt % 5 -eq 0) { Wait-Built }
+            Start-Sleep -Milliseconds ([Math]::Min(1000, 50 * $attempt))
+        }
     }
     # The driver runs the command as it is set and logs what happened, and the editor takes one call
     # a frame, so the reply is normally there at the first look. It is found by its tag, never by
@@ -316,9 +318,9 @@ function Get-ConsoleCursor {
 
 # Checks what the game logged during the run, and stops playing.
 function Complete-Session {
-    # The editor sometimes looks the driver's type up while the assembly is still loading, and a scene
-    # played again was first played while the code was going in. That is about this harness, not the
-    # game, so it is not counted.
+    # The editor looks the driver's type up among the menu's now and then (see Send), or while the
+    # assembly is still loading, and a scene played again was first played while the code was going in.
+    # That is about this harness, not the game, so it is not counted.
     $notCounted = if ($script:replayed) { 'could not find Hexagon\.' } else { 'could not find Hexagon\.Dev\.DevDriver' }
     $problems = @((Invoke-Tool 'read_console' @{ limit = 500; minimumLevel = 'Warn'; since = $script:consoleFrom }) -split "`n" |
         Where-Object { $_ -match 'Hexagon|Exception|\[store\]|\[scene\]|\[death\]|\[restore\]|Whitelist violation|hexagon\.' -and $_ -notmatch "Bad texture|Error loading resource|$notCounted" })
@@ -373,16 +375,22 @@ try {
     Start-Play
     Expect 'a new city has no characters' (Send 'state') 'has=False .*characters=\[\]'
     Snapshot 'characters'
-    [void](Send "create|John Doe|$description|citizen")
+    [void](Send 'panel|newcharacter')
+    Snapshot 'new-character' 1
+    # Everyone is made the same way, belonging to no faction: a body for life, hair, and clothes from the
+    # game's wardrobe to arrive in.
+    [void](Send "create|John Doe|$description|citizen|hair_slickedback,flat_cap,shirt_and_waistcoat,trousers,boots")
     [void](Send "create|J0hn Doe|$description|citizen")
     Expect 'an account lives one life at a time' { Send 'state' } 'characters=\[John Doe\].*You already have a living character'
     # One account plays both sides here, so this city allows two lives at once.
     Expect 'a game may allow more' (Send 'policy|living|2') 'living=2'
     [void](Send "create|J0hn Doe|$description|citizen")
-    [void](Send "create|Officer Kane|$description|civil_protection")
-    $state = Poll { Send 'state' } 'not whitelisted for Civil Protection'
+    [void](Send "create|Officer Kane|$description|human01|cp_mask")
+    [void](Send "create|Officer Kane|$description|human01|jumpsuit,trousers")
+    $state = Poll { Send 'state' } 'cannot be worn with'
     Expect 'the look-alike name was refused with a reason' $state 'characters=\[John Doe\].*reads like it'
-    Expect 'a whitelisted faction refused an unlisted account' $state 'not whitelisted for Civil Protection'
+    Expect 'nobody arrives in a uniform: it is not in the wardrobe' $state 'That is not on offer\.'
+    Expect 'nor in clothes that cannot be worn together' $state 'The blue jumpsuit cannot be worn with the trousers\.'
 
     Section 'Entering the city, chat, inventory'
     [void](Send 'enter|John Doe')
@@ -392,9 +400,23 @@ try {
     [void](Send 'say|/me waves')
     [void](Send 'say|//brb')
     $state = Poll { Send 'state' } '\[OOC\] [^:/]+: brb'
-    Expect 'the owner was told its own name and faction' $state "has=True name='John Doe' faction='Citizen' "
-    Expect 'a new character arrives with nothing but its clothes' $state 'items=\[\] '
+    Expect 'the owner was told its own name, and that he belongs to no faction' $state "has=True name='John Doe' faction='' "
+    Expect 'a new character arrives with nothing but its clothes' $state 'items=\[\] wearing=\[Flat cap, Shirt and waistcoat, Trousers, Black boots\] '
+    Expect 'and looks it: the cap he wears hides his hair' $state 'look=\[flatcap,waistcoat_and_shirt,trousers\.smart,black_boots\] '
     Expect 'speech, emote and out-of-character lines were delivered' $state 'John Doe says "Hello there" / \*\* John Doe waves / \[OOC\] [^:/]+: brb'
+
+    Section 'Clothes are put on and taken off by hand'
+    [void](Send 'wear|Flat cap')
+    $state = Poll { Send 'state' } 'items=\[Flat cap@0,0\]'
+    Expect 'taken off, the cap is carried' $state 'items=\[Flat cap@0,0\] wearing=\[Shirt and waistcoat, Trousers, Black boots\] '
+    Expect 'and the hair it hid shows' $state 'look=\[hair_slickedback,waistcoat_and_shirt,trousers\.smart,black_boots\] '
+    [void](Send 'item|drop|Black boots')
+    Expect 'what is worn is taken off before it is dropped' { Send 'state' } 'wearing=\[Shirt and waistcoat, Trousers, Black boots\] .*Take it off first\.'
+    [void](Send 'wear|Flat cap')
+    Expect 'put back on, it is worn again and takes no room' { Send 'state' } 'items=\[\] wearing=\[Shirt and waistcoat, Trousers, Black boots, Flat cap\] look=\[waistcoat_and_shirt,trousers\.smart,black_boots,flatcap\] '
+    [void](Send 'panel|inventory')
+    Snapshot 'dressed'
+    [void](Send 'panel|none')
 
     # Some refusals leave the state as it was, so the test waits for the host to have recorded the
     # request before it looks; requests are judged in the order they are sent.
@@ -511,7 +533,7 @@ try {
     [void](Send 'open|Crate')
     [void](Send 'take|0')
     [void](Send 'open|Locker')
-    Expect 'the city keycard opens the locker, stocked as its author placed it' { Send 'state' } "open=\[Locker: Pistol, Pistol roundx30, Zip tiex2, Radio, Keycard#$cityCut, Key#$flatCut\]"
+    Expect 'the city keycard opens the locker, stocked as its author placed it' { Send 'state' } "open=\[Locker: Pistol, Pistol roundx30, Zip tiex2, Radio, Keycard#$cityCut, Key#$flatCut, Civil Protection mask, Civil Protection jacket, Civil Protection trousers, Black boots\]"
     [void](Send 'take|5')
     [void](Send 'door|Door 2|lock')
     [void](Send 'door|Door 2|use')
@@ -557,22 +579,38 @@ try {
     Expect 'he left the keycard and a bandage in the crate' { Send 'state' } "open=\[Crate: Keycard#$cityCut, Bandage\]"
     [void](Send 'close')
 
-    Section 'A faction is people and a look'
+    Section 'A faction is people: its uniform is handed over and put on'
     [void](Send 'leave')
-    [void](Send "console|hexagon_whitelist $steamId civil_protection")
-    [void](Send "create|Officer Kane|$description|civil_protection")
+    [void](Send "create|Officer Kane|$description|human01|hair_shortscruffy_brown,flannel_shirt,jeans")
     [void](Send 'enter|Officer Kane')
     [void](Poll { Send 'state' } "has=True name='Officer Kane'")
     Teleport 'Officer Kane' $door
+    # Staff appoint; a faction's own people recruit. Either way he is only told he belongs.
+    [void](Send 'console|hexagon_faction "Officer Kane" civil_protection')
     [void](Send 'door|Door 1|lock')
     [void](Poll { Send 'journal' } '(?<!\S)verb\.door\.lock!=5(?!\S)')
     $state = Send 'state'
-    Expect 'the console whitelist unlocked the faction' $state "name='Officer Kane' faction='Civil Protection'"
+    Expect 'staff appointed him to a faction' $state "name='Officer Kane' faction='Civil Protection'"
+    Expect 'which changed nothing about him: he wears what he arrived in' $state 'wearing=\[Flannel shirt, Jeans\] look=\[human01,hair_shortscruffy_brown,flannel_shirt,jeans\] '
     Expect 'he arrives with nothing, and his faction lets him lock nothing' $state 'items=\[\] .*Door 1:open=False,locked=False.*no key that fits'
     [void](Send 'open|Crate')
     [void](Send 'take|0')
     [void](Send 'open|Locker')
     foreach ($pile in 1..3) { [void](Send 'take|0') }
+    # After the radio and the locker's own keycard, the uniform.
+    foreach ($piece in 1..4) { [void](Send 'take|2') }
+    [void](Send 'wear|Civil Protection mask')
+    [void](Send 'wear|Civil Protection jacket')
+    [void](Send 'wear|Civil Protection trousers')
+    Expect 'nothing is taken off to make way for what is put on' { Send 'state' } 'wearing=\[Flannel shirt, Jeans, Civil Protection mask, Civil Protection jacket\] .*Take off the jeans first\.'
+    [void](Send 'wear|Jeans')
+    [void](Send 'wear|Civil Protection trousers')
+    [void](Send 'wear|Black boots')
+    $state = Poll { Send 'state' } 'trousers, Black boots\] '
+    Expect 'the uniform is on him, over the shirt he came in' $state 'wearing=\[Flannel shirt, Civil Protection mask, Civil Protection jacket, Civil Protection trousers, Black boots\] '
+    Expect 'and anyone can see it' $state 'look=\[human01,hair_shortscruffy_brown,flannel_shirt,gasmask,black_leather_jacket,jeans_black,black_boots\] '
+    [void](Send 'put|0')
+    Expect 'his own jeans stay in the locker' { Send 'state' } "open=\[Locker: Radio, Keycard#$cityCut, Jeans\]"
     [void](Send 'close')
     [void](Send 'door|Door 1|lock')
     $state = Poll { Send 'state' } 'Door 1:open=False,locked=True'
@@ -624,7 +662,7 @@ try {
     [void](Send 'enter|John Doe')
     # What someone left lying looks like is sent only once the network has stopped sending it to those too far away.
     $state = Poll { Send 'state' } 'sleepers=1 '
-    Expect 'what he carried survived the restart, keys cut as they were' $state "items=\[Rationx4@4,3, Water@2,0, Tokenx40@4,0, Key#$flatCut@1,0, Radio~101\.5@0,1\]"
+    Expect 'what he carried survived the restart, keys cut as they were' $state "items=\[Rationx4@4,3, Water@2,0, Tokenx40@4,0, Key#$flatCut@1,0, Radio~101\.5@0,1\] wearing=\[Shirt and waistcoat, Trousers, Black boots, Flat cap\] "
     Expect 'the title staff took back is still nobody''s' $state 'owned=\[\]'
     Expect 'whoever was down when the city closed is still lying there' $state 'sleepers=1 '
     $sleepers = Send 'sleepers'
@@ -638,9 +676,16 @@ try {
     Section 'Death is final'
     [void](Send 'act|person.finish')
     Expect 'someone left lying can be finished, and leaves a body' { Send 'state' } 'bodies=1 .*sleepers=0 '
+    Expect 'the body wears what he wore' (Send 'state') 'bodylooks=\[human01,hair_shortscruffy_brown,flannel_shirt,gasmask,black_leather_jacket,jeans_black,black_boots\] '
     [void](Send 'act|corpse.search')
-    Expect 'what he carried is on the body' { Send 'state' } "open=\[Body: Keycard#$cityCut, Pistol, Pistol roundx30, Zip tiex2\]"
+    $state = Poll { Send 'state' } 'open=\[Body: '
+    Expect 'what he carried is on the body' $state "open=\[Body: Keycard#$cityCut, Pistol, Pistol roundx30, Zip tiex2\]"
+    Expect 'and what he wore is still on it' $state 'openworn=\[Flannel shirt, Civil Protection mask, Civil Protection jacket, Civil Protection trousers, Black boots\] '
     [void](Send 'take|1')
+    [void](Send 'strip|Civil Protection mask')
+    Expect 'what is taken off a body is gone from it, for anyone to see' { Send 'state' } 'bodylooks=\[human01,hair_shortscruffy_brown,flannel_shirt,black_leather_jacket,jeans_black,black_boots\] '
+    [void](Send 'wear|Civil Protection mask')
+    Expect 'and put on, it is a disguise' { Send 'state' } 'wearing=\[Shirt and waistcoat, Trousers, Black boots, Flat cap, Civil Protection mask\] look=\[waistcoat_and_shirt,trousers\.smart,black_boots,flatcap,gasmask\] '
     [void](Send 'leave')
     Expect 'the dead stay on the list, as dead' { Send 'state' } 'characters=\[John Doe, Officer Kane\(dead\)\]'
     [void](Send 'enter|Officer Kane')
@@ -650,7 +695,7 @@ try {
     [void](Send "console|hexagon_staff $steamId 1")
     [void](Send 'retire|John Doe')
     Expect 'retiring is a death' { Send 'state' } 'characters=\[John Doe\(dead\), Officer Kane\(dead\)\]'
-    [void](Send "create|Max Muster|$description|citizen")
+    [void](Send "create|Max Muster|$description|citizen|jumpsuit")
     [void](Send 'enter|Max Muster')
     $state = Poll { Send 'state' } 'Max Muster arrives in the city'
     Expect 'the next character is made at once' $state 'characters=\[John Doe\(dead\), Officer Kane\(dead\), Max Muster\(waits\)\]'
@@ -666,21 +711,24 @@ try {
     [void](Send "console|hexagon_staff $steamId 0")
     [void](Send 'enter|Officer Kane')
     $state = Poll { Send 'state' } 'health=25 down=False .*bodies=0 '
-    Expect 'he gets up barely, with what was still on the body: what was taken stays taken' $state "items=\[Keycard#$cityCut@0,0, Pistol roundx30@3,0, Zip tiex2@4,0\] .*health=25 down=False .*bodies=0 "
+    Expect 'he gets up barely, with what was still on the body: what was taken stays taken' $state "items=\[Keycard#$cityCut@0,0, Pistol roundx30@3,0, Zip tiex2@4,0\] wearing=\[Flannel shirt, Civil Protection jacket, Civil Protection trousers, Black boots\] .*health=25 down=False .*bodies=0 "
     Expect 'where the body lay' "near=$(Near $state $byLocker) $state" '^near=True'
 
     Section 'The journal'
     $journal = Send 'journal'
-    Expect 'every item came from a named source: staff, or the scene as built' $journal '(?<!\S)item\.issue=12(?!\S)'
-    Expect 'what was used up, or went with a retired character, went through a sink' $journal '(?<!\S)item\.destroy=8(?!\S)'
-    Expect 'every hand-over is on record, bodies and restores included' $journal '(?<!\S)item\.move=23(?!\S)'
+    Expect 'every item came from a named source: staff, the scene as built, or what a character arrived in' $journal '(?<!\S)item\.issue=23(?!\S)'
+    Expect 'what was used up, or went with a retired or deleted character, went through a sink' $journal '(?<!\S)item\.destroy=14(?!\S)'
+    Expect 'every hand-over is on record, bodies, restores and stripping included' $journal '(?<!\S)item\.move=38(?!\S)'
+    Expect 'putting on and taking off is on record' $journal '(?<!\S)verb\.item\.wear=8(?!\S)'
+    Expect 'and the refused clash' $journal '(?<!\S)verb\.item\.wear!=1(?!\S)'
+    Expect 'something worn is not dropped' $journal '(?<!\S)verb\.item\.drop!=1(?!\S)'
     Expect 'refused locks are on record' $journal '(?<!\S)verb\.door\.lock!=5(?!\S)'
     Expect 'allowed locks too' $journal '(?<!\S)verb\.door\.lock=4(?!\S)'
     Expect 'refused uses are on record' $journal '(?<!\S)verb\.door\.use!=5(?!\S)'
     Expect 'and the locker that would not open, and the crate behind a wall' $journal '(?<!\S)verb\.container\.open!=2(?!\S)'
-    Expect 'the operator is on record too' $journal '(?<!\S)operator\.whitelist=1(?!\S)'
+    Expect 'the operator is on record too, appointing him' $journal '(?<!\S)operator\.faction=1(?!\S)'
     Expect 'and so is what staff did to a door' $journal '(?<!\S)door\.assign=1(?!\S).*(?<!\S)door\.release=1(?!\S)'
-    Expect 'every character made, and every one refused' $journal '(?<!\S)character\.create=3(?!\S).*(?<!\S)character\.create!=3(?!\S)|(?<!\S)character\.create!=3(?!\S).*(?<!\S)character\.create=3(?!\S)'
+    Expect 'every character made, and every one refused' $journal '(?<!\S)character\.create=3(?!\S).*(?<!\S)character\.create!=4(?!\S)|(?<!\S)character\.create!=4(?!\S).*(?<!\S)character\.create=3(?!\S)'
     Expect 'the refused deletion and the allowed one' $journal '(?<!\S)character\.delete!=1(?!\S).*(?<!\S)character\.delete=1(?!\S)'
     Expect 'the death, the retirement and the restore' $journal '(?<!\S)character\.death=1(?!\S).*(?<!\S)character\.retire=1(?!\S).*(?<!\S)operator\.restore=1(?!\S)'
     Expect 'someone left lying is acted on like anyone else, on the record' $journal '(?<!\S)verb\.person\.finish=1(?!\S)'
