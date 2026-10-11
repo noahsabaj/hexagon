@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Hexagon.Logic;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -58,14 +59,14 @@ public sealed class LawTests
 		};
 		foreach ( var (definition, width, height, x, y) in layout )
 			character.Inventory.Items.Add( new ItemStack { Id = Guid.NewGuid(), Definition = definition, Width = width, Height = height, X = x, Y = y } );
-		transfers.IssueTokens( Sources.CharacterStart, character, 40, Actor.Of( character ) );
 		var carried = character.Inventory.Items.Select( item => item.Id ).ToArray();
+		character.Equipped = carried[1];
 		var body = new HolderData { Id = Guid.NewGuid(), Kind = HolderKinds.Corpse, Inventory = new InventoryData { Width = 6, Height = 4 } };
 
 		Assert.IsTrue( transfers.MoveAll( character, body, Actor.Of( character ) ).Ok );
 
 		Assert.IsEmpty( character.Inventory.Items, "nothing stays on the dead" );
-		Assert.AreEqual( (0L, 40L), (character.Tokens, body.Tokens) );
+		Assert.IsNull( character.Equipped, "not even in their hand" );
 		CollectionAssert.AreEquivalent( carried, body.Inventory.Items.Select( item => item.Id ).ToArray(), "each is the same object it was" );
 		Assert.AreEqual( 10, journal.Read( Now ).Count( entry => entry.Kind == "item.move" && entry.Ok ) );
 	}
@@ -80,7 +81,7 @@ public sealed class LawTests
 		const string Round = "items/pistol_round.item";
 		int Held( IHolder holder ) => holder.Inventory.Items.Where( item => item.Definition == Round ).Sum( item => item.Count );
 
-		Assert.IsTrue( transfers.Issue( Sources.CharacterStart, alice, Round, 1, 1, Actor.Console, count: 30, max: 30 ).Ok );
+		Assert.IsTrue( transfers.Issue( Sources.Scene, alice, Round, 1, 1, Actor.Console, count: 30, max: 30 ).Ok );
 		Assert.HasCount( 1, alice.Inventory.Items, "thirty rounds are one slot" );
 		Assert.AreEqual( ErrorCode.Conflict, transfers.Issue( Sources.Operator, alice, Round, 1, 1, Actor.Console, count: 31, max: 30 ).Code, "two more slots are not there" );
 		Assert.AreEqual( 30, Held( alice ), "a refused issue leaves nothing behind" );
@@ -114,39 +115,55 @@ public sealed class LawTests
 	}
 
 	[TestMethod]
-	public void TheTokenSupplyIsTheJournalsIssuesMinusItsDestroys()
+	public void AKeyFitsEveryLockCutToItsPatternAndShowsOnlyItsCut()
 	{
 		var journal = new Journal( new MemoryFiles(), () => Now );
 		var transfers = new Transfers( journal );
-		var alice = Holder();
-		var bob = Holder();
+		var alice = Holder( 3, 1 );
+		var bob = Holder( 3, 1 );
+		const string Key = "items/key.item";
+		var city = transfers.Issue( Sources.Operator, alice, Key, 1, 1, Actor.Console, max: 5, pattern: "city" ).Value;
+		var flat = transfers.Issue( Sources.Operator, alice, Key, 1, 1, Actor.Console, max: 5, pattern: "flat2" ).Value;
 
-		Assert.IsTrue( transfers.IssueTokens( Sources.CharacterStart, alice, 100, Actor.Of( alice ) ).Ok );
-		Assert.IsTrue( transfers.MoveTokens( alice, bob, 30, Actor.Of( alice ) ).Ok );
-		Assert.AreEqual( ErrorCode.Conflict, transfers.MoveTokens( alice, bob, 71, Actor.Of( alice ) ).Code, "no debt" );
-		Assert.AreEqual( ErrorCode.Invalid, transfers.MoveTokens( bob, alice, -30, Actor.Of( bob ) ).Code, "a negative gift is a theft" );
-		Assert.AreEqual( ErrorCode.Invalid, transfers.MoveTokens( alice, alice, 5, Actor.Of( alice ) ).Code );
-		Assert.IsTrue( transfers.DestroyTokens( Sinks.Property, bob, 10, Actor.Of( bob ) ).Ok );
+		Assert.HasCount( 2, alice.Inventory.Items, "keys cut differently never pile up" );
+		Assert.AreEqual( ErrorCode.Conflict, transfers.Merge( alice, flat.Id, city.Id, Actor.Of( alice ) ).Code, "nor can they be put together" );
+		Assert.AreEqual( "city", journal.Read( Now ).First( entry => entry.Kind == "item.issue" ).Data["pattern"], "a key is issued on the record with its pattern" );
+		Assert.IsTrue( Keys.Opens( alice.Inventory, "city" ) );
+		Assert.IsTrue( Keys.Opens( alice.Inventory, "CITY" ), "a pattern is not a spelling" );
+		Assert.IsFalse( Keys.Opens( alice.Inventory, "ministry" ) );
+		Assert.IsFalse( Keys.Opens( alice.Inventory, "" ), "a lock with no pattern has no keyhole" );
 
-		long Sum( string kind ) => journal.Read( Now ).Where( entry => entry.Kind == kind ).Sum( entry => long.Parse( entry.Data["amount"] ) );
-		Assert.AreEqual( 90, alice.Tokens + bob.Tokens );
-		Assert.AreEqual( alice.Tokens + bob.Tokens, Sum( "tokens.issue" ) - Sum( "tokens.destroy" ) );
+		alice.Equipped = city.Id;
+		Assert.IsTrue( transfers.Move( alice, bob, city.Id, Actor.Of( alice ) ).Ok );
+		Assert.IsNull( alice.Equipped, "what left her hand is no longer in it" );
+		Assert.IsFalse( Keys.Opens( alice.Inventory, "city" ) );
+		Assert.IsTrue( Keys.Opens( bob.Inventory, "city" ), "the cut goes with the key" );
+
+		var seen = Keys.AsSeen( bob.Inventory ).Items.Single();
+		Assert.AreEqual( Keys.Cut( "city" ), seen.Pattern, "a player is shown the cut" );
+		Assert.AreEqual( "city", bob.Inventory.Items.Single().Pattern, "and showing it changes nothing" );
+		Assert.IsTrue( Regex.IsMatch( seen.Pattern!, "^[1-7](-[1-7]){4}$" ), seen.Pattern );
+		Assert.AreEqual( Keys.Cut( "City" ), Keys.Cut( "city" ) );
+		Assert.AreNotEqual( Keys.Cut( "flat2" ), Keys.Cut( "city" ) );
+
+		Assert.AreEqual( "flat2", Keys.Pattern( "  Flat2 " ).Value );
+		Assert.AreEqual( ErrorCode.Invalid, Keys.Pattern( "two words" ).Code );
+		Assert.AreEqual( ErrorCode.Invalid, Keys.Pattern( " " ).Code );
 	}
 
 	[TestMethod]
-	public void DeletingAHolderSendsEverythingItHadThroughASink()
+	public void RetiringACharacterSendsEverythingItHadThroughASink()
 	{
 		var journal = new Journal( new MemoryFiles(), () => Now );
 		var transfers = new Transfers( journal );
 		var alice = Holder();
-		transfers.Issue( Sources.CharacterStart, alice, "items/ration.item", 1, 1, Actor.Of( alice ) );
-		transfers.IssueTokens( Sources.CharacterStart, alice, 100, Actor.Of( alice ) );
+		transfers.Issue( Sources.Operator, alice, "items/ration.item", 1, 1, Actor.Console );
+		transfers.Issue( Sources.Operator, alice, "items/token.item", 1, 1, Actor.Console, count: 40, max: 100 );
 
-		transfers.DestroyAll( Sinks.CharacterDeleted, alice, Actor.Of( alice ) );
+		transfers.DestroyAll( Sinks.CharacterRetired, alice, Actor.Of( alice ) );
 
 		Assert.IsEmpty( alice.Inventory.Items );
-		Assert.AreEqual( 0, alice.Tokens );
-		Assert.AreEqual( 2, journal.Read( Now ).Count( entry => entry.Data.GetValueOrDefault( "sink" ) == Sinks.CharacterDeleted ) );
+		Assert.AreEqual( 41, journal.Read( Now ).Where( entry => entry.Data.GetValueOrDefault( "sink" ) == Sinks.CharacterRetired ).Sum( entry => int.Parse( entry.Data["count"] ) ) );
 	}
 
 	[TestMethod]
@@ -210,30 +227,6 @@ public sealed class LawTests
 	}
 
 	[TestMethod]
-	public void ASaleMovesTheItemAndTheTokensTogetherOrNeither()
-	{
-		var journal = new Journal( new MemoryFiles(), () => Now );
-		var transfers = new Transfers( journal );
-		var shop = new HolderData { Id = Guid.NewGuid(), Kind = HolderKinds.Vendor, Inventory = new InventoryData { Width = 4, Height = 4 } };
-		var alice = Holder( 1, 1 );
-		transfers.IssueTokens( Sources.CharacterStart, alice, 15, Actor.Of( alice ) );
-		var ration = transfers.Issue( "vendor.restock", shop, "items/ration.item", 1, 1, Actor.Console ).Value;
-		var second = transfers.Issue( "vendor.restock", shop, "items/ration.item", 1, 1, Actor.Console ).Value;
-
-		Assert.AreEqual( 10, Trade.Price( 10, 1f ) );
-		Assert.AreEqual( 5, Trade.Price( 9, 0.5f ), "prices round up, never to nothing" );
-		Assert.AreEqual( ErrorCode.Conflict, Trade.Sell( transfers, shop, alice, ration.Id, 20, Actor.Of( alice ) ).Code, "she cannot afford it" );
-		Assert.AreEqual( 15, alice.Tokens );
-		Assert.IsTrue( Trade.Sell( transfers, shop, alice, ration.Id, 10, Actor.Of( alice ) ).Ok );
-		Assert.AreEqual( (5L, 10L), (alice.Tokens, shop.Tokens) );
-		Assert.AreEqual( ErrorCode.Conflict, Trade.Sell( transfers, shop, alice, second.Id, 5, Actor.Of( alice ) ).Code, "no room" );
-		Assert.AreEqual( (5L, 10L), (alice.Tokens, shop.Tokens), "and so no payment" );
-		Assert.AreEqual( ErrorCode.Conflict, Trade.Sell( transfers, alice, shop, ration.Id, 11, Actor.Of( alice ) ).Code, "the till cannot pay what it does not hold" );
-		Assert.IsTrue( Trade.Sell( transfers, alice, shop, ration.Id, 5, Actor.Of( alice ) ).Ok );
-		Assert.AreEqual( 15, alice.Tokens + shop.Tokens, "a sale creates no tokens" );
-	}
-
-	[TestMethod]
 	public void TheJournalCanBeSearchedAndReadsAsSentences()
 	{
 		var journal = new Journal( new MemoryFiles(), () => Now );
@@ -276,12 +269,12 @@ public sealed class LawTests
 	[TestMethod]
 	public void CapabilitiesAreGrantedByNameOrPrefixAndDenialWins()
 	{
-		Assert.IsTrue( Capabilities.Can( Capability.DoorLock, new[] { "door.lock" } ) );
-		Assert.IsTrue( Capabilities.Can( Capability.DoorLock, new[] { "door.*" } ) );
-		Assert.IsTrue( Capabilities.Can( Capability.DoorLock, new[] { "*" } ) );
-		Assert.IsFalse( Capabilities.Can( Capability.DoorLock, new[] { "door" } ) );
-		Assert.IsFalse( Capabilities.Can( Capability.DoorLock, new[] { "doors.*", "door.locksmith" } ) );
-		Assert.IsFalse( Capabilities.Can( Capability.DoorLock, Array.Empty<string>() ) );
-		Assert.IsFalse( Capabilities.Can( Capability.DoorLock, new[] { "*" }, denied: new[] { "door.*" } ), "restraints beat rank" );
+		Assert.IsTrue( Capabilities.Can( Capability.Restrain, new[] { "person.restrain" } ) );
+		Assert.IsTrue( Capabilities.Can( Capability.Restrain, new[] { "person.*" } ) );
+		Assert.IsTrue( Capabilities.Can( Capability.Restrain, new[] { "*" } ) );
+		Assert.IsFalse( Capabilities.Can( Capability.Restrain, new[] { "person" } ) );
+		Assert.IsFalse( Capabilities.Can( Capability.Restrain, new[] { "persons.*", "person.restrainer" } ) );
+		Assert.IsFalse( Capabilities.Can( Capability.Restrain, Array.Empty<string>() ) );
+		Assert.IsFalse( Capabilities.Can( Capability.Restrain, new[] { "*" }, denied: new[] { "person.*" } ), "a denial beats any grant" );
 	}
 }

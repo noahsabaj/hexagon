@@ -147,7 +147,17 @@ public static class DevCommands
 			// Everything saved, as one line, so a test can compare a server with a copy of it.
 			if ( GameManager.Instance is not { Roster: { } roster, Holders: { } holders } ) return "no roster";
 			return "characters=[" + string.Join( ", ", roster.All.OrderBy( value => value.Name ).Select( value =>
-				$"{value.Name}:{value.Tokens}t:{value.Inventory.Items.Sum( item => item.Count )}i:{value.Health}hp:{value.Known.Count}known" ) ) + $"] holders={holders.Count}";
+				$"{value.Name}:{value.Inventory.Items.Sum( item => item.Count )}i:{value.Health}hp:{value.Known.Count}known{(value.IsDead ? ":dead" : string.Empty)}" ) ) + $"] holders={holders.Count}";
+		}
+		if ( args[0] == "policy" )
+		{
+			// policy alone says what the game's rules on lives are. policy|living|<n> or policy|hours|<n>
+			// changes one, so a test on one account can play more than one life at a time.
+			if ( !Networking.IsHost || GameManager.Instance is not { } game ) return "refused: not the host";
+			if ( args.Length > 2 && args[1] == "living" ) game.LivingCharacters = int.Parse( args[2] );
+			else if ( args.Length > 2 && args[1] == "hours" ) game.NewLifeHours = float.Parse( args[2], System.Globalization.CultureInfo.InvariantCulture );
+			else if ( args.Length > 1 && !args[1].StartsWith( '#' ) ) return $"unknown policy '{args[1]}'";
+			return $"death={game.Death} living={game.LivingCharacters} hours={game.NewLifeHours}";
 		}
 		if ( args[0] == "journal" )
 		{
@@ -194,6 +204,11 @@ public static class DevCommands
 					if ( doomed is null ) return "no such character";
 					player.RequestDeleteCharacter( doomed.Id );
 					return "sent delete";
+				case "retire":
+					var retiring = player.Characters.FirstOrDefault( value => value.Name == args[1] );
+					if ( retiring is null ) return "no such character";
+					player.RequestRetireCharacter( retiring.Id );
+					return "sent retire";
 				case "say":
 					player.RequestSay( args[1] );
 					return "sent say";
@@ -261,9 +276,8 @@ public static class DevCommands
 					player.RequestAct( lying, "item.take" );
 					return "sent pickup";
 				case "open":
-					Component? container = Game.ActiveScene.GetAllComponents<Container>().FirstOrDefault( value => value.GameObject.Name == args[1] );
-					container ??= Game.ActiveScene.GetAllComponents<Vendor>().FirstOrDefault( value => value.GameObject.Name == args[1] );
-					if ( container is null ) return "no such container or vendor";
+					var container = Game.ActiveScene.GetAllComponents<Container>().FirstOrDefault( value => value.GameObject.Name == args[1] );
+					if ( container is null ) return "no such container";
 					player.RequestAct( container, ((IVerbTarget)container).Verbs[0].Id );
 					return "sent open";
 				case "take":
@@ -296,17 +310,26 @@ public static class DevCommands
 					if ( inHand is null ) return "no such item";
 					player.RequestItemAct( inHand.Id, "item.equip" );
 					return "sent equip";
-				case "pay":
-					var payee = Nearest( player, Others( player ) );
-					if ( payee is null ) return "nobody there";
-					player.RequestPay( payee, long.Parse( args[1] ) );
-					return "sent pay";
+				case "offer":
+					// offer|<item index>|<count> offers some of a pile to the nearest other character.
+					var gift = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
+					var taker = Nearest( player, Others( player ) );
+					if ( gift is null || taker is null ) return gift is null ? "no such item" : "nobody there";
+					player.RequestOffer( taker, gift.Id, args.Length > 2 ? int.Parse( args[2] ) : gift.Count );
+					return "sent offer";
+				case "offerdoor":
+					// offerdoor|<door name> offers the title to a door this character holds.
+					var deed = player.OwnedDoors.FirstOrDefault( value => value.Name == args[1] );
+					var buyer = Nearest( player, Others( player ) );
+					if ( deed is null || buyer is null ) return deed is null ? $"no such door owned: {string.Join( ", ", player.OwnedDoors.Select( value => value.Name ) )}" : "nobody there";
+					player.RequestOfferDoor( buyer, deed.Id );
+					return "sent offerdoor";
+				case "answer":
+					player.RequestAnswerOffer( args[1] == "1" );
+					return "sent answer";
 				case "staff":
 					player.RequestStaff( args[1] );
 					return "sent staff";
-				case "taketokens":
-					player.RequestTakeTokens();
-					return "sent taketokens";
 				case "introduce":
 					var stranger = Nearest( player, Others( player ) );
 					if ( stranger is null ) return "nobody to meet";
@@ -330,11 +353,12 @@ public static class DevCommands
 					return string.Join( " ", Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsShown )
 						.Select( value => $"{value.WorldPosition.x:0},{value.WorldPosition.y:0},{(value.IsDown ? "down" : "bound")}" ) );
 				case "state":
-					return $"has={player.HasCharacter} name='{player.CharacterName}' faction='{player.Faction?.Title}' tokens={player.Tokens} " +
-						$"characters=[{string.Join( ", ", player.Characters.Select( value => value.Name ) )}] " +
+					return $"has={player.HasCharacter} name='{player.CharacterName}' faction='{player.Faction?.Title}' " +
+						$"characters=[{string.Join( ", ", player.Characters.Select( value => value.Name + (value.IsDead ? "(dead)" : value.IsWaiting ? "(waits)" : string.Empty) ) )}] " +
 						$"items=[{string.Join( ", ", player.Inventory?.Items.Select( value => $"{Pile( value )}@{value.X},{value.Y}" ) ?? Array.Empty<string>() )}] " +
-						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked}{(value.IsOwned ? ",owned" : "")}" ) )}] " +
-						$"health={player.Health} down={player.IsDown} restrained={player.IsRestrained} held='{ItemDefinition.Find( player.HeldItemPath )?.Title}' bodies={Game.ActiveScene.GetAllComponents<Corpse>().Count()} opentokens={player.OpenTokens} " +
+						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked}" ) )}] " +
+						$"owned=[{string.Join( ", ", player.OwnedDoors.Select( value => value.Name ) )}] offer='{player.OfferText}' " +
+						$"health={player.Health} down={player.IsDown} restrained={player.IsRestrained} held='{ItemDefinition.Find( player.HeldItemPath )?.Title}' bodies={Game.ActiveScene.GetAllComponents<Corpse>().Count()} " +
 						$"staff={player.IsStaff} said=[{string.Join( " / ", player.StaffLines.TakeLast( 4 ) )}] " +
 						$"known=[{string.Join( ", ", player.Known.Values.OrderBy( value => value ) )}] " +
 						$"open=[{player.OpenTitle}: {string.Join( ", ", player.OpenInventory?.Items.Select( Pile ) ?? Array.Empty<string>() )}] " +
@@ -358,5 +382,5 @@ public static class DevCommands
 		candidates.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();
 
 	private static string Pile( Hexagon.Logic.ItemStack value ) =>
-		$"{ItemDefinition.Find( value.Definition )?.Title}{(value.Count > 1 ? $"x{value.Count}" : string.Empty)}{(value.Frequency is { } frequency ? $"~{frequency}" : string.Empty)}";
+		$"{ItemDefinition.Find( value.Definition )?.Title}{(value.Count > 1 ? $"x{value.Count}" : string.Empty)}{(value.Frequency is { } frequency ? $"~{frequency}" : string.Empty)}{(value.Pattern is { } cut ? $"#{cut}" : string.Empty)}";
 }

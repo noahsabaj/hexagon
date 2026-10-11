@@ -23,9 +23,6 @@ public sealed class ItemDefinition : GameResource
 	/// <summary>How many share one inventory slot. One means each is its own object, followed by id.</summary>
 	[Property, Range( 1, 100 )] public int MaxStack { get; set; } = 1;
 
-	/// <summary>What it is worth in tokens. Vendors price from this.</summary>
-	[Property] public long Value { get; set; }
-
 	/// <summary>Using it uses it up: food, drink, a bandage.</summary>
 	[Property] public bool Consumable { get; set; }
 	/// <summary>The button for using it, such as "Eat".</summary>
@@ -47,12 +44,21 @@ public sealed class ItemDefinition : GameResource
 	/// <summary>It carries speech to every other radio tuned the same. See <see cref="Chat"/>.</summary>
 	[Property] public bool IsRadio { get; set; }
 
-	/// <summary>What holding this lets a character do. A key is an item that grants <c>door.lock</c>.</summary>
+	/// <summary>
+	/// It is a key. Each one is cut to a pattern, which it carries, and fits every lock with that
+	/// pattern: a door's or a container's. See <see cref="Keys"/>.
+	/// </summary>
+	[Property] public bool IsKey { get; set; }
+
+	/// <summary>What holding this lets a character do, such as <c>person.restrain</c> for a zip tie.</summary>
 	[Property] public List<string> Grants { get; set; } = new();
 
-	/// <summary>Host: new ones enter the world from a named source. All of them arrive or none do.</summary>
-	public Result<ItemStack> IssueTo( Transfers transfers, string source, IHolder to, Actor by, int count = 1 ) =>
-		transfers.Issue( source, to, ResourcePath, Width, Height, by, count, MaxStack );
+	/// <summary>Host: new ones enter the world from a named source, a key already cut to its pattern. All of them arrive or none do.</summary>
+	public Result<ItemStack> IssueTo( Transfers transfers, string source, IHolder to, Actor by, int count = 1, string? pattern = null )
+	{
+		if ( pattern is not null && !IsKey ) return Result<ItemStack>.Fail( ErrorCode.Invalid, $"{Title} is not a key, so it is cut to nothing." );
+		return transfers.Issue( source, to, ResourcePath, Width, Height, by, count, MaxStack, pattern );
+	}
 
 	public static ItemDefinition? Find( string path ) =>
 		ResourceLibrary.TryGet<ItemDefinition>( path, out var definition ) ? definition : null;

@@ -22,6 +22,9 @@ $endpoint = 'http://127.0.0.1:7269/mcp'
 $hud = 'b7200000-0000-4000-8000-000000000001'
 $dataRoot = "playtest-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
 $description = "A tired resident of the city."
+# What the inventory shows of a key: its cut, worked out from the pattern the scene gives each lock.
+$cityCut = '1-4-6-3-2'
+$flatCut = '5-3-3-2-7'
 
 if (Get-Process -Name 'sbox-dev' -ErrorAction SilentlyContinue) { throw 'Close the s&box editor first.' }
 
@@ -176,24 +179,25 @@ try {
     Snapshot 'characters'
     [void](Send "create|John Doe|$description|citizen")
     [void](Send "create|J0hn Doe|$description|citizen")
+    Expect 'an account lives one life at a time' (Send 'state') 'characters=\[John Doe\].*You already have a living character'
+    # One account plays both sides here, so this city allows two lives at once.
+    Expect 'a game may allow more' (Send 'policy|living|2') 'living=2'
+    [void](Send "create|J0hn Doe|$description|citizen")
     [void](Send "create|Officer Kane|$description|civil_protection")
     $state = Send 'state'
-    Expect 'the character was created, its look-alike was not' $state 'characters=\[John Doe\]'
-    Expect 'the look-alike name was refused with a reason' $state 'reads like it'
+    Expect 'the look-alike name was refused with a reason' $state 'characters=\[John Doe\].*reads like it'
     Expect 'a whitelisted faction refused an unlisted account' $state 'not whitelisted for Civil Protection'
 
     Write-Host '==> Entering the city, chat, inventory' -ForegroundColor Cyan
     [void](Send 'enter|John Doe')
     [void](Send 'delete|John Doe')
-    Expect 'a character in the city cannot be deleted' (Send 'state') 'characters=\[John Doe\].*Leave the city with that character before deleting it'
+    Expect 'a character that has lived is not deleted' (Send 'state') 'characters=\[John Doe\].*has lived in the city'
     [void](Send 'say|Hello there')
     [void](Send 'say|/me waves')
     [void](Send 'say|//brb')
-    [void](Send 'move|0|4|3')
     $state = Send 'state'
-    Expect 'the owner was told its own name and faction' $state "has=True name='John Doe' faction='Citizen' tokens=100"
-    Expect 'the faction asset granted starting items' $state 'Water@'
-    Expect 'an item moved to the requested cell' $state 'Ration@4,3'
+    Expect 'the owner was told its own name and faction' $state "has=True name='John Doe' faction='Citizen' "
+    Expect 'a new character arrives with nothing but its clothes' $state 'items=\[\] '
     Expect 'speech, emote and out-of-character lines were delivered' $state 'John Doe says "Hello there" / \*\* John Doe waves / \[OOC\] [^:/]+: brb'
 
     Write-Host '==> Doors' -ForegroundColor Cyan
@@ -221,13 +225,14 @@ try {
     $state = Send 'state'
     Expect 'a door in reach opened' $state 'Door 1:open=True,locked=False'
     Expect 'a door authored as locked stayed shut' $state 'Door 2:open=False,locked=True.*The door is locked'
-    Expect 'a citizen could not lock a door' $state 'nothing that lets you do that'
+    Expect 'without a key, nobody locks a door' $state 'You have no key that fits'
 
-    Write-Host '==> A key is an item' -ForegroundColor Cyan
-    [void](Send 'console|hexagon_give "John Doe" keycard')
+    Write-Host '==> A key is an item, cut to its lock' -ForegroundColor Cyan
+    [void](Send 'console|hexagon_give "John Doe" keycard 1 city')
     [void](Send 'door|Door 1|lock')
     $state = Send 'state'
-    Expect 'an operator issued a keycard' $state 'Keycard@'
+    Expect 'an operator issued a keycard cut to the city''s locks, and its holder sees its cut' $state "items=\[Keycard#$cityCut@0,0\]"
+    Expect 'never the pattern, which would say what it opens' "$($state -notmatch '#city') $state" '^True '
     Expect 'holding the keycard let a citizen lock the door' $state 'Door 1:open=False,locked=True'
     # A closed door is a wall. One step through it is no faster than walking, and is still refused.
     Start-Sleep -Seconds 2
@@ -236,35 +241,38 @@ try {
     Expect 'stepping through the locked door did not get past it' (Send 'state') 'pos=2[2-5]\d\.?\d*,-1[2-6]\d'
     Expect 'and the host recorded it as a wall' (Send 'journal|movement.implausible') 'ok=False .*reason=wall'
     [void](Send 'door|Door 1|lock')
-    [void](Send 'drop|2')
+    [void](Send 'drop|0')
     [void](Send 'door|Door 1|lock')
     $state = Send 'state'
-    Expect 'the dropped keycard left the inventory' "$($state -notmatch 'Keycard@')" 'True'
+    Expect 'the dropped keycard left the inventory' $state 'items=\[\] '
     Expect 'and lies in the world' $state 'ground=\[Keycard\]'
-    Expect 'without the keycard the door stayed unlocked' $state 'Door 1:open=False,locked=False.*nothing that lets you do that'
+    Expect 'without the keycard the door stayed unlocked' $state 'Door 1:open=False,locked=False.*no key that fits'
 
-    Write-Host '==> Holders: the ground, a crate' -ForegroundColor Cyan
+    Write-Host '==> Holders: the ground, a stocked crate' -ForegroundColor Cyan
     [void](Send 'pickup|Keycard')
-    $state = Send 'state'
-    Expect 'picking it up is the same transfer in reverse' $state 'Keycard@.*ground=\[\]'
+    Expect 'picking it up is the same transfer in reverse' (Send 'state') "Keycard#$cityCut@0,0.*ground=\[\]"
     [void](Send 'open|Crate')
-    [void](Send 'put|2')
+    Expect 'the crate holds what its author stocked it with, placed the first time it is opened' (Send 'state') 'open=\[Crate: Rationx4, Waterx2, Bandagex2, Tokenx40\]'
+    foreach ($pile in 1..4) { [void](Send 'take|0') }
+    Expect 'whole piles are taken whole, money with the rest' (Send 'state') "items=\[Keycard#$cityCut@0,0, Rationx4@1,0, Waterx2@2,0, Bandagex2@3,0, Tokenx40@4,0\] .*open=\[Crate: \]"
+    [void](Send 'put|0')
     [void](Send 'door|Door 1|lock')
     $state = Send 'state'
-    Expect 'the crate shows its contents to whoever opened it' $state 'open=\[Crate: Keycard\]'
-    Expect 'a keycard in a crate grants nothing' "$($state -notmatch 'Keycard@') $state" '^True .*Door 1:open=False,locked=False'
+    Expect 'the crate shows its contents to whoever opened it' $state "open=\[Crate: Keycard#$cityCut\]"
+    Expect 'a keycard in a crate opens nothing' "$($state -notmatch 'items=\[[^\]]*Keycard') $state" '^True .*Door 1:open=False,locked=False'
     [void](Send 'use|1')
-    $state = Send 'state'
-    Expect 'drinking used the water up, in view of anyone nearby' "$($state -notmatch 'Water@') $state" '^True .*John Doe drinks from a can of water'
+    Expect 'drinking used one water up, in view of anyone nearby' (Send 'state') 'Water@2,0.*John Doe drinks from a can of water'
+    [void](Send 'move|0|4|3')
+    Expect 'an item moved to the requested cell' (Send 'state') 'Rationx4@4,3'
     [void](Send 'close')
     Expect 'the crate closed' (Send 'state') 'open=\[: \]'
 
     Write-Host '==> Harm, and being down' -ForegroundColor Cyan
     [void](Send 'console|hexagon_hurt "John Doe" 40')
-    [void](Send 'console|hexagon_give "John Doe" bandage')
     Expect 'harm lowered health' (Send 'state') 'health=60 down=False'
-    [void](Send 'use|1')
-    Expect 'a bandage treated it and was used up' (Send 'state') 'health=90 .*binds a wound'
+    Snapshot 'hurt'
+    [void](Send 'use|2')
+    Expect 'a bandage treated it and was used up' (Send 'state') 'Bandage@3,0.*health=90 .*binds a wound'
     [void](Send 'console|hexagon_hurt "John Doe" 500')
     [void](Send 'door|Door 1|use')
     [void](Send 'leave')
@@ -272,26 +280,30 @@ try {
     Expect 'at no health the character is down, not dead' $state 'has=True .*health=0 down=True'
     Expect 'someone who is down cannot leave the city' $state 'cannot leave the city like this'
     Expect 'or act on the world' (Send 'journal|verb.door.use') 'ok=False'
+    Snapshot 'down'
     [void](Send 'console|hexagon_revive "John Doe"')
     Expect 'helped up, barely' (Send 'state') 'health=25 down=False'
 
-    Write-Host '==> Commerce: tokens and goods only move' -ForegroundColor Cyan
-    [void](Send 'door|Door 2|buy')
+    Write-Host '==> Owning a door is title; its lock takes its key' -ForegroundColor Cyan
+    [void](Send 'console|hexagon_door "Door 2" assign "John Doe"')
     [void](Send 'door|Door 2|lock')
     $state = Send 'state'
-    Expect 'buying a door paid its price into a sink' $state 'tokens=50 .*Door 2:open=False,locked=False,owned'
-    [void](Send 'console|hexagon_door "Door 2" release')
-    Expect 'staff can take a door back from its owner' (Send 'state') 'Door 2:open=False,locked=False\]'
-    [void](Send 'open|Ration Vendor')
-    Expect 'the vendor stocked its shelves from its declared source, and has a float' (Send 'state') 'opentokens=200 .*open=\[Ration Vendor: Rationx3, Waterx3, Bandagex3\]'
-    Snapshot 'vendor'
+    Expect 'staff assigned the flat to him' $state 'owned=\[Door 2\]'
+    Expect 'but owning it is not holding its key' $state 'Door 2:open=False,locked=True.*You have no key that fits'
+    [void](Send 'open|Locker')
+    Expect 'a locked locker opens only to a key that fits' (Send 'state') 'It is locked, and you have no key that fits'
+    [void](Send 'open|Crate')
     [void](Send 'take|0')
-    Expect 'taking from a vendor is buying one, which joins the pile' (Send 'state') 'tokens=40 .*Rationx2@4,3.*opentokens=210 .*open=\[Ration Vendor: Rationx2,'
-    [void](Send 'put|0')
-    Expect 'putting is selling one, at the vendor''s price' (Send 'state') 'tokens=45 .*Ration@4,3.*opentokens=205'
-    [void](Send 'taketokens')
-    Expect 'the till is not a body to be looted' (Send 'state') 'tokens=45 .*The till is not yours'
+    [void](Send 'open|Locker')
+    Expect 'the city keycard opens the locker, stocked as its author placed it' (Send 'state') "open=\[Locker: Pistol, Pistol roundx30, Zip tiex2, Radio, Keycard#$cityCut, Key#$flatCut\]"
+    [void](Send 'take|5')
+    [void](Send 'door|Door 2|lock')
+    [void](Send 'door|Door 2|use')
+    Expect 'the spare key from the locker turned the flat''s lock' (Send 'state') "Key#$flatCut@1,0.*Door 2:open=True,locked=False\] owned=\[Door 2\]"
+    Snapshot 'locker'
     [void](Send 'close')
+    [void](Send 'console|hexagon_door "Door 2" release')
+    Expect 'staff can take a title back' (Send 'state') 'owned=\[\]'
 
     Write-Host '==> Staff work in game, on the record' -ForegroundColor Cyan
     $steamId = Send 'steamid'
@@ -304,9 +316,9 @@ try {
     Snapshot 'staff'
     [void](Send 'panel|none')
     [void](Send 'staff|give "John Doe" radio')
-    Expect 'a staff command does what the console command does' (Send 'state') 'Radio@.*said=\[Gave Radio to John Doe\.\]'
-    [void](Send 'staff|journal door.buy')
-    Expect 'staff can read the journal' (Send 'state') 'said=\[\d\d:\d\d:\d\d verb\.door\.buy by John Doe on Door:'
+    Expect 'a staff command does what the console command does' (Send 'state') 'Radio@0,1.*said=\[Gave Radio to John Doe\.\]'
+    [void](Send 'staff|journal door.assign')
+    Expect 'staff can read the journal' (Send 'state') 'said=\[\d\d:\d\d:\d\d door\.assign by console on Door:\w+ \(owner=John Doe\)'
     [void](Send 'staff|journal "REFUSED by John Doe (line=who)"')
     Expect 'including what staff themselves did, refusals too' (Send 'state') 'staff\.command REFUSED by John Doe \(line=who\)'
     [void](Send "console|hexagon_staff $steamId 0")
@@ -316,14 +328,20 @@ try {
     Write-Host '==> Radio' -ForegroundColor Cyan
     [void](Send 'say|/r hello')
     Expect 'an untuned radio carries nothing' (Send 'state') 'no radio tuned to anything'
-    [void](Send 'tune|1|55')
+    [void](Send 'tune|6|55')
     Expect 'a frequency outside the band is refused' (Send 'state') 'A frequency is between'
-    [void](Send 'tune|1|101.50')
+    [void](Send 'tune|6|101.50')
     [void](Send 'say|/r testing')
-    Expect 'the dial belongs to the radio, and the speaker hears themselves on it' (Send 'state') 'Radio~101\.5@.*\[101\.5\] John Doe: "testing"'
+    Expect 'the dial belongs to the radio, and the speaker hears themselves on it' (Send 'state') 'Radio~101\.5@0,1.*\[101\.5\] John Doe: "testing"'
 
-    Write-Host '==> Faction gate' -ForegroundColor Cyan
-    $steamId = Send 'steamid'
+    Write-Host '==> What is left in a crate is anyone''s' -ForegroundColor Cyan
+    [void](Send 'open|Crate')
+    [void](Send 'put|4')
+    [void](Send 'put|2')
+    Expect 'he left the keycard and a bandage in the crate' (Send 'state') "open=\[Crate: Keycard#$cityCut, Bandage\]"
+    [void](Send 'close')
+
+    Write-Host '==> A faction is people and a look' -ForegroundColor Cyan
     [void](Send 'leave')
     [void](Send "console|hexagon_whitelist $steamId civil_protection")
     [void](Send "create|Officer Kane|$description|civil_protection")
@@ -332,16 +350,22 @@ try {
     Start-Sleep -Seconds 1
     [void](Send 'door|Door 1|lock')
     $state = Send 'state'
-    [void](Send 'console|hexagon_payday')
-    Expect 'a wage is a declared faucet, paid to those at work' (Send 'state') 'tokens=120 .*You are paid 20 tokens'
     Expect 'the console whitelist unlocked the faction' $state "name='Officer Kane' faction='Civil Protection'"
-    Expect 'Civil Protection locked the door, which also shut it' $state 'Door 1:open=False,locked=True'
+    Expect 'he arrives with nothing, and his faction lets him lock nothing' $state 'items=\[\] .*Door 1:open=False,locked=False.*no key that fits'
+    [void](Send 'open|Crate')
+    [void](Send 'take|0')
+    [void](Send 'open|Locker')
+    foreach ($pile in 1..3) { [void](Send 'take|0') }
+    [void](Send 'close')
+    [void](Send 'door|Door 1|lock')
+    $state = Send 'state'
+    Expect 'with the keycard from the crate he locked the door, which also shut it' $state 'Door 1:open=False,locked=True'
     Expect 'a character put in the air comes down: a driven client still has a body' (Send 'state') 'pos=[-\d.]+,[-\d.]+,[0-4]\.'
-    Expect 'a pistol and thirty rounds fit in a starting inventory' $state 'Pistol@.*Pistol roundx30@.*Zip tiex2@'
-    [void](Send 'split|3|10')
-    Expect 'part of a pile can be set aside' (Send 'state') 'Pistol roundx20@.*Pistol roundx10@'
-    [void](Send 'merge|5|3')
-    [void](Send 'equip|2')
+    Expect 'a pistol and thirty rounds from the locker' $state "items=\[Keycard#$cityCut@0,0, Pistol@1,0, Pistol roundx30@3,0, Zip tiex2@4,0\]"
+    [void](Send 'split|2|10')
+    Expect 'part of a pile can be set aside' (Send 'state') 'Pistol roundx20@3,0.*Pistol roundx10@5,0'
+    [void](Send 'merge|4|2')
+    [void](Send 'equip|1')
     Expect 'what is in hand is appearance: everyone is sent it' (Send 'state') "held='Pistol'"
     [void](Send 'thirdperson|1')
     [void](Send 'face|330|-100|40')
@@ -361,7 +385,7 @@ try {
     [void](Send 'panel|inventory')
     Snapshot 'inventory'
     [void](Send 'panel|none')
-    Snapshot 'crate-and-vendor'
+    Snapshot 'crate-and-locker'
     Expect 'and put back' "$((Send 'state') -notmatch 'roundx10') $(Send 'state')" '^True .*Pistol roundx30@'
 
     Write-Host '==> Leaving does not end a scene' -ForegroundColor Cyan
@@ -379,36 +403,77 @@ try {
     $state = Send 'state'
     Expect 'both characters survived the restart' $state 'characters=\[John Doe, Officer Kane\]'
     Expect 'the locked door survived the restart' $state 'Door 1:open=False,locked=True'
-    Expect 'the released door is still nobody''s' $state 'Door 2:open=False,locked=False\]'
+    Expect 'and so did the open one' $state 'Door 2:open=True,locked=False'
     Expect 'a new session starts with an empty chat log' $state 'chat=\[\]'
+    Expect 'the game''s own rules are back: death is final, one life at a time, a day between' (Send 'policy') 'death=Permanent living=1 hours=24'
     [void](Send 'enter|John Doe')
     # What someone left lying looks like is sent only once the network has stopped sending it to those too far away.
     Start-Sleep -Seconds 3
     $state = Send 'state'
-    Expect 'the moved item survived the restart' $state 'Ration@4,3'
+    Expect 'what he carried survived the restart, keys cut as they were' $state "items=\[Rationx4@4,3, Water@2,0, Tokenx40@4,0, Key#$flatCut@1,0, Radio~101\.5@0,1\]"
+    Expect 'the title staff took back is still nobody''s' $state 'owned=\[\]'
     Expect 'whoever was down when the city closed is still lying there' $state 'sleepers=1 '
     Expect 'where he was when it closed, which only the closing save knew' (Send 'sleepers') '^3[23]\d,-(9\d|1[01]\d),down$'
-    [void](Send 'act|person.revive')
-    Expect 'and someone else can help them up, after which nobody is lying there' (Send 'state') 'sleepers=0 '
-    [void](Send 'open|Crate')
-    Expect 'what was put in the crate survived the restart' (Send 'state') 'open=\[Crate: Keycard\]'
     # The swinging door nudges the pawn, so this is a neighbourhood, not a point.
     Expect 'the character returned to where it stood' $state 'pos=2[2-5]\d\.?\d*,-1[2-6]\d'
+    [void](Send 'open|Crate')
+    Expect 'what was left in the crate survived the restart' (Send 'state') 'open=\[Crate: Bandage\]'
+    [void](Send 'close')
+
+    Write-Host '==> Death is final' -ForegroundColor Cyan
+    [void](Send 'act|person.finish')
+    Start-Sleep -Seconds 1
+    Expect 'someone left lying can be finished, and leaves a body' (Send 'state') 'bodies=1 .*sleepers=0 '
+    [void](Send 'act|corpse.search')
+    Expect 'what he carried is on the body' (Send 'state') "open=\[Body: Keycard#$cityCut, Pistol, Pistol roundx30, Zip tiex2\]"
+    [void](Send 'take|1')
+    [void](Send 'leave')
+    Expect 'the dead stay on the list, as dead' (Send 'state') 'characters=\[John Doe, Officer Kane\(dead\)\]'
+    [void](Send 'enter|Officer Kane')
+    Expect 'and nobody plays them again' (Send 'state') 'Officer Kane is dead\.'
+
+    Write-Host '==> A life is ended by retiring; the next one waits' -ForegroundColor Cyan
+    [void](Send "console|hexagon_staff $steamId 1")
+    [void](Send 'retire|John Doe')
+    Expect 'retiring is a death' (Send 'state') 'characters=\[John Doe\(dead\), Officer Kane\(dead\)\]'
+    [void](Send "create|Max Muster|$description|citizen")
+    [void](Send 'enter|Max Muster')
+    $state = Send 'state'
+    Expect 'the next character is made at once' $state 'characters=\[John Doe\(dead\), Officer Kane\(dead\), Max Muster\(waits\)\]'
+    Expect 'but enters the city a day after the death' $state 'Max Muster arrives in the city in 2[34] hours'
+    [void](Send 'staff|restore "Officer Kane"')
+    Expect 'staff restore nobody while the account has its living character' (Send 'state') 'said=\[Their account already has Max Muster alive\. That character is deleted or retired first\.\]'
+    [void](Send 'delete|Max Muster')
+    Expect 'one that never lived is deleted, freeing its name' (Send 'state') 'characters=\[John Doe\(dead\), Officer Kane\(dead\)\]'
+
+    Write-Host '==> Staff undo a death that broke the rules' -ForegroundColor Cyan
+    [void](Send 'staff|restore "Officer Kane"')
+    Expect 'he is alive again' (Send 'state') 'characters=\[John Doe\(dead\), Officer Kane\] .*said=\[Officer Kane is alive again'
+    [void](Send "console|hexagon_staff $steamId 0")
+    [void](Send 'enter|Officer Kane')
+    Start-Sleep -Seconds 1
+    $state = Send 'state'
+    Expect 'he gets up barely, with what was still on the body: what was taken stays taken' $state "items=\[Keycard#$cityCut@0,0, Pistol roundx30@3,0, Zip tiex2@4,0\] .*health=25 down=False .*bodies=0 "
+    Expect 'where the body lay' $state 'pos=3[23]\d\.?\d*,-(9\d|1[01]\d)'
 
     Write-Host '==> The journal' -ForegroundColor Cyan
     $journal = Send 'journal'
-    Expect 'tokens entered the world four times: two characters, a float, a wage' $journal 'tokens\.issue=4(\s|$)'
-    Expect 'every item came from a named source' $journal 'item\.issue=13(\s|$)'
-    Expect 'the drink went through a sink' $journal 'item\.destroy=2(\s|$)'
-    Expect 'refused locks are on record' $journal 'verb\.door\.lock!=3(\s|$)'
-    Expect 'refused uses are on record' $journal 'verb\.door\.use!=5(\s|$)'
-    Expect 'allowed acts are on record' $journal 'verb\.door\.lock=4(\s|$)'
-    Expect 'the money supply is what the journal says it is' $journal 'tokens\.destroy=1(\s|$)'
-    Expect 'the operator is on record too' $journal 'operator\.whitelist=1(\s|$)'
-    Expect 'and so is what staff did to a door' $journal 'door\.release=1(\s|$)'
-    Expect 'a refused deletion is on record' $journal 'character\.delete!=1(\s|$)'
-    Expect 'someone left lying is acted on like anyone else, on the record' $journal 'verb\.person\.revive=1(\s|$)'
-    Expect 'speech is on record' $journal 'chat\.say=1 .*chat\.me=3 .*chat\.ooc=1.*item\.move=5 .*item\.split=1 .*item\.merge=1'
+    Expect 'every item came from a named source: staff, or the scene as built' $journal '(?<!\S)item\.issue=12(?!\S)'
+    Expect 'what was used up, or went with a retired character, went through a sink' $journal '(?<!\S)item\.destroy=8(?!\S)'
+    Expect 'every hand-over is on record, bodies and restores included' $journal '(?<!\S)item\.move=23(?!\S)'
+    Expect 'refused locks are on record' $journal '(?<!\S)verb\.door\.lock!=5(?!\S)'
+    Expect 'allowed locks too' $journal '(?<!\S)verb\.door\.lock=4(?!\S)'
+    Expect 'refused uses are on record' $journal '(?<!\S)verb\.door\.use!=5(?!\S)'
+    Expect 'and the locker that would not open' $journal '(?<!\S)verb\.container\.open!=1(?!\S)'
+    Expect 'the operator is on record too' $journal '(?<!\S)operator\.whitelist=1(?!\S)'
+    Expect 'and so is what staff did to a door' $journal '(?<!\S)door\.assign=1(?!\S).*(?<!\S)door\.release=1(?!\S)'
+    Expect 'every character made, and every one refused' $journal '(?<!\S)character\.create=3(?!\S).*(?<!\S)character\.create!=3(?!\S)|(?<!\S)character\.create!=3(?!\S).*(?<!\S)character\.create=3(?!\S)'
+    Expect 'the refused deletion and the allowed one' $journal '(?<!\S)character\.delete!=1(?!\S).*(?<!\S)character\.delete=1(?!\S)'
+    Expect 'the death, the retirement and the restore' $journal '(?<!\S)character\.death=1(?!\S).*(?<!\S)character\.retire=1(?!\S).*(?<!\S)operator\.restore=1(?!\S)'
+    Expect 'someone left lying is acted on like anyone else, on the record' $journal '(?<!\S)verb\.person\.finish=1(?!\S)'
+    Expect 'the dead and the waiting were turned away at the gate' $journal '(?<!\S)city\.enter!=2(?!\S)'
+    Expect 'speech is on record' $journal '(?<!\S)chat\.say=1(?!\S).*(?<!\S)chat\.me=3(?!\S).*(?<!\S)chat\.ooc=1(?!\S)'
+    Expect 'and the rearranging of piles' $journal '(?<!\S)item\.split=1(?!\S).*(?<!\S)item\.merge=1(?!\S)'
     Expect 'this client was told no other name' (Send 'proxies') '^[^A-Za-z]*$'
 
     # The editor sometimes looks the driver's type up while the assembly is still loading, and a scene
@@ -416,7 +481,7 @@ try {
     # game, so it is not counted.
     $notCounted = if ($script:replayed) { 'could not find Hexagon\.' } else { 'could not find Hexagon\.Dev\.DevDriver' }
     $problems = @((Invoke-Tool 'read_console' @{ limit = 500; minimumLevel = 'Warn' }) -split "`n" |
-        Where-Object { $_ -match 'Hexagon|Exception|\[store\]|Whitelist violation|hexagon\.' -and $_ -notmatch "Bad texture|Error loading resource|$notCounted" })
+        Where-Object { $_ -match 'Hexagon|Exception|\[store\]|\[scene\]|\[death\]|\[restore\]|Whitelist violation|hexagon\.' -and $_ -notmatch "Bad texture|Error loading resource|$notCounted" })
     Expect 'the session logged no game warnings or errors' "$($problems.Count) problem lines: $($problems -join ' | ')" '^0 problem'
     [void](Invoke-Tool 'play_stop')
 }

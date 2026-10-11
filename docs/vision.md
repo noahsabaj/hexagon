@@ -41,7 +41,11 @@ people learning to build on it.
   the character leaves for good, taking what it carries, and the new one waits 24 hours.
 - Staff can restore a character killed by a rule break, an exploit or a bug, on the record. A death
   within the rules is final. A restored character gets up where its body lies, with whatever is
-  still on it, and staff move back anything taken.
+  still on it, and staff move back anything taken. A restore is refused while the account already
+  has its living character; that one is retired first, or deleted if it never lived.
+- A character that never entered the city never lived. It can be deleted, which frees its name and
+  starts no wait.
+- The dead keep their names. Nobody can take the name of someone who died.
 - Respawning is a switch for tests and other games, and it is off by default.
 
 ### Conservation: nothing comes from nothing
@@ -70,6 +74,8 @@ people learning to build on it.
 - Doors open to keys, not to teams. Every lock has a pattern, and a key fits every lock with its
   pattern, so all the Interior Ministry's doors can share one while each flat has its own. Owning a
   door is title only, the right to sell or rent it: locking takes the key, owner or not.
+- A key shows its cut, a code anyone holding it can compare with another key's, never which lock it
+  opens. Whoever finds a key learns what it opens by trying it.
 - Staff can still create items with `give`. It is the one exception, and every use is journaled
   under their name.
 

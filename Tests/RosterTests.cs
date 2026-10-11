@@ -19,7 +19,8 @@ public sealed class RosterTests
 		Assert.IsTrue( created.Ok, created.Message );
 		var reloaded = new CharacterRoster( new DocumentStore( files.Reboot() ) );
 		Assert.AreEqual( "John Doe", reloaded.Find( created.Value.Id )!.Name );
-		Assert.AreEqual( 0, reloaded.Find( created.Value.Id )!.Tokens, "tokens only ever arrive by transfer" );
+		Assert.IsEmpty( reloaded.Find( created.Value.Id )!.Inventory.Items, "a new character arrives with nothing but its clothes" );
+		Assert.IsNull( created.Value.ArrivesAt, "with no death before it, it may enter at once" );
 	}
 
 	[TestMethod]
@@ -58,27 +59,54 @@ public sealed class RosterTests
 		var held = roster.Create( 1, "John Doe", Description, "citizen", Now ).Value;
 		Assert.IsTrue( roster.Delete( 1, held.Id ).Ok );
 
-		held.Tokens = 50;
+		held.Health = 50;
 		Assert.IsFalse( roster.Save( held ), "the other connection's next save is refused" );
 		Assert.IsNull( new CharacterRoster( new DocumentStore( files.Reboot() ) ).Find( held.Id ), "so it stays deleted after a restart" );
-		Assert.IsTrue( roster.Create( 1, "John Doe", Description, "citizen", Now ).Ok, "and its name and slot stay free" );
+		Assert.IsTrue( roster.Create( 1, "John Doe", Description, "citizen", Now ).Ok, "and its name and its life stay free" );
 	}
 
 	[TestMethod]
-	public void SlotsAreLimitedPerAccountAndDeletionFreesTheName()
+	public void AnAccountLivesOneLifeAtATimeAndTheNextWaitsADayAfterTheDeath()
 	{
 		var roster = new CharacterRoster( new DocumentStore( new MemoryFiles() ) );
-		Guid first = default;
-		for ( var index = 0; index < CharacterRoster.MaximumSlots; index++ )
-		{
-			var created = roster.Create( 1, $"Resident Number {(char)('A' + index)}", Description, "citizen", Now );
-			Assert.IsTrue( created.Ok, created.Message );
-			if ( index == 0 ) first = created.Value.Id;
-		}
+		var john = roster.Create( 1, "John Doe", Description, "citizen", Now ).Value;
+		Assert.AreEqual( ErrorCode.Conflict, roster.Create( 1, "Jane Roe", Description, "citizen", Now ).Code, "one living character at a time" );
+		Assert.IsTrue( roster.Create( 2, "Jane Roe", Description, "citizen", Now ).Ok, "for each account" );
+		Assert.AreEqual( ErrorCode.NotFound, roster.Delete( 2, john.Id ).Code, "another account cannot delete it" );
 
-		Assert.AreEqual( ErrorCode.Conflict, roster.Create( 1, "One Too Many", Description, "citizen", Now ).Code );
-		Assert.AreEqual( ErrorCode.NotFound, roster.Delete( 2, first ).Code, "another account cannot delete it" );
-		Assert.IsTrue( roster.Delete( 1, first ).Ok );
-		Assert.IsTrue( roster.Create( 2, "Resident Number A", Description, "citizen", Now ).Ok );
+		john.FirstEntered = Now;
+		Assert.AreEqual( ErrorCode.Conflict, roster.Delete( 1, john.Id ).Code, "a character that has lived is not deleted" );
+		Vitals.Die( john, Now.AddHours( 1 ) );
+		roster.Save( john );
+
+		var next = roster.Create( 1, "Max Muster", Description, "citizen", Now.AddHours( 2 ) );
+		Assert.IsTrue( next.Ok, "the next can be made at once" );
+		Assert.AreEqual( Now.AddHours( 25 ), next.Value.ArrivesAt, "and enters a day after the death" );
+		Assert.IsTrue( roster.Delete( 1, next.Value.Id ).Ok, "one that never lived can be deleted" );
+		Assert.AreEqual( Now.AddHours( 25 ), roster.Create( 1, "Max Muster", Description, "citizen", Now.AddHours( 3 ) ).Value.ArrivesAt,
+			"which frees its name, and making it again does not move the wait" );
+		Assert.AreEqual( ErrorCode.Conflict, roster.Create( 3, "John Doe", Description, "citizen", Now ).Code, "the dead keep their names" );
+		Assert.IsNull( roster.Create( 4, "Erika Muster", Description, "citizen", Now ).Value.ArrivesAt );
+
+		var lenient = new LifeRules( 2, TimeSpan.Zero );
+		Assert.IsTrue( roster.Create( 4, "Hans Muster", Description, "citizen", Now, lenient ).Ok, "a game may allow more" );
+		Assert.AreEqual( ErrorCode.Conflict, roster.Create( 4, "Fritz Muster", Description, "citizen", Now, lenient ).Code );
+	}
+
+	[TestMethod]
+	public void TheDeadAreRestoredOnlyOnceTheirAccountHasRoomForThem()
+	{
+		var roster = new CharacterRoster( new DocumentStore( new MemoryFiles() ) );
+		var john = roster.Create( 1, "John Doe", Description, "citizen", Now ).Value;
+		john.FirstEntered = Now;
+		Assert.AreEqual( ErrorCode.Conflict, roster.Restore( john ).Code, "the living cannot be restored" );
+
+		Vitals.Die( john, Now );
+		var max = roster.Create( 1, "Max Muster", Description, "citizen", Now ).Value;
+		Assert.AreEqual( ErrorCode.Conflict, roster.Restore( john ).Code, "nor the dead while their account has its living character" );
+		Assert.IsTrue( roster.Delete( 1, max.Id ).Ok );
+
+		Assert.IsTrue( roster.Restore( john ).Ok );
+		Assert.AreEqual( (false, false, Vitals.Revived), (john.IsDead, john.IsDown, john.Health), "up, barely, as if helped up" );
 	}
 }

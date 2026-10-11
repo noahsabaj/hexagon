@@ -15,7 +15,8 @@ public enum Harm
 /// <summary>
 /// What violence does to a character. Harm never kills: at no health a character goes down, and
 /// stays part of the scene. It can be helped up, searched, or finished, and finishing is a separate,
-/// deliberate act. What death then means is the game's policy, not decided here.
+/// deliberate act. What death then means is the game's policy, not decided here: by default it is
+/// final.
 /// The state lives in the character's document, so leaving the server does not escape it.
 /// </summary>
 public static class Vitals
@@ -68,11 +69,31 @@ public static class Vitals
 		character.IsDown ? Result.Success() : Result.Fail( ErrorCode.Conflict, "They are still standing." );
 
 	/// <summary>A character returns whole: after death under a respawn policy.</summary>
-	public static void Restore( CharacterData character )
+	public static void Respawn( CharacterData character )
 	{
 		character.Health = Full;
 		character.IsDown = false;
 		character.SecondsDown = 0;
 		character.IsRestrained = false;
+	}
+
+	/// <summary>The character is dead, or retired. It is kept, so staff can restore it if the death broke the rules.</summary>
+	public static void Die( CharacterData character, DateTimeOffset now )
+	{
+		character.DiedAt = now;
+		character.Health = 0;
+		character.IsDown = false;
+		character.SecondsDown = 0;
+		character.IsRestrained = false;
+		character.Equipped = null;
+	}
+
+	/// <summary>Staff undo a death that broke the rules: the character gets up, barely, as if helped up.</summary>
+	public static Result Restore( CharacterData character )
+	{
+		if ( !character.IsDead ) return Result.Fail( ErrorCode.Conflict, $"{character.Name} is not dead." );
+		character.DiedAt = null;
+		character.Health = Revived;
+		return Result.Success();
 	}
 }

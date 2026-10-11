@@ -36,7 +36,8 @@ public sealed partial class Player
 			return;
 		}
 
-		var created = game.Roster!.Create( steamId, name, description, faction.ResourcePath, DateTimeOffset.UtcNow );
+		// A new character arrives with nothing but its clothes. Whatever it needs, it finds or is given.
+		var created = game.Roster!.Create( steamId, name, description, faction.ResourcePath, DateTimeOffset.UtcNow, game.Lives );
 		if ( !created.Ok )
 		{
 			// The name is kept: an attempt to pass as someone else is worth knowing about.
@@ -44,15 +45,14 @@ public sealed partial class Player
 			Chat.Tell( caller, created.Message );
 			return;
 		}
-		var by = Actor.Of( created.Value );
-		game.Journal!.Record( "character.create", by, created.Value.HolderLabel, data: ("faction", faction.ResourceName) );
-		foreach ( var start in faction.StartingItems.Where( value => value.Item.IsValid() ) )
-			start.Item!.IssueTo( game.Transfers!, Sources.CharacterStart, created.Value, by, start.Count );
-		if ( faction.StartingTokens > 0 ) game.Transfers!.IssueTokens( Sources.CharacterStart, created.Value, faction.StartingTokens, by );
-		game.Roster.Save( created.Value );
+		var data = created.Value.ArrivesAt is { } arrives
+			? new[] { ("faction", faction.ResourceName), ("arrives", arrives.ToString( "u" )) }
+			: new[] { ("faction", faction.ResourceName) };
+		game.Journal!.Record( "character.create", Actor.Of( created.Value ), created.Value.HolderLabel, data: data );
 		SendCharacterList( caller, game );
 	}
 
+	/// <summary>Deletes a character that never entered the city, freeing its name. One that has lived is retired instead.</summary>
 	[Rpc.Host]
 	public void RequestDeleteCharacter( Guid characterId )
 	{
@@ -61,10 +61,7 @@ public sealed partial class Player
 		var doomed = game.Roster!.Find( characterId );
 		// "Not yours" and "does not exist" get the same answer, so ids cannot be probed.
 		var refusal = doomed is null || doomed.SteamId != steamId ? "Character was not found."
-			// On any connection: two copies of the game on one account are still one account.
-			: HostLoaded( characterId ) is not null ? "Leave the city with that character before deleting it."
-			// Someone lying in the street, or bound, is still part of a scene that is not over.
-			: doomed.IsDown || doomed.IsRestrained ? "That character cannot be deleted while it is down or bound."
+			: doomed.FirstEntered is not null || doomed.IsDead ? $"{doomed.Name} has lived in the city. A life is ended by retiring, not by deleting."
 			: null;
 		if ( doomed is null || refusal is not null )
 		{
@@ -72,13 +69,55 @@ public sealed partial class Player
 			Chat.Tell( caller, refusal ?? "Character was not found." );
 			return;
 		}
-		// What the character held leaves the world on the record, not by vanishing with the file.
+		// Staff may have given it something already. That leaves the world on the record, not by vanishing with the file.
 		var by = Actor.Of( doomed );
 		game.Transfers!.DestroyAll( Sinks.CharacterDeleted, doomed, by );
 		Door.HostReleaseOwnedBy( doomed.Id, by );
 		game.Journal!.Record( "character.delete", by, doomed.HolderLabel );
 		game.Roster.Delete( steamId, characterId );
 		SendCharacterList( caller, game );
+	}
+
+	/// <summary>
+	/// Ends a life that has been lived, by its player's choice. It is a death: the character takes
+	/// what it carries with it, it is kept as dead, and the next one waits as after any other death.
+	/// </summary>
+	[Rpc.Host]
+	public void RequestRetireCharacter( Guid characterId )
+	{
+		if ( !Authorize( nameof( RequestRetireCharacter ), out var caller, out var game, needsCharacter: false ) ) return;
+		var steamId = SteamIdOf( caller );
+		var retiring = game.Roster!.Find( characterId );
+		// "Not yours" and "does not exist" get the same answer, so ids cannot be probed.
+		var refusal = retiring is null || retiring.SteamId != steamId ? "Character was not found."
+			: retiring.IsDead ? $"{retiring.Name} is already dead."
+			: retiring.FirstEntered is null ? $"{retiring.Name} never entered the city, so it is deleted, not retired."
+			// On any connection: two copies of the game on one account are still one account.
+			: HostLoaded( characterId ) is not null ? "Leave the city with that character before retiring it."
+			// Someone lying in the street, or bound, is still part of a scene that is not over.
+			: retiring.IsDown || retiring.IsRestrained ? "That character cannot be retired while it is down or bound."
+			: null;
+		if ( retiring is null || refusal is not null )
+		{
+			HostRecord( "character.retire", $"character:{characterId:N}", ok: false, ("reason", refusal ?? "unknown") );
+			Chat.Tell( caller, refusal ?? "Character was not found." );
+			return;
+		}
+		var by = Actor.Of( retiring );
+		game.Transfers!.DestroyAll( Sinks.CharacterRetired, retiring, by );
+		Door.HostReleaseOwnedBy( retiring.Id, by );
+		Vitals.Die( retiring, DateTimeOffset.UtcNow );
+		game.Roster.Save( retiring );
+		game.Journal!.Record( "character.retire", by, retiring.HolderLabel );
+		SendCharacterList( caller, game );
+	}
+
+	/// <summary>How long is left, roughly, as a player would say it.</summary>
+	public static string Until( TimeSpan left )
+	{
+		if ( left.TotalHours > 1 ) return $"in {Math.Ceiling( left.TotalHours ):0} hours";
+		if ( left.TotalMinutes > 1 ) return $"in {Math.Ceiling( left.TotalMinutes ):0} minutes";
+		return "in a minute";
 	}
 
 	[Rpc.Host]
@@ -88,9 +127,13 @@ public sealed partial class Player
 		var character = game.Roster!.Find( characterId );
 		var steamId = SteamIdOf( caller );
 		var faction = character is null ? null : FactionDefinition.Find( character.Faction );
+		var now = DateTimeOffset.UtcNow;
 		var refusal = _character is not null ? "Leave the city first."
 			// "Not yours" and "does not exist" get the same answer, so ids cannot be probed.
 			: character is null || character.SteamId != steamId ? "Character was not found."
+			: character.IsDead ? $"{character.Name} is dead."
+			// Dying and making someone new does not put a player back in the scene at once.
+			: character.ArrivesAt is { } arrives && arrives > now ? $"{character.Name} arrives in the city {Until( arrives - now )}."
 			: HostLoaded( characterId ) is not null ? "That character is already in the city."
 			// A whitelist taken away takes the faction's characters with it until it is given back.
 			: faction is { RequiresWhitelist: true } && !game.Account( steamId ).Whitelists.Contains( faction.ResourcePath ) ? $"You are no longer whitelisted for {faction.Title}."
@@ -104,6 +147,12 @@ public sealed partial class Player
 
 		// Whoever was left lying, or bound, where they were picks up from there.
 		Sleeper.HostRemove( character.Id );
+		// From now on it has lived, and leaves the city only by dying or retiring.
+		if ( character.FirstEntered is null )
+		{
+			character.FirstEntered = now;
+			game.Roster.Save( character );
+		}
 		_character = character;
 		CharacterDescription = character.Description;
 		CharacterId = character.Id;
@@ -161,6 +210,7 @@ public sealed partial class Player
 	private void HostUnload()
 	{
 		HostClose();
+		HostDropOffer( "left" );
 		// Someone down or bound does not get up because their player went: they stay where they are.
 		if ( _character is { } character && GameManager.Instance?.Roster?.Contains( character ) == true ) Sleeper.HostLeave( character, HostPosition );
 		_character = null;

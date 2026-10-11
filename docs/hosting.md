@@ -34,7 +34,7 @@ hexagon_staff <steamid64> 1
 
 Staff status can only be given from the console. From then on that player presses Tab in game and
 types the same commands without the `hexagon_` prefix: `who`, `whitelist`, `give`, `take`, `move`,
-`bring`, `goto`, `teleport`, `hurt`, `revive`, `release`, `faction`, `door`, `payday`, `journal`. The
+`bring`, `goto`, `teleport`, `hurt`, `revive`, `release`, `restore`, `faction`, `door`, `journal`. The
 [README](../README.md#operator-commands) lists what each does. Every line is journaled under their
 name before it runs, and every line typed at the console is journaled as the console.
 
@@ -42,16 +42,19 @@ name before it runs, and every line typed at the console is journaled as the con
 
 `journal [text] [count] [days]` in the staff panel shows the latest entries containing the text,
 from the last two days unless given more, up to fourteen. Useful searches: a character's name,
-`REFUSED`, `request.forged`, `combat.attack`, `character.death`, `item.move`, `tokens.move`,
-`verb.door.buy`. Each entry says who, what, to whom, where, whether it was allowed, and who was
+`REFUSED`, `request.forged`, `combat.attack`, `character.death`, `item.move`, `offer.accept`,
+`door.assign`. Each entry says who, what, to whom, where, whether it was allowed, and who was
 close enough to witness it, by the names they had then. Times are UTC. The files are
 `journal/<date>.jsonl` in the data folder, one JSON object per line and one file per UTC day, and
 can be read while the server runs.
 
 Putting things right uses the same commands as anything else, and is journaled like anything else:
 `move` gives back what was taken, `take` removes what should not exist, `release` frees someone
-left bound, `revive` helps up someone left down, and `door "<door>" release` takes back a door, or
-`door release` the one you are standing beside. `door` on its own lists the doors and their owners.
+left bound, `revive` helps up someone left down, and `door "<door>" release` takes back a door's
+title, or `door release` the one you are standing beside. `door "<door>" assign "<name>"` gives a
+title, and `door` on its own lists the doors and their owners. When a death broke the rules, an
+exploit or a bug, `restore "<name>"` has the character get up where its body lies; the journal says
+who took what from the body, for `move` to give it back.
 
 ## Restart
 
@@ -71,12 +74,12 @@ that changed hands was saved when it did.
 
 Copy the data folder. It can be copied while the server runs. **Checked:** the two-client play
 test copies the folder mid-session, starts a second server on the copy, and compares every
-character's tokens, items, health and acquaintances with the original.
+character's items, health, acquaintances and whether it is dead with the original.
 
 Every document is written twice, first to a pending copy beside it, so a copy of the folder taken
 mid-write still holds one complete version, and loading prefers whichever is whole. The journal is
 appended to, so a copy may end one entry early; a torn last line is skipped when read. A change to
-two documents at once, such as a sale, is first written whole into `together/` and finished from
+two documents at once, such as a hand-over, is first written whole into `together/` and finished from
 there if interrupted, but a copy taken during one can still catch one side of it without the other,
 because copying a folder is not one act. For a backup that must agree with itself, stop the server
 first.

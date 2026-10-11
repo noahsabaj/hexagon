@@ -32,7 +32,7 @@ public sealed partial class Player
 			return new[] { new Verb( ReviveVerb, "Help up" ), new Verb( SearchVerb, "Search" ), new Verb( FinishVerb, "Finish", finish ) };
 		}
 		if ( restrained ) return new[] { new Verb( SearchVerb, "Search" ), new Verb( ReleaseVerb, "Release" ) };
-		return new[] { new Verb( IntroduceVerb, "Introduce yourself" ), new Verb( RestrainVerb, "Restrain", Capability.Restrain ) };
+		return new[] { new Verb( IntroduceVerb, "Introduce yourself" ), new Verb( OfferVerb, "Offer something" ), new Verb( RestrainVerb, "Restrain", Capability.Restrain ) };
 	}
 
 	float IVerbTarget.Reach => PersonReach;
@@ -64,6 +64,8 @@ public sealed partial class Player
 			case SearchVerb: return HostBeSearched( actor );
 			case RestrainVerb: return HostBeRestrained( actor, other );
 			case ReleaseVerb: return HostRelease();
+			// What is offered is chosen from the inventory, and sent with RequestOffer.
+			case OfferVerb: return Result.Fail( ErrorCode.Invalid, "Choose what to offer from your inventory." );
 			case FinishVerb:
 				var can = Vitals.CanFinish( _character );
 				if ( can.Ok ) HostDie( "finished", actor );

@@ -9,15 +9,15 @@ namespace Hexagon.Logic;
 /// <summary>The capabilities Hexagon itself asks about. A game adds its own names in its assets.</summary>
 public static class Capability
 {
-	public const string DoorLock = "door.lock";
 	public const string Restrain = "person.restrain";
 }
 
 /// <summary>
 /// What a character may do is one question with one answer, not a faction check scattered through
-/// the code. Grants come from whatever the character is and holds: a faction, an item such as a
-/// key. Denials come from what has been done to it, such as being restrained, and always win.
-/// A grant ending in <c>.*</c> covers everything beneath it, and <c>*</c> covers everything.
+/// the code. Grants come only from what the character holds, such as a zip tie: a faction is people,
+/// not powers. Denials come from what has been done to it, such as being restrained, and always win.
+/// A grant ending in <c>.*</c> covers everything beneath it, and <c>*</c> covers everything. A lock is
+/// not a capability: it opens to a key cut to its pattern, see <see cref="Keys"/>.
 /// </summary>
 public static class Capabilities
 {
