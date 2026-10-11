@@ -352,6 +352,18 @@ menu, and a person does.)
   the host accepts from anyone (sent faster, requests were refused and the run failed). The
   two-client test went from about ten minutes to under three, the editor test from about five to
   under two and a half. (2026-10-11)
+- The checks run as one, `tools/test.ps1`, in about three minutes, where verify and the two play
+  tests one after another took about six. The editor, while it plays a scene, listens for local
+  players on the engine's default port, and so did the dedicated server; the server and its
+  clients now take a free port of their own (`net_local_port`). Four s&box processes starting at
+  once took three times as long as one, so the editor starts once both clients have joined. The
+  fixed waits are gone: a check asks until it sees what it expects, and a refusal waits for the
+  journal to count it. They had hidden three things. A weapon fired within its cooldown fires
+  nothing and records nothing, so a shot sent too soon was lost and every check after it failed;
+  the test now waits out the cooldown. A door still swinging shut is not a wall, and the editor
+  test stepped through a door it had just locked before the door stopped; `state` now says which
+  doors are swinging, and the test waits. And the check that the host recorded a wall had passed
+  on an earlier refusal; it now names the claim. (2026-10-11)
 
 ## 2026-10-10: A change to several documents is saved as one
 

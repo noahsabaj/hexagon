@@ -122,8 +122,16 @@ replies.
 
 ## Commands
 
-Run from this folder with the s&box editor closed. Both default to the sibling `hl2rp-hexagon`
-checkout; pass `-GameRoot` for another game.
+Run from this folder with the s&box editor closed. Those that need a game default to the sibling
+`hl2rp-hexagon` checkout; pass `-GameRoot` for another.
+
+```bash
+pwsh tools/test.ps1
+```
+
+Runs the three below: `verify.ps1`, then the two-client play test, and the editor play test beside
+it once both clients have joined. Each line is marked with the test that wrote it. Needs Steam
+running and takes about three minutes.
 
 ```bash
 pwsh tools/verify.ps1
@@ -138,7 +146,7 @@ pwsh tools/playtest.ps1
 Boots the editor, enters play mode, and plays a full scenario through the real RPC path,
 including a restart, in a throwaway data folder. It saves pictures of what it saw as
 `hexagon-look-*.png` in the temp folder. A failed run keeps its data folder, journal included.
-Takes about two and a half minutes.
+Takes about a minute and a half.
 
 ```bash
 pwsh tools/playtest-server.ps1
@@ -146,7 +154,7 @@ pwsh tools/playtest-server.ps1
 
 Starts a real dedicated server and joins two real game clients to it, then asks each client what
 it was actually told: that the other player's name never arrived, that a whisper stopped at its
-range, that a door one opened is open for the other. Needs Steam running and takes about three
+range, that a door one opened is open for the other. Needs Steam running and takes about two
 minutes.
 
 ```bash
