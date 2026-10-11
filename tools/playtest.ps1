@@ -45,7 +45,7 @@ $script:requestId = 0
 $script:failures = 0
 $script:nonce = 0
 # The host lets a player ask for twelve things at once and four more each second, and refuses the rest
-# (GameManager.HostSpend). A test is held to that like any player, so it keeps the same count, two
+# (HexagonServices.HostSpend). A test is held to that like any player, so it keeps the same count, two
 # short for the moment a request takes to arrive. Reading its own state, or moving its own view, asks
 # the host for nothing.
 $requests = 'create', 'enter', 'leave', 'delete', 'retire', 'say', 'introduce', 'door', 'open', 'take', 'put', 'close',
@@ -171,14 +171,32 @@ function Poll([scriptblock] $Ask, [string] $Pattern, [int] $Seconds = 10) {
     }
 }
 
+# Where a place beside something named in the scene is: x, y and z. The side is the object's own front,
+# back, left or right; the distance is from its face on that side; the height is above the floor there.
+# Places are found by what is there, so a test survives the map being moved about.
+function Spot([string] $Name, [string] $Side, [double] $Distance, [double] $Height = 0) {
+    $reply = Send "spot|$Name|$Side|$Distance|$Height"
+    if ($reply -notmatch '^(-?\d+) (-?\d+) (-?\d+)') { throw "No place beside '$Name': $reply" }
+    return [int[]] @($Matches[1], $Matches[2], $Matches[3])
+}
+
+# Whether a reply puts someone within reach of a place, on the ground: the first x,y in it, after pos=
+# where there is one, against the place's.
+function Near([string] $Reply, [int[]] $At, [double] $Range = 40) {
+    if ($Reply -notmatch '(?:pos=|^)(-?[\d.]+),(-?[\d.]+)') { return $false }
+    return [Math]::Abs([double] $Matches[1] - $At[0]) -lt $Range -and [Math]::Abs([double] $Matches[2] - $At[1]) -lt $Range
+}
+
+# The state, led by whether the character stands near a place, for a check to read.
+function State-Near([int[]] $At) { $state = Send 'state'; "near=$(Near $state $At) $state" }
+
 # Moves the character as staff would, and waits until the player's own pawn is there. Until then, what
 # the client claims about where it stands is judged against the old place.
-function Teleport([string] $Name, [int] $X, [int] $Y, [int] $Z) {
-    [void](Send "console|hexagon_teleport `"$Name`" $X $Y $Z")
+function Teleport([string] $Name, [int[]] $At) {
+    [void](Send "console|hexagon_teleport `"$Name`" $($At -join ' ')")
     $until = [DateTime]::UtcNow.AddSeconds(10)
     do {
-        if ((Send 'state') -match 'pos=(-?[\d.]+),(-?[\d.]+),' -and
-            [Math]::Abs([double] $Matches[1] - $X) -lt 32 -and [Math]::Abs([double] $Matches[2] - $Y) -lt 32) { return }
+        if (Near (Send 'state') $At 32) { return }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $until)
 }
@@ -381,25 +399,32 @@ try {
     # Some refusals leave the state as it was, so the test waits for the host to have recorded the
     # request before it looks; requests are judged in the order they are sent.
     Section 'Doors'
+    # Beside the first door; above it, on the roof; through it, on its far side; behind the wall beside
+    # it; and by the locker.
+    $door = Spot 'Door 1' left 30 60
+    $roof = Spot 'Door 1' right 60 400
+    $through = Spot 'Door 1' right 24 8
+    $behindWall = Spot 'Wall' right 30 60
+    $byLocker = Spot 'Locker' right 20 8
     [void](Send 'door|Door 1|use')
     Expect 'a door out of reach was refused' { Send 'state' } 'Door 1:open=False.*too far away'
     # goto is what a cheat does: the client simply declares itself somewhere else.
-    [void](Send 'goto|240|-150|60')
+    [void](Send "goto|$($door -join '|')")
     [void](Send 'door|Door 1|use')
     [void](Poll { Send 'journal' } '(?<!\S)verb\.door\.use!=2(?!\S)')
     Expect 'claiming to stand at the door did not open it' (Send 'state') 'Door 1:open=False.*too far away'
-    Expect 'the host sent the claimant back' { Send 'state' } 'pos=(?!2[2-5]\d\.?\d*,-1[2-6]\d)'
+    Expect 'the host sent the claimant back' { State-Near $door } '^near=False'
     Expect 'and put the claim on record' { Send 'journal' } 'movement\.implausible!=[1-9]'
     # The map has a roof right above the doors. Falling is believed; passing through a floor is not.
-    Teleport 'John Doe' 272 -240 400
+    Teleport 'John Doe' $roof
     Wait-Landed
-    [void](Send 'goto|240|-150|60')
+    [void](Send "goto|$($door -join '|')")
     [void](Send 'door|Door 1|use')
     [void](Poll { Send 'journal' } '(?<!\S)verb\.door\.use!=3(?!\S)')
     Expect 'dropping through the roof to the door below did not open it' (Send 'state') 'Door 1:open=False.*too far away'
     # The host puts him back on the roof, and only then is he moved down to the door.
-    [void](Poll { Send 'state' } 'pos=2[5-9]\d\.?\d*,-2[2-6]\d')
-    Teleport 'John Doe' 240 -150 60
+    [void](Poll { State-Near $roof } '^near=True')
+    Teleport 'John Doe' $door
     [void](Send 'door|Door 1|use')
     [void](Send 'door|Door 2|use')
     [void](Send 'door|Door 1|lock')
@@ -418,9 +443,9 @@ try {
     # A closed door is a wall. One step through it is no faster than walking, and is still refused. Locking
     # also shut it, and a door still swinging is no wall yet (Player.HostBlocked), so the step waits.
     [void](Poll { Send 'state' } 'Door 1:open=False,locked=True,swinging=False')
-    [void](Send 'goto|240|-205|8')
-    Expect 'stepping through the locked door did not get past it' { Send 'state' } 'pos=2[2-5]\d\.?\d*,-1[2-6]\d'
-    Expect 'and the host recorded it as a wall' { Send 'journal|movement.implausible' } 'ok=False .*claimed=240,-205,8 reason=wall'
+    [void](Send "goto|$($through -join '|')")
+    Expect 'stepping through the locked door did not get past it' { State-Near $door } '^near=True'
+    Expect 'and the host recorded it as a wall' { Send 'journal|movement.implausible' } "ok=False .*claimed=$($through -join ',') reason=wall"
     [void](Send 'door|Door 1|lock')
     [void](Send 'drop|0')
     [void](Send 'door|Door 1|lock')
@@ -450,11 +475,11 @@ try {
     [void](Send 'close')
     Expect 'the crate closed' { Send 'state' } 'open=\[: \]'
     # A wall stands beside the first door. From its far side the crate is near enough, and out of reach.
-    Teleport 'John Doe' 300 -215 60
+    Teleport 'John Doe' $behindWall
     Wait-Landed
     [void](Send 'open|Crate')
     Expect 'a crate behind a wall cannot be reached, however near' { Send 'state' } 'open=\[: \].*You cannot reach it from here'
-    Teleport 'John Doe' 240 -150 60
+    Teleport 'John Doe' $door
 
     Section 'Harm, and being down'
     [void](Send 'console|hexagon_hurt "John Doe" 40')
@@ -538,7 +563,7 @@ try {
     [void](Send "create|Officer Kane|$description|civil_protection")
     [void](Send 'enter|Officer Kane')
     [void](Poll { Send 'state' } "has=True name='Officer Kane'")
-    Teleport 'Officer Kane' 240 -150 60
+    Teleport 'Officer Kane' $door
     [void](Send 'door|Door 1|lock')
     [void](Poll { Send 'journal' } '(?<!\S)verb\.door\.lock!=5(?!\S)')
     $state = Send 'state'
@@ -560,12 +585,12 @@ try {
     [void](Send 'equip|1')
     Expect 'what is in hand is appearance: everyone is sent it' { Send 'state' } "held='Pistol'"
     [void](Send 'thirdperson|1')
-    [void](Send 'face|330|-100|40')
+    [void](Send 'face|Locker')
     # The camera eases out behind him, then is placed where each picture wants it.
     Snapshot 'officer' 2
-    [void](Send 'camera|330|-110|70|240|-150|40')
+    [void](Send 'camera|Crate|left|20|70|self|40')
     Snapshot 'officer-front' 1
-    [void](Send 'camera|310|-120|130|240|-150|120')
+    [void](Send 'camera|Crate|left|10|130|self|120')
     Snapshot 'officer-front-high' 1
     [void](Send 'camera')
     [void](Send 'thirdperson|0')
@@ -581,7 +606,7 @@ try {
     Section 'Leaving does not end a scene'
     [void](Send 'console|hexagon_hurt "Officer Kane" 500')
     # Moved after he fell, so only the save as the city closes knows where he is now.
-    Teleport 'Officer Kane' 330 -100 8
+    Teleport 'Officer Kane' $byLocker
     [void](Send 'leave')
     [void](Poll { Send 'journal' } '(?<!\S)city\.leave!=2(?!\S)')
     Expect 'down, he cannot leave, so the city closes with him lying there' (Send 'state') 'has=True .*down=True .*cannot leave the city like this'
@@ -602,9 +627,10 @@ try {
     Expect 'what he carried survived the restart, keys cut as they were' $state "items=\[Rationx4@4,3, Water@2,0, Tokenx40@4,0, Key#$flatCut@1,0, Radio~101\.5@0,1\]"
     Expect 'the title staff took back is still nobody''s' $state 'owned=\[\]'
     Expect 'whoever was down when the city closed is still lying there' $state 'sleepers=1 '
-    Expect 'where he was when it closed, which only the closing save knew' (Send 'sleepers') '^3[23]\d,-(9\d|1[01]\d),down$'
+    $sleepers = Send 'sleepers'
+    Expect 'where he was when it closed, which only the closing save knew' "$(Near $sleepers $byLocker) $sleepers" '^True .*,down$'
     # The swinging door nudges the pawn, so this is a neighbourhood, not a point.
-    Expect 'the character returned to where it stood' $state 'pos=2[2-5]\d\.?\d*,-1[2-6]\d'
+    Expect 'the character returned to where it stood' "near=$(Near $state $door) $state" '^near=True'
     [void](Send 'open|Crate')
     Expect 'what was left in the crate survived the restart' { Send 'state' } 'open=\[Crate: Bandage\]'
     [void](Send 'close')
@@ -641,7 +667,7 @@ try {
     [void](Send 'enter|Officer Kane')
     $state = Poll { Send 'state' } 'health=25 down=False .*bodies=0 '
     Expect 'he gets up barely, with what was still on the body: what was taken stays taken' $state "items=\[Keycard#$cityCut@0,0, Pistol roundx30@3,0, Zip tiex2@4,0\] .*health=25 down=False .*bodies=0 "
-    Expect 'where the body lay' $state 'pos=3[23]\d\.?\d*,-(9\d|1[01]\d)'
+    Expect 'where the body lay' "near=$(Near $state $byLocker) $state" '^near=True'
 
     Section 'The journal'
     $journal = Send 'journal'

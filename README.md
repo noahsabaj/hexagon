@@ -102,8 +102,9 @@ pwsh tools/verify.ps1
 
 1. Reference the library in the game's `.sbproj`: `"PackageReferences": [ "kbj.hexagon" ]`.
 2. Link this checkout into the game: a `Libraries/hexagon` junction pointing here.
-3. In the startup scene, add a `Hexagon Game Manager`, a `ScreenPanel` with the `Hud`, at least one
-   `SpawnPoint`, and any `Hexagon Door` objects, which must be networked objects.
+3. In the startup scene, add a `ScreenPanel` with the `Hud`, at least one `SpawnPoint`, and any
+   `Hexagon Door` objects, which must be networked objects. The city's services come with the library;
+   their rules are under Hexagon in the project's Systems settings.
 4. Author `.faction` and `.item` assets.
 
 ## How it is built
@@ -111,7 +112,7 @@ pwsh tools/verify.ps1
 | Part | Where | How it is checked |
 | --- | --- | --- |
 | Rules with no engine in them: names, lives, inventory grid, transfers, keys, journal, capabilities, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
-| Components: game manager, player, sleeper, door, container, chat, operator commands | `Code` | Compiled against the installed engine, warnings as errors |
+| Services and components: the city's services, characters, player, sleeper, door, container, chat, operator commands | `Code` | Compiled against the installed engine, warnings as errors |
 | Default HUD | `Code/UI` | Same compile, then looked at in the play test |
 | A whole game on top | a game project | `tools/playtest.ps1` plays it in the real editor; `tools/playtest-server.ps1` plays it as two clients on a dedicated server |
 

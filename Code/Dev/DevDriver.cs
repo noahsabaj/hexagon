@@ -227,6 +227,12 @@ public static class DevCommands
 			ConsoleSystem.Run( args[1] );
 			return "ran";
 		}
+		if ( args[0] == "spot" )
+		{
+			// spot|<object>|<side>|<distance>|<height>: a place beside something named in the scene, as x y z.
+			if ( Spot( args ) is not { } spot ) return $"nothing named '{args.ElementAtOrDefault( 1 )}'";
+			return $"{spot.x:0} {spot.y:0} {spot.z:0}";
+		}
 		if ( args[0] == "hostid" ) return $"local={Connection.Local?.SteamId.ValueUnsigned} host={Connection.Host?.SteamId.ValueUnsigned} address={Connection.Local?.Address} name={Connection.Local?.DisplayName}";
 		if ( args[0] == "convar" ) return ConsoleSystem.GetValue( args[1] ) ?? "unset";
 		// A scene played before the editor had the game's code in has none of its systems or components.
@@ -276,21 +282,26 @@ public static class DevCommands
 						: null;
 					return player.MenuTarget is null ? "menu closed" : "menu open";
 				case "panel":
-					UI.Hud.InventoryOpen = args[1] == "inventory";
-					UI.Hud.StaffOpen = args[1] == "staff";
+					UI.Hud.Show( args[1] switch { "inventory" => UI.HudPanel.Inventory, "staff" => UI.HudPanel.Staff, _ => UI.HudPanel.None } );
 					return "sent panel";
 				case "camera":
-					// camera|x|y|z|tx|ty|tz puts the view at a point, looking at another. camera alone gives it back.
+					// camera|<object>|<side>|<distance>|<height>|<looked at>|<height> puts the view beside something
+					// named, looking at something else named, or at this client's own character as "self", that
+					// high above where it stands. camera alone gives it back.
 					HeldCamera = null;
 					if ( args.Length >= 7 && !args[1].StartsWith( '#' ) )
 					{
-						var eye = new Vector3( float.Parse( args[1] ), float.Parse( args[2] ), float.Parse( args[3] ) );
-						HeldCamera = new Transform( eye, Rotation.LookAt( new Vector3( float.Parse( args[4] ), float.Parse( args[5] ), float.Parse( args[6] ) ) - eye ) );
+						if ( Spot( args ) is not { } eye ) return $"nothing named '{args[1]}'";
+						var seen = args[5] == "self" ? player.WorldPosition : Middle( args[5] );
+						if ( seen is not { } looked ) return $"nothing named '{args[5]}'";
+						HeldCamera = new Transform( eye, Rotation.LookAt( looked.WithZ( looked.z + float.Parse( args[6], Invariant ) ) - eye ) );
 					}
 					return "sent camera";
 				case "face":
-					var toward = new Vector3( float.Parse( args[1] ), float.Parse( args[2] ), float.Parse( args[3] ) ) - player.GetComponent<PlayerController>().EyePosition;
-					player.GetComponent<PlayerController>().EyeAngles = Rotation.LookAt( toward ).Angles();
+					// face|<object> turns this client's character toward the middle of something named.
+					if ( Middle( args[1] ) is not { } middle ) return $"nothing named '{args[1]}'";
+					var controller = player.GetComponent<PlayerController>();
+					controller.EyeAngles = Rotation.LookAt( middle - controller.EyePosition ).Angles();
 					return "sent face";
 				case "tune":
 					var radio = player.Inventory?.Items.ElementAtOrDefault( int.Parse( args[1] ) );
@@ -434,6 +445,46 @@ public static class DevCommands
 	/// <summary>Everyone else this client can see in the city.</summary>
 	private static IEnumerable<Player> Others( Player player ) =>
 		Game.ActiveScene.GetAllComponents<Player>().Where( value => value != player && value.IsProxy && value.IsPresent );
+
+	private static readonly System.Globalization.CultureInfo Invariant = System.Globalization.CultureInfo.InvariantCulture;
+
+	/// <summary>The first object in the running scene with this name.</summary>
+	private static GameObject? Named( string name ) =>
+		Game.ActiveScene?.Directory.FindByName( name, caseinsensitive: false ).FirstOrDefault( value => value.IsValid() );
+
+	/// <summary>The middle of something named, as its bounds have it.</summary>
+	private static Vector3? Middle( string name ) => Named( name )?.GetBounds().Center;
+
+	/// <summary>
+	/// A place beside something named, so a test says where its characters stand by what is there
+	/// rather than by coordinates: <c>&lt;name&gt;|&lt;side&gt;|&lt;distance&gt;|&lt;height&gt;</c> after the command.
+	/// The side is the object's own front, back, left or right; the distance is from its face on that
+	/// side; the height is above the floor found there.
+	/// </summary>
+	private static Vector3? Spot( string[] args )
+	{
+		if ( args.Length < 2 || Named( args[1] ) is not { } named ) return null;
+		var side = args.ElementAtOrDefault( 2 ) ?? "front";
+		var distance = args.Length > 3 ? float.Parse( args[3], Invariant ) : 30f;
+		var height = args.Length > 4 ? float.Parse( args[4], Invariant ) : 0f;
+		var rotation = named.WorldRotation;
+		var direction = side switch
+		{
+			"back" => rotation.Backward,
+			"left" => rotation.Left,
+			"right" => rotation.Right,
+			_ => rotation.Forward
+		};
+		direction = direction.WithZ( 0 ).Normal;
+		var bounds = named.GetBounds();
+		// From the middle to the face on that side, then on.
+		var reach = MathF.Abs( direction.x ) * bounds.Extents.x + MathF.Abs( direction.y ) * bounds.Extents.y;
+		var at = bounds.Center + direction * (reach + distance);
+		// The floor there: traced down from the object's middle height, under any roof above it.
+		var floor = Game.ActiveScene.Trace.Ray( at, at.WithZ( bounds.Mins.z - 512f ) )
+			.WithoutTags( "player", "item", "corpse", "sleeper" ).Run();
+		return at.WithZ( (floor.Hit ? floor.HitPosition.z : bounds.Mins.z) + height );
+	}
 
 	/// <summary>The nearest other person this client can see: someone in the city, or someone left lying where they were.</summary>
 	private static CharacterBody? Person( Player player ) =>

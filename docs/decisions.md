@@ -36,6 +36,16 @@ own abstraction, including a hand-written snapshot format, and every wrapper was
 sides to disagree: one such disagreement is why its search panel never opened. Before something is
 built, the engine's source is checked for it.
 
+The city's host-side services are one `GameObjectSystem`, `HexagonServices`. The engine makes one for
+every scene, so a game places nothing to have a city, and sets its rules, death, sight and lives among
+them, in the project's Systems settings, or per scene. It opens the city as the host starts
+(`ISceneStartup`), ticks it at the end of each fixed update, saves it as the scene goes, and hears
+connections arrive and leave as an `INetworkListener`. A character, played or left lying, is acted on
+through one `CharacterService` and has one `CharacterBody`: the engine's `IDamageable` for harm and its
+`IPressable` for what anyone can do to a person, so a pawn and a sleeper cannot drift apart. Decisions
+with no engine in them, such as who may enter the city, what an offer needs and how a staff command
+reads, are in `Code/Logic` with unit tests.
+
 ## Four laws
 
 What costs a roleplay server its players is cheap death, metagaming, duplicated items and worthless
@@ -52,7 +62,7 @@ game can require a capability for it (`FinishRequires`). After `DownedSeconds` a
 back up, or dies if the game sets `BleedOutKills`. How hurt someone else is cannot be read off them;
 that they are down, bound or armed can.
 
-Death is `Permanent` unless a game turns respawning on (`GameManager.Death`), as the tests may. The
+Death is `Permanent` unless a game turns respawning on (`HexagonServices.Death`), as the tests may. The
 dead are kept: on the list as dead, under names nobody else can take, with what they carried left on
 a body that is a holder like any other, laid out as it was carried (`DeathDropsBelongings`). An
 account has `LivingCharacters` lives at once, one by default. The next character can be made at once,
@@ -84,7 +94,7 @@ takes the character for still being in the city and removes itself.
 
 The engine sends every networked object to every client unless told otherwise. Pawns, sleepers,
 bodies and dropped items are spawned with `AlwaysTransmit` off and implement `INetworkVisible`: the
-host sends one to a client only while that client's character is within `GameManager.SightRange` of
+host sends one to a client only while that client's character is within `HexagonServices.SightRange` of
 it, by where the host believes both are. Owners and the host always have their own. Every object's
 name goes to every client, so a pawn is called `Player` and a dropped item `Item`, never by who or
 what they are.
@@ -251,6 +261,10 @@ or out of it, or out of the window to drop it on the ground. A click still choos
 buttons. The engine's own platform chat reaches every player by account name, whatever the distance,
 so the host warns at startup if a game leaves it on.
 
+The HUD is one `PanelComponent`, `Hud`, made of panels: the character list, what is looked at, the verb
+menu, offers, chat, the keys, the inventory and the staff console. Each rebuilds only when what it
+shows changes.
+
 ## Staff use the console's commands, as themselves
 
 `Operators.Execute` is the one implementation behind both the server console and the in-game staff
@@ -319,14 +333,21 @@ console, so the test leaves commands as files in the server's data folder; the s
 a client by RPC, the client runs it as its own player, and the reply is read from the server's output.
 Both clients are one Steam account, which the engine allows, so they share a character list.
 
-`DevDriver` and `DevCommands` exist only for these. The component is never placed in a scene; outside
-the editor the commands run only when both ends were started with `+hexagon_dev 1`, and a client never
-runs console commands for a server. They call the same client requests the HUD calls, so they cannot
+`DevDriver`, `DevCommands` and `DevSystem` exist only for these, and only in debug builds: what is
+published is compiled without them. The component is never placed in a scene; outside the editor the
+commands run only when both ends were started with `+hexagon_dev 1`, and a client never runs console
+commands for a server. Game code knows nothing of them: `DevSystem` suppresses the engine's input and
+holds the test camera as an `ICameraModifier`. They call the same client requests the HUD calls, so they cannot
 pass a rule the real path would fail. A client a test drives takes no keyboard or mouse input until its
 session ends, because the test clients are real windows with focus and a journal once showed someone at
 the machine walking one about; a refused command sets nothing, so no server can take a player's keys.
 What the tests cannot do is click: the HUD is looked at in pictures the editor test saves, and played
 by a person.
+
+A test says where its characters stand by what is there, beside `Door 1` or behind the `Crate`, never
+by coordinates. `spot` finds the object by name, goes out from the face on the side asked for by its
+own facing, and finds the floor there, so moving the map about does not break the tests, and a check
+on where someone is asks whether they are near the place rather than matching numbers.
 
 While working, the editor stays open: `dotnet test Tests` for a rule, and `playtest.ps1 -Attach`,
 which plays in that editor once it has built the edit, in about forty seconds, or less with `-Until`.
@@ -373,8 +394,8 @@ merging, `tools/test.ps1` runs verify and both play tests as one, in three to fo
   in view belongs to. Closing that needs the engine.
 - The engine announces every new networked object to every client, so a client far away learns that
   something was spawned at a place, though not what. Closing that needs the engine too.
-- The city is saved every `AutosaveSeconds` and when its game manager is destroyed. Whether stopping
-  a dedicated server with Ctrl+C destroys it first has not been tried.
+- The city is saved every `AutosaveSeconds` and when its scene is destroyed. Whether stopping a
+  dedicated server with Ctrl+C destroys it first has not been tried.
 - Unit tests and the confusables check run on a hosted runner on every push. Both play tests need
   s&box and stay local.
 - The play tests run both clients as one Steam account, so account-level rules are tested by one
