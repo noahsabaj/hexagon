@@ -206,6 +206,22 @@ try {
     Expect 'the host sent her back' { Send 2 'state' } 'pos=1[45]\d\d'
     Expect 'and put the claim on record' { Send 0 'journal' } 'movement\.implausible!=[1-9]'
 
+    Write-Host '==> Out of sight is out of the network' -ForegroundColor Cyan
+    # Her client sends her movement itself, and the host passes on what one client sends another
+    # unread, so only her client can keep it from those who cannot see her. Sight is narrowed so she
+    # can be out of it without leaving the scene's floor; she is 1260 units from him.
+    $sight = [regex]::Match((Send 0 'sight'), 'sight=([\d.]+)').Groups[1].Value
+    Expect 'the host can narrow how far anyone sees' (Send 0 'sight|600') 'sight=600'
+    Expect 'out of his sight, he no longer shows her' { Send 1 'pawns' } 'present=False .*at=1[45]\d\d,'
+    Teleport 2 'Jane Roe' 1200 -150
+    # Her own client has her there now. Were it still sending her to him, he would have her there
+    # within a few of its updates, thirty a second; he is watched for a second.
+    $pawns = Poll { Send 1 'pawns' } 'at=1[0-3]\d\d,' 1
+    Expect 'and her client no longer sends him where she goes' $pawns 'present=False .*at=1[45]\d\d,'
+    Expect 'restoring how far anyone sees' (Send 0 "sight|$sight") "sight=$sight"
+    Expect 'back in his sight, she is sent to him again, where she now is' { Send 1 'pawns' } 'present=True .*at=1[12]\d\d,'
+    Teleport 2 'Jane Roe' 1500 -150
+
     Write-Host '==> The world is shared' -ForegroundColor Cyan
     [void](Send 1 'door|Door 1|use')
     Expect 'a door one player opened is open for the other' { Send 2 'state' } 'Door 1:open=True'
