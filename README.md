@@ -134,6 +134,10 @@ Runs the three below: `verify.ps1`, then the two-client play test, and the edito
 it once both clients have joined. Each line is marked with the test that wrote it. Needs Steam
 running and takes about three minutes.
 
+While working, run the least that covers the change: `dotnet test Tests` for a rule in
+`Code/Logic`, in seconds; `verify.ps1` for anything compiled against the engine, in about half a
+minute; and the play test that plays what changed. Run `test.ps1` once before merging.
+
 ```bash
 pwsh tools/verify.ps1
 ```

@@ -364,6 +364,14 @@ menu, and a person does.)
   test stepped through a door it had just locked before the door stopped; `state` now says which
   doors are swinging, and the test waits. And the check that the host recorded a wall had passed
   on an earlier refusal; it now names the claim. (2026-10-11)
+- Two failures of the editor test came from the editor. Now and then it opens the scene while the
+  game's code is still building, and never takes the finished build in, though it reports it
+  built; the scene stays without the game's components, and the test waited out its timeout. The
+  test now starts the editor again when its scene has been open for 15 seconds on a finished build
+  without them. And the editor runs what it is asked over MCP from its main thread's queue, which
+  the menu also empties, in the menu's context (`MenuDll.Tick`). A `play_stop` run from there
+  closed the city with the menu's data folder, which is none, and the closing save failed. The
+  store now keeps the data folder it was made with. (2026-10-11)
 
 ## 2026-10-10: A change to several documents is saved as one
 
