@@ -70,8 +70,12 @@ public static class JournalKinds
 	public const string OfferRefuse = "offer.refuse";
 	public const string OfferLapse = "offer.lapse";
 
-	public const string DoorAssign = "door.assign";
-	public const string DoorRelease = "door.release";
+	/// <summary>The title to a building or a flat passes to a character: bought from its office, handed over, or assigned by staff.</summary>
+	public const string PropertyAssign = "property.assign";
+	/// <summary>The title to a building or a flat goes back to its office: taken back for it, or its owner died or left for good.</summary>
+	public const string PropertyRelease = "property.release";
+	/// <summary>A new lock is fitted to a door or a locker, and the one that was in it taken out.</summary>
+	public const string LockFit = "lock.fit";
 
 	/// <summary>A train stood at its station, with what it brought.</summary>
 	public const string TrainArrive = "train.arrive";
@@ -97,6 +101,7 @@ public static class JournalKinds
 	public const string OperatorRestore = "operator.restore";
 	public const string OperatorFaction = "operator.faction";
 	public const string OperatorDoor = "operator.door";
+	public const string OperatorProperty = "operator.property";
 	public const string OperatorTeleport = "operator.teleport";
 	public const string OperatorTrain = "operator.train";
 

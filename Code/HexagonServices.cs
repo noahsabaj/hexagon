@@ -194,6 +194,7 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 		// Whoever was down or bound when it stopped is still lying, or standing, where they were.
 		foreach ( var character in Roster!.All.Where( value => value.IsDown || value.IsRestrained ).ToArray() )
 			Sleeper.HostLeave( character, character.Position is { Length: 3 } at ? new Transform( new Vector3( at[0], at[1], at[2] ) ) : FindSpawn() );
+		Property.HostAdopt( this );
 	}
 
 	/// <summary>Host: writes what changes without being saved at once: where everyone stands, and how long the down have been down.</summary>

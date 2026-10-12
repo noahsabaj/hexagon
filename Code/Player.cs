@@ -21,8 +21,11 @@ public sealed record CharacterSummary( Guid Id, string Name, string Faction, boo
 	public bool IsWaiting => !IsDead && ArrivesAt > DateTimeOffset.UtcNow;
 }
 
-/// <summary>A door whose title a character holds, as its owner is shown it, to offer it on.</summary>
-public sealed record OwnedDoor( Guid Id, string Name );
+/// <summary>
+/// The title to a building or a flat that a character can offer on, as it is shown it: one it holds,
+/// or, where <paramref name="Office"/> names one, one that office holds, whose stamp it carries.
+/// </summary>
+public sealed record HeldTitle( Guid Id, string Name, string Office );
 
 /// <summary>
 /// One connection's presence in the city. Movement is the engine's <see cref="PlayerController"/>,
@@ -71,8 +74,8 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	public IReadOnlyList<CharacterSummary> Characters { get; private set; } = Array.Empty<CharacterSummary>();
 	/// <summary>What this character carries. A key shows its cut, never what it opens.</summary>
 	public InventoryData? Inventory { get; private set; }
-	/// <summary>The doors this character holds the title to.</summary>
-	public IReadOnlyList<OwnedDoor> OwnedDoors { get; private set; } = Array.Empty<OwnedDoor>();
+	/// <summary>The titles this character can offer: those it holds, and those of any office whose stamp it carries.</summary>
+	public IReadOnlyList<HeldTitle> HeldTitles { get; private set; } = Array.Empty<HeldTitle>();
 	/// <summary>Where this character is wounded, oldest first. How hurt someone else is cannot be read off them.</summary>
 	public IReadOnlyList<string> Wounded { get; private set; } = Array.Empty<string>();
 
@@ -585,16 +588,17 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		HostSendAccount();
 	}
 
-	private void SendPrivateState()
+	internal void SendPrivateState()
 	{
 		if ( _character is null || Network.Owner is not { } owner ) return;
 		// Private state changes whenever the inventory does, which is also when what is in hand may have left it.
 		HostSyncVitals();
-		var doors = Scene.GetAllComponents<Door>().Where( value => value.HostOwner == _character.Id )
-			.Select( value => new OwnedDoor( value.GameObject.Id, value.GameObject.Name ) ).ToArray();
+		var marks = StampMarks( _character ).ToArray();
+		var titles = Scene.GetAllComponents<Property>().Where( value => Titles.ActsFor( value.HostOwner, value.Office, _character.Id, marks ) )
+			.Select( value => new HeldTitle( value.GameObject.Id, value.Title, value.HostOwner is null ? value.Office : string.Empty ) ).ToArray();
 		using ( Rpc.FilterInclude( owner ) )
 			ReceivePrivateState( _character.Name, _character.Faction, _character.Rank, JsonSerializer.Serialize( Seen.Inventory( _character.Inventory ) ),
-				JsonSerializer.Serialize( _character.Known ), _character.Health, JsonSerializer.Serialize( doors ), string.Join( ';', _character.Wounds ) );
+				JsonSerializer.Serialize( _character.Known ), _character.Health, JsonSerializer.Serialize( titles ), string.Join( ';', _character.Wounds ) );
 	}
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
@@ -607,14 +611,15 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		RankTitle = string.Empty;
 		Known = new Dictionary<Guid, string>();
 		Inventory = null;
-		OwnedDoors = Array.Empty<OwnedDoor>();
+		HeldTitles = Array.Empty<HeldTitle>();
 		OfferText = string.Empty;
+		OfferOffice = string.Empty;
 		Wounded = Array.Empty<string>();
 		PrivateVersion++;
 	}
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
-	private void ReceivePrivateState( string name, string factionPath, string rank, string inventoryJson, string knownJson, int health, string doorsJson, string wounds )
+	private void ReceivePrivateState( string name, string factionPath, string rank, string inventoryJson, string knownJson, int health, string titlesJson, string wounds )
 	{
 		Health = health;
 		Wounded = wounds.Split( ';', StringSplitOptions.RemoveEmptyEntries );
@@ -623,7 +628,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		FactionPath = factionPath;
 		RankTitle = rank;
 		Inventory = JsonSerializer.Deserialize<InventoryData>( inventoryJson );
-		OwnedDoors = JsonSerializer.Deserialize<OwnedDoor[]>( doorsJson ) ?? Array.Empty<OwnedDoor>();
+		HeldTitles = JsonSerializer.Deserialize<HeldTitle[]>( titlesJson ) ?? Array.Empty<HeldTitle>();
 		PrivateVersion++;
 	}
 

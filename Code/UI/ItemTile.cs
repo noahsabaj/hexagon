@@ -53,6 +53,7 @@ public sealed class ItemTile : Panel
 		else Add.Label( title, "title" );
 		if ( definition is { IsRadio: true } ) Add.Label( _item.Frequency ?? "untuned", "detail" );
 		if ( definition is { IsKey: true } ) Add.Label( _item.Pattern ?? "blank", "detail" );
+		else if ( definition is { IsLock: true } && _item.Pattern is { } cut ) Add.Label( cut, "detail" );
 		if ( _item.Count > 1 ) Add.Label( $"×{_item.Count}", "count" );
 	}
 }

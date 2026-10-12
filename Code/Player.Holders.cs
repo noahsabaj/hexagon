@@ -153,6 +153,7 @@ public sealed partial class Player
 		else if ( verbId == VerbIds.ItemLayOut && definition is { IsMap: true } ) outcome = LayOut( game, stack );
 		else if ( verbId == VerbIds.ItemUse && definition is { Consumable: true } ) outcome = Consume( game, stack, definition );
 		else if ( verbId == VerbIds.ItemMake && definition is { IsTool: true } ) outcome = MakeWith( stack, definition );
+		else if ( verbId == VerbIds.ItemFit ) outcome = FitLock( game, stack, definition );
 		else if ( verbId == VerbIds.ItemCompare ) outcome = Compare( caller, stack );
 		else if ( verbId == VerbIds.ItemEquip ) outcome = Equip( game, stack );
 		else outcome = Result.Fail( ErrorCode.Invalid, "That cannot be done with it." );

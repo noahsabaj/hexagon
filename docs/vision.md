@@ -70,10 +70,12 @@ people learning to build on it.
   bought from someone who has it.
 - Property belongs to someone, who sells or rents it. A building nobody has bought belongs to an
   office run by players, such as the housing office, and the money goes into its till. Staff assign
-  some buildings outright. An owner hands a door over by offering it, like any item.
+  some buildings outright. An owner hands a building over by offering it, like any item, and may
+  change its locks.
 - Doors open to keys, not to teams. Every lock has a pattern, and a key fits every lock with its
   pattern, so all the Interior Ministry's doors can share one while each flat has its own. Owning a
-  door is title only, the right to sell or rent it: locking takes the key, owner or not.
+  building is title only, the right to sell or rent it and to change its locks: locking takes the
+  key, owner or not.
 - A key shows its cut, a code anyone holding it can compare with another key's, never which lock it
   opens. Whoever finds a key learns what it opens by trying it.
 - Staff can still create items with `give`. It is the one exception, and every use is journaled

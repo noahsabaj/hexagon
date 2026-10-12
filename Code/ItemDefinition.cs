@@ -73,6 +73,13 @@ public sealed class ItemDefinition : GameResource
 	[Property] public bool IsKey { get; set; }
 
 	/// <summary>
+	/// It is a lock, not yet fitted: cut to a pattern it carries, as a key is, it fits into a door or a
+	/// locker in place of the lock there, which comes out as one of these. Whoever holds the title to the
+	/// building fits it. See <see cref="Property"/>.
+	/// </summary>
+	[Property] public bool IsLock { get; set; }
+
+	/// <summary>
 	/// It is paper: how many lines of writing it takes, one below another. Ink stays, so a written line
 	/// is there for good. Zero is nothing to write on. See <see cref="Papers"/>.
 	/// </summary>
@@ -113,6 +120,9 @@ public sealed class ItemDefinition : GameResource
 	/// <summary>Whether it is something to write on or fill in, and read.</summary>
 	public bool IsPaper => Lines > 0 || Fields.Count > 0;
 
+	/// <summary>Whether it is cut to a pattern: a key, or a lock not yet fitted.</summary>
+	public bool IsCut => IsKey || IsLock;
+
 	/// <summary>Whether it is a stamp.</summary>
 	public bool IsStamp => StampMark.Length > 0;
 
@@ -129,12 +139,12 @@ public sealed class ItemDefinition : GameResource
 	public string? IconPath => !string.IsNullOrEmpty( Icon ) ? Icon : Wearable?.Icon.Path is { Length: > 0 } worn ? worn : null;
 
 	/// <summary>
-	/// Host: new ones enter the world from a named source, a key already cut to its pattern. All of
-	/// them arrive or none do. Clothing can arrive <paramref name="worn"/>, one piece at a time.
+	/// Host: new ones enter the world from a named source, a key or a lock already cut to its pattern.
+	/// All of them arrive or none do. Clothing can arrive <paramref name="worn"/>, one piece at a time.
 	/// </summary>
 	public Result<ItemStack> IssueTo( Transfers transfers, string source, IHolder to, Actor by, int count = 1, string? pattern = null, bool worn = false )
 	{
-		if ( pattern is not null && !IsKey ) return Result<ItemStack>.Fail( ErrorCode.Invalid, $"{Title} is not a key, so it is cut to nothing." );
+		if ( pattern is not null && !IsCut ) return Result<ItemStack>.Fail( ErrorCode.Invalid, $"{Title} is neither a key nor a lock, so it is cut to nothing." );
 		if ( worn && !Wearable.IsValid() ) return Result<ItemStack>.Fail( ErrorCode.Invalid, $"{Title} is not something to wear." );
 		return transfers.Issue( source, to, ResourcePath, Width, Height, by, count, MaxStack, pattern, worn );
 	}

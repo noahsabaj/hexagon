@@ -265,12 +265,14 @@ public static class DevCommands
 			// vantage|<character>|<bone>|<distance>|<shooter>: where the shooter can stand, about that far from
 			// that part of someone's body, for a shot from the eyes to meet that part before anything else, as
 			// x y z on the floor; the nearest such place to where the shooter is. Someone fallen against a wall,
-			// or round the end of one, is shot from where they can be seen, and nobody is stood on top of them.
+			// round the end of one or against the shooter, is shot from where they can be seen, and nobody is
+			// stood on top of them.
 			if ( !Networking.IsHost ) return "refused: not the host";
 			if ( PartAt( args[1], args[2] ) is not { } at ) return $"no part '{args[2]}' of '{args[1]}'";
 			var shooter = HexagonServices.Current?.Roster?.All.FirstOrDefault( value => value.Name == args[4] && !value.IsDead ) is { } who
-				? Player.HostLoaded( who.Id )?.HostPosition : null;
-			if ( shooter is not { } from ) return $"no shooter '{args[4]}'";
+				? Player.HostLoaded( who.Id ) : null;
+			if ( shooter is null ) return $"no shooter '{args[4]}'";
+			var from = shooter.HostPosition;
 			var scene = Game.ActiveScene;
 			var away = float.Parse( args[3], Invariant );
 			foreach ( var distance in new[] { away, away * 1.5f, away * 0.75f } )
@@ -285,7 +287,9 @@ public static class DevCommands
 					var room = scene.Trace.Box( new BBox( new Vector3( -16f, -16f, 2f ), new Vector3( 16f, 16f, 72f ) ), floor.HitPosition, floor.HitPosition + Vector3.Up ).WithoutTags( "player" ).Run();
 					if ( room.Hit || room.StartedSolid ) continue;
 					var eye = floor.HitPosition + Vector3.Up * 64f;
-					var sight = scene.Trace.Ray( eye, at + (at - eye).Normal * 8f ).UseHitboxes().WithoutTags( "capsule" ).Run();
+					// Past the shooter's own body, as a shot goes: they will be standing here instead.
+					var sight = scene.Trace.Ray( eye, at + (at - eye).Normal * 8f ).UseHitboxes().WithoutTags( "capsule" )
+						.IgnoreGameObjectHierarchy( shooter.GameObject ).Run();
 					if ( sight.GameObject?.GetComponentInParent<CharacterBody>()?.HostCharacter?.Name == args[1]
 						&& (sight.Hitbox?.Bone?.Name ?? sight.GameObject.Name) == args[2] )
 						return $"{floor.HitPosition.x:0} {floor.HitPosition.y:0} {floor.HitPosition.z:0}";
@@ -321,6 +325,14 @@ public static class DevCommands
 			if ( Game.ActiveScene.GetAllComponents<Vehicle>().FirstOrDefault( value => value.GameObject.Name == args[1] ) is not { } tanked ) return "no such vehicle";
 			tanked.HostSetFuel( double.Parse( args[2], Invariant ) );
 			return "set";
+		}
+		if ( args[0] == "mute" )
+		{
+			// Silences this machine for as long as it runs, and saves nothing, as the engine's own mute would:
+			// a test is played with nobody listening, and a client kept between runs goes on breathing hard.
+			if ( Sandbox.Audio.Mixer.Master is not { } master ) return "no mixer";
+			master.Mute = true;
+			return "muted";
 		}
 		if ( args[0] == "hostid" ) return $"local={Connection.Local?.SteamId.ValueUnsigned} host={Connection.Host?.SteamId.ValueUnsigned} address={Connection.Local?.Address} name={Connection.Local?.DisplayName}";
 		if ( args[0] == "convar" ) return ConsoleSystem.GetValue( args[1] ) ?? "unset";
@@ -453,6 +465,7 @@ public static class DevCommands
 					return $"sent door {args[2]}";
 				case "drop":
 				case "use":
+				case "fit":
 					var held = Pick( Carried( player.Inventory ), args[1] );
 					if ( held is null ) return "no such item";
 					player.RequestItemAct( held.Id, $"item.{args[0]}" );
@@ -680,15 +693,17 @@ public static class DevCommands
 					if ( gift is null || taker is null ) return gift is null ? "no such item" : "nobody there";
 					player.RequestOffer( taker, gift.Id, args.Length > 2 ? int.Parse( args[2] ) : gift.Count );
 					return "sent offer";
-				case "offerdoor":
-					// offerdoor|<door name> offers the title to a door this character holds.
-					var deed = player.OwnedDoors.FirstOrDefault( value => value.Name == args[1] );
+				case "offertitle":
+					// offertitle|<title> offers a title this character holds, or its office does, to the nearest other character.
+					var deed = player.HeldTitles.FirstOrDefault( value => value.Name == args[1] );
 					var buyer = Nearest( player, Others( player ) );
-					if ( deed is null || buyer is null ) return deed is null ? $"no such door owned: {string.Join( ", ", player.OwnedDoors.Select( value => value.Name ) )}" : "nobody there";
-					player.RequestOfferDoor( buyer, deed.Id );
-					return "sent offerdoor";
+					if ( deed is null || buyer is null ) return deed is null ? $"no such title held: {string.Join( ", ", player.HeldTitles.Select( value => value.Name ) )}" : "nobody there";
+					player.RequestOfferTitle( buyer, deed.Id );
+					return "sent offertitle";
 				case "answer":
-					player.RequestAnswerOffer( args[1] == "1" );
+					// answer|1 accepts, answer|0 refuses, and answer|office takes a title for the office.
+					if ( args[1] == "office" ) player.RequestTakeForOffice();
+					else player.RequestAnswerOffer( args[1] == "1" );
 					return "sent answer";
 				case "staff":
 					player.RequestStaff( args[1] );
@@ -742,7 +757,8 @@ public static class DevCommands
 						$"items=[{string.Join( ", ", Carried( player.Inventory ).Select( value => $"{Pile( value )}@{value.X},{value.Y}" ) )}] " +
 						$"wearing=[{string.Join( ", ", Worn( player.Inventory ) )}] look=[{string.Join( ",", Looks.Pieces( player.Look ) )}] " +
 						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked},swinging={value.IsSwinging}" ) )}] " +
-						$"owned=[{string.Join( ", ", player.OwnedDoors.Select( value => value.Name ) )}] offer='{player.OfferText}' " +
+						$"owned=[{string.Join( ", ", player.HeldTitles.Where( value => value.Office.Length == 0 ).Select( value => value.Name ) )}] " +
+					$"office=[{string.Join( ", ", player.HeldTitles.Where( value => value.Office.Length > 0 ).Select( value => value.Name ) )}] offer='{player.OfferText}' forOffice='{player.OfferOffice}' " +
 						$"health={player.Health} down={player.IsDown} restrained={player.IsRestrained} held='{ItemDefinition.Find( player.HeldItemPath )?.Title}' bodies={Game.ActiveScene.GetAllComponents<Corpse>().Count( value => value.IsRevealed )} " +
 						// Wounds as the character knows them, the limp and the breathing as anyone sees and hears
 						// them, how fast it may go, and how high above its feet it looks out from, as the camera

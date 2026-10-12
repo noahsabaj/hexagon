@@ -81,6 +81,8 @@ public static class VerbIds
 	public const string ItemMake = "item.make";
 	/// <summary>Telling whether the things in a pile were made alike, with the right tool.</summary>
 	public const string ItemCompare = "item.compare";
+	/// <summary>Fitting a lock to the door or locker in front of you, in place of the one in it, which comes out.</summary>
+	public const string ItemFit = "item.fit";
 }
 
 /// <summary>

@@ -104,6 +104,10 @@
 			{
 				<div class="muted">A key shows its cut. Keys cut the same open the same locks; which ones, you learn by trying.</div>
 			}
+			@if ( SelectedDefinition is { IsLock: true } )
+			{
+				<div class="muted">A lock shows its cut, as its keys do. Whoever holds a building's title fits it to one of its doors, standing open, or to a locker they can open, and the old lock comes out.</div>
+			}
 			@if ( SelectedDefinition is { IsPaper: true } )
 			{
 				<div class="muted">Read it to write on it, fill it in or stamp it. Writing takes a pen or a pencil, and ink stays.</div>
@@ -151,6 +155,10 @@
 					@if ( SelectedDefinition is { IsTool: true } )
 					{
 						<button class="primary" onclick=@(() => ActOnSelected( VerbIds.ItemMake ))>Work with it</button>
+					}
+					@if ( SelectedDefinition is { IsLock: true } )
+					{
+						<button class="primary" onclick=@(() => ActOnSelected( VerbIds.ItemFit ))>Fit it</button>
 					}
 					@if ( SelectedStack is { Count: > 1 } pile )
 					{

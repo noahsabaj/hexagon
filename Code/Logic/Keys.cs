@@ -24,6 +24,12 @@ public static class Keys
 		return Result<string>.Success( pattern );
 	}
 
+	/// <summary>
+	/// A pattern nobody has cut before, for a lock made new and the keys made with it: a key cut to an
+	/// old one cannot turn it, and nobody can guess it.
+	/// </summary>
+	public static string NewPattern() => $"cut-{Guid.NewGuid():N}"[..MaximumPattern];
+
 	/// <summary>Whether a key cut to <paramref name="key"/> turns a lock with <paramref name="pattern"/>. A lock with no pattern has no keyhole.</summary>
 	public static bool Fits( string? key, string pattern ) =>
 		key is { Length: > 0 } && pattern.Length > 0 && string.Equals( key, pattern, StringComparison.OrdinalIgnoreCase );

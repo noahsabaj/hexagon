@@ -43,7 +43,7 @@ name before it runs, and every line typed at the console is journaled as the con
 `journal [text] [count] [days]` in the staff panel shows the latest entries containing the text,
 from the last two days unless given more, up to fourteen. Useful searches: a character's name,
 `REFUSED`, `request.forged`, `combat.attack`, `character.death`, `item.move`, `offer.accept`,
-`door.assign`. Each entry says who, what, to whom, where, whether it was allowed, and who was
+`property.assign`. Each entry says who, what, to whom, where, whether it was allowed, and who was
 close enough to witness it, by the names they had then. Times are UTC. The files are
 `journal/<date>.jsonl` in the data folder, one JSON object per line and one file per UTC day, and
 can be read while the server runs.

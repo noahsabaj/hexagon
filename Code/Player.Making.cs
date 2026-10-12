@@ -76,24 +76,38 @@ public sealed partial class Player
 		HostStopWork( work.Finish() );
 	}
 
-	/// <summary>Host: making is done. What it was made from is used up and what it makes is there, or nothing changes. Returns what the worker is told.</summary>
+	/// <summary>
+	/// Host: making is done. What it was made from is used up and what it makes is there, or nothing
+	/// changes. The keys and locks it makes are cut alike, to whatever the work cuts them to. Returns
+	/// what the worker is told.
+	/// </summary>
 	private string HostMake( IHolder from, IHolder to, MakingRecipe recipe, string maker, Machine? numbering )
 	{
 		if ( HexagonServices.Current is not { Transfers: { } transfers } game || _character is null ) return "You stop working.";
+		var rule = recipe.Rule;
+		// What it is worked from may have been taken away while the work went on.
+		if ( !Making.Enough( rule, from.Inventory ) ) return Making.NothingToMakeFrom;
+		var cut = Making.Cut( rule, from.Inventory );
+		if ( !cut.Ok ) return cut.Message;
 		var output = recipe.Output!;
 		var numbered = recipe.Serial && numbering is not null;
 		var first = numbered ? numbering!.Remembered().NextSerial : 0;
-		var marks = Making.Marks( maker, recipe.Count, numbered ? numbering!.SerialPrefix : null, first );
-		var made = new ItemStack { Definition = output.ResourcePath, Width = output.Width, Height = output.Height, Max = Math.Max( 1, output.MaxStack ) };
-		var done = transfers.Make( from, to, recipe.Rule.Inputs, made, recipe.Count, marks, maker, Actor.Of( _character ) );
+		var outputs = new List<Transfers.Made> { Made( output, recipe.Count, cut.Value, Making.Marks( maker, recipe.Count, numbered ? numbering!.SerialPrefix : null, first ) ) };
+		outputs.AddRange( recipe.Also.Select( also => Made( also.Item!, also.Count, cut.Value, Making.Marks( maker, also.Count ) ) ) );
+		var done = transfers.Make( from, to, rule.Inputs, outputs, maker, Actor.Of( _character ) );
 		if ( !done.Ok ) return done.Message;
 		if ( numbered ) numbering!.Remembered().NextSerial = first + recipe.Count;
 		if ( numbered ) game.SaveTogether( from, to, game.World );
 		else game.SaveTogether( from, to );
 		HostRefresh( from );
 		if ( !ReferenceEquals( from, to ) ) HostRefresh( to );
-		return $"Done: {output.Title} x{recipe.Count}.";
+		return $"Done: {string.Join( " and ", outputs.Select( value => $"{ItemDefinition.Find( value.Like.Definition )?.Title} x{value.Count}" ) )}.";
 	}
+
+	// Some of one thing a piece of work makes, cut to the work's pattern if it is a key or a lock.
+	private static Transfers.Made Made( ItemDefinition definition, int count, string? cut, IReadOnlyList<MadeMark> marks ) =>
+		new( new ItemStack { Definition = definition.ResourcePath, Width = definition.Width, Height = definition.Height, Max = Math.Max( 1, definition.MaxStack ),
+			Pattern = definition.IsCut ? cut : null }, count, marks );
 
 	/// <summary>Host: the work ends, or has just finished, and the worker is told why, unless they stopped it themselves.</summary>
 	private void HostStopWork( string? tell = null )

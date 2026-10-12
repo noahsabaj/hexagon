@@ -6,7 +6,7 @@
 @namespace Hexagon.UI
 @inherits Panel
 
-@* What this character could hand to someone: some or all of a pile, or the title to a door it holds.
+@* What this character could hand to someone: some or all of a pile, or a title it holds or its office does.
    Or, showing, the papers it could hold up for them to read without letting go. *@
 <root class="center">
 	@if ( Player.Local is { Inventory: { } goods } player && Recipient is { } recipient )
@@ -34,15 +34,15 @@
 			}
 			@if ( !Showing )
 			{
-				@foreach ( var door in player.OwnedDoors )
+				@foreach ( var title in player.HeldTitles )
 				{
 					<div class="row">
-						<div class="grow">The title to @door.Name</div>
-						<button class="primary" onclick=@(() => OfferDoor( recipient, door ))>Offer</button>
+						<div class="grow">The title to @title.Name@(title.Office.Length > 0 ? $", for {title.Office}" : string.Empty)</div>
+						<button class="primary" onclick=@(() => OfferTitle( recipient, title ))>Offer</button>
 					</div>
 				}
 			}
-			@if ( items.Count == 0 && (Showing || player.OwnedDoors.Count == 0) )
+			@if ( items.Count == 0 && (Showing || player.HeldTitles.Count == 0) )
 			{
 				<div class="muted">@(Showing ? "You have no papers to show." : "You have nothing to offer.")</div>
 			}
@@ -84,19 +84,20 @@
 		Dismiss?.Invoke();
 	}
 
-	private void OfferDoor( Player recipient, OwnedDoor door )
+	private void OfferTitle( Player recipient, HeldTitle title )
 	{
-		Player.Local?.RequestOfferDoor( recipient, door.Id );
+		Player.Local?.RequestOfferTitle( recipient, title.Id );
 		Dismiss?.Invoke();
 	}
 
-	/// <summary>How a pile reads in a list: what it is, how many, and for a key its cut.</summary>
+	/// <summary>How a pile reads in a list: what it is, how many, and for a key or a lock its cut.</summary>
 	private static string Listing( ItemStack item )
 	{
 		var definition = ItemDefinition.Find( item.Definition );
 		var title = definition?.Title ?? "Unknown item";
 		if ( item.Count > 1 ) title += $" ×{item.Count}";
 		if ( definition is { IsKey: true } ) title += $", cut {item.Pattern ?? "blank"}";
+		else if ( definition is { IsLock: true } && item.Pattern is { } cut ) title += $", cut {cut}";
 		if ( definition is { IsRadio: true } && item.Frequency is { } frequency ) title += $", tuned to {frequency}";
 		return title;
 	}

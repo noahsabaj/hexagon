@@ -392,6 +392,10 @@ try {
         }
     }
 
+    # Nobody listens to the clients, and one kept between runs would go on breathing hard for as long as
+    # its character is hurt: each is muted until it closes, which saves nothing.
+    foreach ($number in 1, 2) { Expect "client $number is muted" (Send $number 'mute') '^muted$' }
+
     # tools/test.ps1 starts the editor play test when this line appears.
     Section 'Two characters, one city'
     # A train that came at its time of day in the middle of a run would bring goods nothing here expects.
@@ -536,14 +540,14 @@ try {
     Expect 'an offer lapses once the two have parted' { "$(Send 2 'state') $(Send 1 'state')" } "offer='' .*The offer lapses\..*Zip tie@0,1.*Your offer lapses\."
     Expect 'on the record, with why' { Send 0 'journal|offer.lapse' } 'ok=True .*data=\[reason=apart\]'
     Teleport 2 'Jane Roe' $beside
-    [void](Send 0 'console|hexagon_door "Door 2" assign "John Doe"')
-    Expect 'staff assigned him a flat' { Send 1 'state' } 'owned=\[Door 2\]'
-    [void](Send 1 'offerdoor|Door 2')
-    Expect 'its owner offers the title like anything else' { Send 2 'state' } "offer='John Doe offers you the title to Door 2\.'"
+    [void](Send 0 'console|hexagon_property "Flat 2" assign "John Doe"')
+    Expect 'staff assigned him a flat' { Send 1 'state' } 'owned=\[Flat 2\]'
+    [void](Send 1 'offertitle|Flat 2')
+    Expect 'its owner offers the title like anything else' { Send 2 'state' } "offer='John Doe offers you the title to Flat 2\.'"
     [void](Send 2 'answer|1')
-    Expect 'once she accepts, it is hers' { Send 2 'state' } 'owned=\[Door 2\]'
+    Expect 'once she accepts, it is hers' { Send 2 'state' } 'owned=\[Flat 2\]'
     Expect 'and no longer his' { Send 1 'state' } 'owned=\[\]'
-    Expect 'the hand-over is on record, from him to her' { Send 0 'journal|door.assign' } "actor='John Doe' .*data=\[owner=Jane Roe from=John Doe\]"
+    Expect 'the hand-over is on record, from him to her' { Send 0 'journal|property.assign' } "actor='John Doe' .*data=\[property=Flat 2 owner=Jane Roe from=John Doe\]"
 
     Section 'A paper is held up to read, not handed over'
     [void](Send 2 'show|Identification card')
@@ -773,7 +777,7 @@ try {
     $journal = Poll { Send 0 'journal' } '(?<!\S)character\.death=1(?!\S)'
     Expect 'the death is on record' $journal '(?<!\S)character\.death=1(?!\S)'
     Expect 'with where the shot landed' (Send 0 'journal|character.death') 'place=head'
-    Expect 'and the title she held went with her' $journal '(?<!\S)door\.release=1(?!\S)'
+    Expect 'and the flat she held went back to its office' $journal '(?<!\S)property\.release=1(?!\S)'
     # He is beside her, so he sees her body as she falls, not once everyone else may be sent it.
     Expect 'he sees her body at once' (Poll { Send 1 'state' } 'bodies=1 ' 2) 'bodies=1 '
     [void](Send 1 'act|corpse.search')
@@ -914,7 +918,7 @@ try {
     Section 'A site yields slowly to whoever works it'
     Teleport 2 'Jane Roe' (Spot 'Toolbox' front 20)
     [void](Send 2 'open|Toolbox')
-    [void](Poll { Send 2 'state' } 'open=\[Toolbox: Crowbar\] ')
+    [void](Poll { Send 2 'state' } 'open=\[Toolbox: Crowbar, Key blankx4\] ')
     [void](Send 2 'take|Crowbar')
     [void](Send 2 'close')
     Teleport 2 'Jane Roe' (Spot 'Scrap yard' front 20)
@@ -1015,6 +1019,95 @@ try {
     [void](Send 2 'sit|Combine truck|drive')
     Expect 'with its tank empty, it will not start' { Send 2 'state' } 'The tank is empty\.'
     $truckLeft = Truck
+    Teleport 1 'John Doe' $stood
+    Wait-Landed 1
+
+    Section 'A flat is sold over the counter, and its lock changed by whoever holds it'
+    # What a player sees of a key or a lock cut to the flat's pattern.
+    $flatCut = '5-3-3-2-7'
+    Teleport 1 'John Doe' (Spot 'Housing counter' front 20)
+    Teleport 2 'Jane Roe' (Spot 'Housing counter' front 70)
+    Wait-Landed 1
+    # He keeps the Civil Authority's counter: its stamp, and the flat's two keys.
+    foreach ($gift in 'ca_stamp', 'key 2 flat2') { [void](Send 0 "console|hexagon_give `"John Doe`" $gift") }
+    [void](Send 0 'console|hexagon_give "Jane Roe" token 25')
+    Expect 'a flat nobody holds is its office''s, and whoever carries the office''s stamp may sell it' { Send 1 'state' } 'owned=\[\] office=\[Flat 2\] '
+    Expect 'nobody else is shown it' { Send 2 'state' } 'owned=\[\] office=\[\] '
+    [void](Send 2 'offer|Token|25')
+    [void](Poll { Send 1 'state' } "offer='[^']*offers you 25 Token\.'")
+    [void](Send 1 'answer|1')
+    [void](Send 1 'open|Housing counter')
+    Expect 'the counter opens to the city''s key, stocked with certificates' { Send 1 'state' } 'open=\[Housing counter: Housing certificatex5\] '
+    [void](Send 1 'put|Token')
+    Expect 'she pays by hand, and he puts the money in the till' { Send 1 'state' } 'open=\[Housing counter: Housing certificatex5, Tokenx\d+\] '
+    [void](Send 1 'close')
+    [void](Send 1 'offertitle|Flat 2')
+    Expect 'he offers the flat for the office' { Send 2 'state' } "offer='John Doe offers you the title to Flat 2\.' forOffice=''"
+    [void](Send 2 'answer|1')
+    Expect 'once she accepts, it is hers' { Send 2 'state' } 'owned=\[Flat 2\] office=\[\] '
+    Expect 'and no longer the office''s to sell' { Send 1 'state' } 'owned=\[\] office=\[\] '
+    Expect 'the sale is on record, from the office to her' { Send 0 'journal|property.assign' } "actor='John Doe' .*data=\[property=Flat 2 owner=Jane Roe from=Combine Civil Authority\]"
+    [void](Send 1 'offer|Key|1')
+    [void](Poll { Send 2 'state' } "offer='John Doe offers you Key, cut $flatCut\.'")
+    [void](Send 2 'answer|1')
+    Expect 'the keys are handed over apart from the title' { Send 2 'state' } "Key#$flatCut@"
+
+    Teleport 2 'Jane Roe' (Spot "Locksmith's bench" front 20)
+    [void](Send 0 'console|hexagon_give "Jane Roe" scrap_metal 2')
+    [void](Send 2 "open|Locksmith's bench")
+    [void](Send 2 'put|Scrap metal')
+    [void](Poll { Send 2 'state' } "open=\[Locksmith's bench: Scrap metalx2\] ")
+    [void](Send 2 'close')
+    [void](Send 2 "work|Locksmith's bench")
+    Expect 'at a locksmith''s bench, scrap makes a lock and the keys that come with it' (Poll { Send 2 'state' } 'Done: Lock x1 and Key x2\.' 15) 'Done: Lock x1 and Key x2\.'
+    [void](Send 2 "open|Locksmith's bench")
+    $made = Poll { Send 2 'state' } "open=\[Locksmith's bench: Lock#"
+    Expect 'all three cut alike, to a cut of their own' $made "open=\[Locksmith's bench: Lock#(?<cut>[\d-]+), Key#\k<cut>, Key#\k<cut>\] "
+    $newCut = if ($made -match 'Lock#([\d-]+)') { $Matches[1] } else { 'none' }
+    foreach ($thing in 'Lock', 'Key', 'Key') { [void](Send 2 "take|$thing") }
+    [void](Poll { Send 2 'state' } "open=\[Locksmith's bench: \] ")
+    [void](Send 0 'console|hexagon_give "Jane Roe" key_blank')
+    [void](Poll { Send 2 'state' } 'Key blank@')
+    $model = if ((Send 2 'state') -match "Key#$newCut@(\d+,\d+)") { $Matches[1] } else { 'none' }
+    [void](Send 2 'put|Key blank')
+    [void](Send 2 "put|Key@$model")
+    [void](Poll { Send 2 'state' } "open=\[Locksmith's bench: Key blank, Key#$newCut\] ")
+    [void](Send 2 'close')
+    [void](Send 2 "work|Locksmith's bench")
+    Expect 'a blank is cut to copy a key, which is kept' (Poll { Send 2 'state' } 'Done: Key x1\.' 15) 'Done: Key x1\.'
+    [void](Send 2 "open|Locksmith's bench")
+    Expect 'the copy is cut like the key it was copied from' { Send 2 'state' } "open=\[Locksmith's bench: Key#$newCut, Key#$newCut\] "
+    foreach ($thing in 'Key', 'Key') { [void](Send 2 "take|$thing") }
+    [void](Send 2 'close')
+
+    $atDoor = Spot 'Door 2' left 50
+    Teleport 2 'Jane Roe' $atDoor
+    Wait-Landed 2
+    [void](Send 2 'face|Door 2')
+    [void](Send 2 'fit|Lock')
+    Expect 'a lock is changed from the edge of an open door' { Send 2 'state' } 'Open the door first: a lock is changed from its edge\.'
+    [void](Send 2 'door|Door 2|lock')
+    [void](Send 2 'door|Door 2|use')
+    [void](Poll { Send 2 'state' } 'Door 2:open=True,locked=False')
+    [void](Send 2 'face|Door 2')
+    [void](Send 2 'fit|Lock')
+    Expect 'she fits the new lock to her door, and the old one comes out in her hands' { Send 2 'state' } "items=\[(?![^\]]*Lock#$newCut)[^\]]*Lock#$flatCut@.*You fit the lock, and the old one comes out\."
+    Expect 'on the record, with what it was cut to and is now' { Send 0 'journal|lock.fit' } "actor='Jane Roe' .*data=\[property=Flat 2 target=Door 2 pattern=cut-\w+ was=flat2[\] ]"
+    Expect 'the old lock leaves the door and enters her hands, both on the record' { Send 0 'journal|item.issue' } 'data=\[source=fitted .*pattern=flat2[\] ]'
+    [void](Send 2 'door|Door 2|use')
+    [void](Send 2 'door|Door 2|lock')
+    Expect 'a key made with the new lock locks her door' { Send 2 'state' } 'Door 2:open=False,locked=True'
+    Teleport 1 'John Doe' (Spot 'Door 2' left 90)
+    Wait-Landed 1
+    [void](Send 1 'door|Door 2|lock')
+    Expect 'the old key turns nothing there now' { Send 1 'state' } 'Door 2:open=False,locked=True.*You have no key that fits\.'
+
+    [void](Send 2 'offertitle|Flat 2')
+    Expect 'she offers the flat back, and he may take it for the office whose stamp he carries' { Send 1 'state' } "offer='[^']*offers you the title to Flat 2\.' forOffice='Combine Civil Authority'"
+    [void](Send 1 'answer|office')
+    Expect 'taken for the office, it is the office''s again' { Send 1 'state' } 'owned=\[\] office=\[Flat 2\] .*You take the title to Flat 2 for Combine Civil Authority\.'
+    Expect 'and no longer hers' { Send 2 'state' } 'owned=\[\] office=\[\] '
+    Expect 'the flat handed back is on record' { Send 0 'journal|property.release' } "actor='Jane Roe' .*data=\[property=Flat 2 owner=Jane Roe office=Combine Civil Authority reason=handed back\]"
     Teleport 1 'John Doe' $stood
     Wait-Landed 1
 

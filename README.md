@@ -66,11 +66,17 @@ itself to.
   only players in range, each in their own words for the speaker.
 - **Keys and locks.** A door or a container can have a lock cut to a pattern, and any key cut the
   same works it, whoever holds it, so a ministry's doors can share a pattern while each flat has
-  its own. A key shows its cut, which anyone can compare, and never what it opens.
-- **Doors** that anyone in reach can open and only a key locks. Owning one is title only: staff
-  assign it, its owner hands it over by offering it, and a character gone for good gives up any it
-  owned.
-- **Handing over.** Giving someone something, or the title to a door, is an offer they accept or
+  its own. A key shows its cut, which anyone can compare, and never what it opens. A lock not yet
+  fitted is an item, cut as a key is, and shows its cut too.
+- **Doors** that anyone in reach can open and only a key locks.
+- **Buildings.** A building or a flat is one title over its doors and lockers: the right to sell or
+  rent them, and to change their locks, which opens nothing by itself. A character holds it, or
+  nobody does and it is its office's, and whoever carries a stamp that leaves the office's mark sells
+  it, or takes a title offered to them back for the office. The money is handed over apart, like
+  anything else. Whoever holds a title fits a new lock to one of its doors, standing open, or to one
+  of its lockers they can open, and the old lock comes out in their hands, cut as it was. Staff
+  assign and release titles, and a character gone for good leaves its buildings to their offices.
+- **Handing over.** Giving someone something, or the title to a building, is an offer they accept or
   refuse. It lapses if they part or wait too long.
 - **Papers.** Paper and printed forms are items. Writing takes something to write with, and ink
   stays: lines are only added below until the sheet is full, and a form's blanks are filled in once.
@@ -91,7 +97,10 @@ itself to.
   away or putting the tool down stops the work, and then nothing is made. Whatever makes a thing
   leaves its mark on it, which nobody can read: someone with the right tool, such as a loupe, can
   tell only whether the things in a pile were made alike. A press can print a serial on each thing
-  it makes, which anyone can read. Every making is on the record, with what made it.
+  it makes, which anyone can read. A piece of work can keep what it is worked from, such as the key
+  a copy is cut from, make more than one thing, such as a lock and the keys that come with it, and
+  cut the keys and locks it makes to a pattern nobody has or to the one it copies. Every making is
+  on the record, with what made it.
 - **Trains.** Goods come into the city and leave it by train, at set times of day: a train runs in
   along its track, stands at its station for a while and runs out. Its wagons are opened only there,
   with the key its lock is cut to. It brings what its asset lists, with a manifest of it under its
@@ -119,7 +128,8 @@ itself to.
 - **Staff tools** in game: the console's own commands, journaled under the staff member's name,
   including restoring a character whose death broke the rules.
 - **Persistence.** Characters, what they know and wear, their health and state, what is written on
-  papers and drawn on maps, holders, doors, the last serial each press printed, a train standing at
+  papers and drawn on maps, holders, doors, who holds each building, the locks changed since the
+  world was built, the last serial each press printed, a train standing at
   its station, what each site has left, and where each truck was left with what is in its tank
   survive a restart. So does the journal. A change to two documents, such as a hand-over,
   is saved as one.
@@ -155,7 +165,9 @@ pwsh tools/verify.ps1
 1. Reference the library in the game's `.sbproj`: `"PackageReferences": [ "kbj.hexagon" ]`.
 2. Link this checkout into the game: a `Libraries/hexagon` junction pointing here.
 3. In the startup scene, add a `ScreenPanel` with the `Hud`, at least one `SpawnPoint`, and any
-   `Hexagon Door` objects, which must be networked objects. The city's services come with the library;
+   `Hexagon Door` objects, which must be networked objects. A `Hexagon Property` makes a building or a
+   flat of doors and containers, held by the office whose stamp leaves the mark it names until it is
+   sold. The city's services come with the library;
    their rules are under Hexagon in the project's Systems settings. A model from the cloud needs a
    `Hexagon Cloud Model` beside its renderer, naming its package, or a dedicated server and its
    clients draw the error model.
@@ -273,7 +285,8 @@ Typed in the host's console as `hexagon_<command>`, or by staff in game (Tab) wi
 | `release "<character name>"` | Free a character's bound hands, here or not |
 | `restore "<character name>"` | Undo a death that broke the rules. The character gets up where its body lies, with whatever is still on it. Refused while the account has all the living characters it may |
 | `faction "<character name>" <faction\|none> ["<rank>"]` | Appoint a character to a faction, at its head unless a rank is named, or take it out of one. Nothing else about the character changes |
-| `door ["<door>"] <open\|close\|lock\|unlock\|release\|assign "<character name>">` | Work a door whatever key it asks for, give its title to a character, or take the title back. The keys are not part of the title. In game an unnamed door is the one beside you; `door` alone lists them |
+| `door ["<door>"] <open\|close\|lock\|unlock>` | Work a door whatever key it asks for. In game an unnamed door is the one beside you; `door` alone lists them, with what each lock is cut to |
+| `property "<property>" <assign "<character name>"\|release>` | Give a building's title to a character, or give it back to its office. The keys are not part of the title. `property` alone lists them, with who holds each |
 | `train "<train>" <send\|away\|hold\|resume>` | Send a train in now, send one standing at its station away, or hold it away from its times until resumed. `train` alone lists them, with where each is and when it comes next |
 | `who` | Who is playing whom, and where, and who was left down or bound. The one place a name is shown to someone never told it |
 | `journal [text] [count] [days]` | The latest entries containing the text, from the last two days unless told otherwise |
