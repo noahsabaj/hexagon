@@ -170,9 +170,11 @@ own member. Staff are the exception, through `who` and the journal, and both are
 
 A character is made with a body that is its own for life: the engine's citizen, or one of the human
 skins a game lists, each with its own model. It chooses hair the game lists and clothes from the
-game's wardrobe, which are items the game marks as such, and arrives wearing them and carrying
-nothing. The clothes are issued from the named source `arrival`, so they are accounted for like
-anything else. It belongs to no faction. A faction is joined in the city, by recruitment, or by
+game's wardrobe, which are items the game marks as such, and arrives wearing them, carrying nothing
+but the papers the game gives every arrival: its form, with the character's name in the bearer's
+blank and the issuing office's stamp on it. The clothes and the papers are issued from the named
+source `arrival`, so they are accounted for like anything else. The stamp itself is an item somewhere
+in the world, so whoever holds it can issue papers too. It belongs to no faction. A faction is joined in the city, by recruitment, or by
 staff appointing someone with `faction`. There are no whitelists: a whitelist decides who belongs to
 a faction outside the world, before anyone in it has met them.
 
@@ -261,8 +263,8 @@ be deleted while anything is in it. A container can have a lock, and a scene's a
 `Transfers` is the only way an item changes hands: between holders, in from a named source, out
 through a named sink, each journaled. Things enter from `operator`, staff giving them on the record,
 `scene`, a container a scene's author stocked, which is filled the first time it is opened and never
-refills, or `arrival`, the clothes a new character chose to arrive in. They leave through `consumed`, `operator`, `character.deleted`, `character.retired`, or
-`character.died` when a death leaves no body. A new character arrives with only its clothes. There are
+refills, or `arrival`, the clothes a new character chose to arrive in and the papers it arrives with. They leave through `consumed`, `operator`, `character.deleted`, `character.retired`, or
+`character.died` when a death leaves no body. A new character arrives with only its clothes and its papers. There are
 no wages, vendors or starting kits: they made money from nothing and so made it worthless. Money is
 an item like any other, money only because people take it.
 
@@ -271,7 +273,7 @@ records a count, so the supply of anything is the journal's issues minus its des
 holds the supply of pistol rounds to it. A whole pile that lands in a slot of its own keeps its id;
 part of a pile is a new pile. Splitting and merging move nothing between holders and are journaled
 anyway, because "where did the other ten go" is a question a dispute asks. All of a transfer happens
-or none of it does. Deliveries, production and forgery come later.
+or none of it does. Deliveries and production come later.
 
 ## Locks take keys, and a faction grants nothing
 
@@ -301,6 +303,29 @@ searched officer's radio is tuned to the officers' channel. `/r` reaches everyon
 radio tuned the same, wherever they are, as a voice: a name if the listener was given one, otherwise
 nothing, because a radio shows no face. Anyone within speaking distance hears someone talking into a
 radio. Someone down or bound cannot reach theirs. People beside a listener do not yet overhear it.
+
+## Ink stays, and a stamp makes a paper official
+
+Paper is an item whose asset says how many lines it takes, and a printed form is one whose asset
+prints blanks, each with its label. Writing takes something whose item grants `paper.write`, a pen
+or a pencil, and what is written stays: a line is only ever added below the last until the sheet is
+full, and a blank is filled in once. A stamp's item names the mark it leaves, such as an office's
+name, and every stamp of that kind leaves the same mark, over whatever is written by then, so a line
+below a stamp was written after it. What is on a sheet goes with it through every hand, holder and
+restart. Written on, a pile of blank sheets gives up one, and a sheet with anything on it piles with
+nothing.
+
+A paper says only what is on it: text and stamps, never whose hand put them there. Anyone can sign
+any name to a letter or fill any name into a blank form, and the journal records who really did,
+every line, blank and stamp, refused ones too. So forgery is possible, and found out afterwards, and
+what makes a paper official is a stamp, which takes the stamp itself. There is no issuing system. An
+office issues papers by having its stamp, and a recruiter fills in and stamps a paybook.
+
+What is on a sheet is not sent with an inventory. `Seen` leaves it out, as it shows a key by its cut,
+and a sheet is read one at a time by whoever holds it. Holding one up for someone within reach lets
+them read it while it stays in the holder's hand, until they part, either is down, or it leaves the
+holder's hands. Handing it over is an offer like anything else. HL2RP gives every arrival an
+identification card stamped by the Civil Authority, whose stamp is in the Civil Protection locker.
 
 ## The HUD shows what a character would know
 
@@ -453,6 +478,19 @@ merging, `tools/test.ps1` runs verify and both play tests as one, in three to fo
   and a check passing on an earlier refusal. A check now asks until it sees what it expects, a refusal
   waits for the journal to count it, and the host accepts at most four requests a second from anyone,
   so the tests send no faster.
+- Text in a panel's markup is set into a label of its own, and the HUD styles every label, so the ink
+  on a sheet first came out in the HUD's grey, with its margins. Text on a sheet is set straight into
+  labels, each with a class for what it is. A blend mode drew the stamp's own box over the paper, so
+  a stamp is plain ink.
+- The stationery box was first put where the map's floor is raised, sunk into it, and the spot in
+  front of it found no ground. Something put in a scene by hand is put where a trace down finds the
+  floor.
+- Saving a scene from the editor rewrites all of it: it drops the scene's title and description and
+  adds settings of its own. A play test's scene is edited as text, with the editor's copy closed.
+- The engine gives a dedicated server ten seconds to log on to Steam. When Steam was slower, the
+  server never listened, no client could join, and the two-client test waited out its fifteen minutes
+  and then deleted its log. A server that says so is now started again with its clients, and a run
+  that gives up keeps its log and data.
 
 ## What is thin, and known
 
@@ -470,6 +508,10 @@ merging, `tools/test.ps1` runs verify and both play tests as one, in three to fo
   character wearing them yet.
 - The HUD has been looked at in pictures, not yet played by a person.
 - A radio is not overheard beside a listener.
+- There is no handwriting among the engine's fonts, so ink is the HUD's font, leaning.
+- A paper is read in a window, not in the hand: nobody sees from across a room that someone is
+  reading, and a sheet held up for someone shows no model.
+- A map is not a paper yet. The planning-table map, drawn on and marked, is its own step.
 - Sight is a distance, not a line: a client is sent everyone within `SightRange` of its character,
   through walls. Doors and containers are scene objects, sent to every client.
 - The engine tells every client who is connected, by Steam name, and which connection owns each pawn
@@ -483,8 +525,8 @@ merging, `tools/test.ps1` runs verify and both play tests as one, in three to fo
   s&box and stay local.
 - The play tests run both clients as one Steam account, so account-level rules are tested by one
   account, and the two-client test allows that account two lives at once.
-- The vision's production, deliveries, recruitment, ranks, documents and player offices are not
-  built. Until they are, things enter the world only from staff and from stocked containers.
+- The vision's production, deliveries, recruitment, ranks and player offices are not built. Until
+  they are, things enter the world only from staff, from stocked containers and with new characters.
 
 HL2RP keeps what is about its setting: the scanner, civic records as a view of the journal,
 forcefields and ration dispensers.

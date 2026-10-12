@@ -35,8 +35,8 @@ public sealed partial class Player
 		using ( Rpc.FilterInclude( owner ) ) ReceiveOpenHolder( target, title, Shown( holder ) );
 	}
 
-	/// <summary>What a player is shown of a holder: its keys by their cuts, never what they open.</summary>
-	private static string Shown( IHolder holder ) => JsonSerializer.Serialize( Keys.AsSeen( holder.Inventory ) );
+	/// <summary>What a player is shown of a holder: its keys by their cuts, never what they open, and its papers unread.</summary>
+	private static string Shown( IHolder holder ) => JsonSerializer.Serialize( Seen.Inventory( holder.Inventory ) );
 
 	public void HostClose()
 	{

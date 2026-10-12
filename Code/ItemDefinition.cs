@@ -69,11 +69,31 @@ public sealed class ItemDefinition : GameResource
 	/// </summary>
 	[Property] public bool IsKey { get; set; }
 
+	/// <summary>
+	/// It is paper: how many lines of writing it takes, one below another. Ink stays, so a written line
+	/// is there for good. Zero is nothing to write on. See <see cref="Papers"/>.
+	/// </summary>
+	[Property, Range( 0, 40 )] public int Lines { get; set; }
+	/// <summary>It is a printed form: the blanks printed on it, by the label beside each, each filled in by hand once.</summary>
+	[Property] public List<string> Fields { get; set; } = new();
+	/// <summary>The blank that a form issued to someone arrives filled in with: their name.</summary>
+	[Property] public string BearerField { get; set; } = string.Empty;
+	/// <summary>It is a stamp, and this is the mark it leaves, such as an office's name. Every stamp of the kind leaves the same mark.</summary>
+	[Property] public string StampMark { get; set; } = string.Empty;
+	/// <summary>The colour of the ink a stamp leaves.</summary>
+	[Property] public Color StampInk { get; set; } = new Color( 0.2f, 0.25f, 0.6f );
+
 	/// <summary>What holding this lets a character do, such as <c>person.restrain</c> for a zip tie.</summary>
 	[Property] public List<string> Grants { get; set; } = new();
 
 	/// <summary>The title as it reads inside a sentence: "the flat cap", but "the Civil Protection mask".</summary>
 	public string InSentence => Title.Length > 1 && !Title[1..].Any( char.IsUpper ) ? char.ToLowerInvariant( Title[0] ) + Title[1..] : Title;
+
+	/// <summary>Whether it is something to write on or fill in, and read.</summary>
+	public bool IsPaper => Lines > 0 || Fields.Count > 0;
+
+	/// <summary>Whether it is a stamp.</summary>
+	public bool IsStamp => StampMark.Length > 0;
 
 	/// <summary>Whether using it treats anything: a wound, or lost health.</summary>
 	public bool IsTreatment => Consumable && (Heals > 0 || Treats.Count > 0);

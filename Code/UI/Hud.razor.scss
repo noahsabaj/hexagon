@@ -304,6 +304,91 @@ Hud {
 	}
 }
 
+// A sheet held up to read: paper, its printed parts in type, what is written on it in ink, and the
+// stamps on top of it. There is no handwriting among the engine's fonts, so the ink leans instead.
+.reading {
+	width: 560px;
+	max-height: 96%;
+
+	.sheet {
+		flex-direction: column;
+		min-height: 180px;
+		max-height: 520px;
+		padding: 20px 24px;
+		margin-bottom: 12px;
+		overflow: scroll;
+		background-color: #ece4cf;
+		border-radius: 2px;
+
+		// Everything on a sheet is a label, and the HUD's grey for labels is not ink.
+		label {
+			margin: 0;
+			font-size: 15px;
+			color: #1f2a44;
+		}
+
+		.printed {
+			margin-bottom: 10px;
+			font-family: Roboto;
+			font-weight: 700;
+			font-size: 17px;
+			text-transform: uppercase;
+			letter-spacing: 2px;
+			color: #2b2b2b;
+		}
+
+		.blank {
+			flex-direction: row;
+			align-items: flex-end;
+			margin-bottom: 6px;
+			border-bottom: 1px solid rgba( 43, 43, 43, 0.4 );
+
+			.ink {
+				flex-grow: 1;
+				min-height: 20px;
+			}
+		}
+
+		.field {
+			width: 150px;
+			font-family: Roboto;
+			font-size: 12px;
+			text-transform: uppercase;
+			color: #4a4a4a;
+		}
+
+		.ink {
+			font-style: italic;
+			color: #1f2a6e;
+		}
+
+		.written {
+			margin-bottom: 2px;
+		}
+
+		.nothing {
+			font-style: italic;
+			color: #7a7364;
+		}
+
+		// Pressed on over what was written by then, so it overlaps the line above it a little. Its ink
+		// is its own, set where it is drawn.
+		.stamp {
+			align-self: flex-start;
+			padding: 4px 10px;
+			margin: -6px 0 4px 40px;
+			border: 3px solid #333a99;
+			border-radius: 4px;
+			font-family: Roboto;
+			font-weight: 800;
+			font-size: 15px;
+			text-transform: uppercase;
+			letter-spacing: 1px;
+			color: #333a99;
+		}
+	}
+}
+
 .keys {
 	position: absolute;
 	right: 24px;

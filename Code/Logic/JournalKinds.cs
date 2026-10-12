@@ -39,6 +39,15 @@ public static class JournalKinds
 	public const string ItemSplit = "item.split";
 	public const string ItemMerge = "item.merge";
 
+	/// <summary>A line written below whatever was on a sheet, with the line itself: the journal knows whose hand it was.</summary>
+	public const string PaperWrite = "paper.write";
+	/// <summary>A blank on a printed form filled in, with what it says.</summary>
+	public const string PaperFill = "paper.fill";
+	/// <summary>A stamp put on a sheet, with which.</summary>
+	public const string PaperStamp = "paper.stamp";
+	/// <summary>A sheet held up for someone to read, without letting go of it.</summary>
+	public const string PaperShow = "paper.show";
+
 	public const string OfferAccept = "offer.accept";
 	public const string OfferRefuse = "offer.refuse";
 	public const string OfferLapse = "offer.lapse";

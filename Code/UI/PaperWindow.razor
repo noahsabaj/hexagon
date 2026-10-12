@@ -1,0 +1,144 @@
+@using System
+@using System.Linq
+@using Hexagon.Logic
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* A sheet held up to read: what is printed on it, what is written on it, and the stamps on top, each
+   where it went on, so a line written after a stamp lies below it. One's own sheet can be written on
+   with something to write with, filled in, and stamped with a stamp one carries. One held up by
+   someone else is only read, for as long as they hold it up. *@
+<root class="center">
+	@if ( Player.Local is { Paper: { } sight, Inventory: { } inventory } player && ItemDefinition.Find( sight.Definition ) is { } kind )
+	{
+		var own = sight.ShownBy.Length == 0;
+		var paper = sight.Paper;
+		<div class="card reading">
+			<div class="sheet">
+				@* Text on the sheet is set straight into labels, each styled for what it is: printed, ink or a stamp.
+				   A blank's ink is set as its text, so a blank one reads blank. *@
+				@if ( kind.Fields.Count > 0 )
+				{
+					<label class="printed">@kind.Title</label>
+					@foreach ( var field in kind.Fields )
+					{
+						<div class="blank">
+							<label class="field">@field</label>
+							<label class="ink" text=@(paper.Fields.TryGetValue( field, out var filled ) ? filled : string.Empty)></label>
+						</div>
+					}
+				}
+				@for ( var line = 0; line <= paper.Lines.Count; line++ )
+				{
+					@foreach ( var (mark, index) in Marks( paper, line ) )
+					{
+						<label class="stamp" style=@StampStyle( mark, index )>@(ItemDefinition.Find( mark.Stamp )?.StampMark ?? string.Empty)</label>
+					}
+					@if ( line < paper.Lines.Count )
+					{
+						<label class="ink written">@paper.Lines[line]</label>
+					}
+				}
+				@if ( kind.Fields.Count == 0 && paper.Lines.Count == 0 && paper.Stamps.Count == 0 )
+				{
+					<label class="nothing">Nothing is written on it.</label>
+				}
+			</div>
+			@if ( own )
+			{
+				var room = kind.Lines > paper.Lines.Count;
+				var blanks = kind.Fields.Where( value => !paper.Fields.ContainsKey( value ) ).ToList();
+				@if ( (room || blanks.Count > 0) && CanWrite( inventory ) )
+				{
+					<div class="row">
+						<TextEntry class="grow" Value:bind="@Draft" MaxLength="@(Papers.LineLength)" Placeholder="What to write" onsubmit=@(() => Write( sight, room )) />
+					</div>
+					<div class="row wrap">
+						@if ( room )
+						{
+							<button class="primary" onclick=@(() => Write( sight, room ))>Write it below</button>
+						}
+						@foreach ( var blank in blanks )
+						{
+							var label = blank;
+							<button onclick=@(() => Fill( sight, label ))>Fill in the @label.ToLowerInvariant()</button>
+						}
+					</div>
+					<div class="muted">Ink stays: what is written cannot be taken back.</div>
+				}
+				else if ( room || blanks.Count > 0 )
+				{
+					<div class="muted">@Papers.NothingToWriteWith</div>
+				}
+				@if ( Stamps( inventory ).Any() )
+				{
+					<div class="row wrap">
+						@foreach ( var (stamp, title) in Stamps( inventory ) )
+						{
+							var chosen = stamp;
+							<button onclick=@(() => player.RequestStamp( sight.ItemId, chosen.Id ))>Stamp it with the @title</button>
+						}
+					</div>
+				}
+			}
+			else
+			{
+				<div class="muted">@sight.ShownBy holds it up for you to read.</div>
+			}
+			<div class="actions">
+				<button onclick=@(() => player.ClosePaper())>@(own ? "Put it away" : "Look away")</button>
+			</div>
+		</div>
+	}
+</root>
+
+@code
+{
+	private string Draft { get; set; } = string.Empty;
+
+	public override void Tick()
+	{
+		if ( Player.Local is not { Paper: { } sight } player ) return;
+		// One's own sheet is put away once it leaves one's hands; one held up, when its holder lowers it.
+		var gone = sight.ShownBy.Length == 0 && player.Inventory?.Items.Any( value => value.Id == sight.ItemId ) != true;
+		if ( !Input.EscapePressed && !gone && !player.IsIncapable ) return;
+		Input.EscapePressed = false;
+		player.ClosePaper();
+	}
+
+	/// <summary>The stamps that went on when this many lines were written, with their order on the sheet.</summary>
+	private static (StampMark Mark, int Index)[] Marks( PaperData paper, int line ) =>
+		paper.Stamps.Select( ( value, index ) => (value, index) ).Where( value => value.value.AfterLine == line ).ToArray();
+
+	/// <summary>A stamp's mark, in its ink, at a tilt of its own, as a hand puts one on.</summary>
+	private static string StampStyle( StampMark mark, int index )
+	{
+		var ink = ItemDefinition.Find( mark.Stamp )?.StampInk ?? Color.Gray;
+		var colour = $"rgba( {(int)(ink.r * 255)}, {(int)(ink.g * 255)}, {(int)(ink.b * 255)}, 0.85 )";
+		return $"color: {colour}; border-color: {colour}; transform: rotate( {(index * 7) % 15 - 7}deg );";
+	}
+
+	private static bool CanWrite( InventoryData inventory ) =>
+		Capabilities.Can( Capability.Write, inventory.Items.SelectMany( value => ItemDefinition.Find( value.Definition )?.Grants ?? Enumerable.Empty<string>() ) );
+
+	private static (ItemStack Stamp, string Title)[] Stamps( InventoryData inventory ) =>
+		inventory.Items.Select( value => (value, ItemDefinition.Find( value.Definition )) ).Where( value => value.Item2 is { IsStamp: true } )
+			.Select( value => (value.value, value.Item2!.InSentence) ).ToArray();
+
+	private void Write( PaperSight sight, bool room )
+	{
+		if ( !room ) return;
+		Player.Local?.RequestWrite( sight.ItemId, Draft );
+		Draft = string.Empty;
+	}
+
+	private void Fill( PaperSight sight, string field )
+	{
+		Player.Local?.RequestFill( sight.ItemId, field, Draft );
+		Draft = string.Empty;
+	}
+
+	protected override int BuildHash() => HashCode.Combine( Player.Local?.PrivateVersion, Player.Local?.Paper );
+}

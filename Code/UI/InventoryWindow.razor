@@ -96,6 +96,10 @@
 			{
 				<div class="muted">A key shows its cut. Keys cut the same open the same locks; which ones, you learn by trying.</div>
 			}
+			@if ( SelectedDefinition is { IsPaper: true } )
+			{
+				<div class="muted">Read it to write on it, fill it in or stamp it. Writing takes a pen or a pencil, and ink stays.</div>
+			}
 			<div class="actions">
 				@if ( SelectedStack is { Worn: true } )
 				{
@@ -111,6 +115,10 @@
 					@if ( player.OpenInventory is not null )
 					{
 						<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( "put" ))>Put in</button>
+					}
+					@if ( SelectedDefinition is { IsPaper: true } )
+					{
+						<button class="primary" onclick=@(() => ReadSelected())>Read</button>
 					}
 					@if ( SelectedDefinition is { Consumable: true } usable )
 					{
@@ -231,6 +239,11 @@
 	{
 		if ( Selected is { } radio ) Player.Local?.RequestTune( radio, FrequencyDraft );
 		FrequencyDraft = string.Empty;
+	}
+
+	private void ReadSelected()
+	{
+		if ( Selected is { } sheet ) Player.Local?.RequestRead( sheet );
 	}
 
 	private void SplitSelected( ItemStack pile )

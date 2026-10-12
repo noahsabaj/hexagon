@@ -1,42 +1,55 @@
 @using System
+@using System.Linq
 @using Hexagon.Logic
 @using Sandbox
 @using Sandbox.UI
 @namespace Hexagon.UI
 @inherits Panel
 
-@* What this character could hand to someone: some or all of a pile, or the title to a door it holds. *@
+@* What this character could hand to someone: some or all of a pile, or the title to a door it holds.
+   Or, showing, the papers it could hold up for them to read without letting go. *@
 <root class="center">
 	@if ( Player.Local is { Inventory: { } goods } player && Recipient is { } recipient )
 	{
+		var items = Showing ? goods.Items.Where( value => !value.Worn && ItemDefinition.Find( value.Definition ) is { IsPaper: true } ).ToList() : goods.Items;
 		<div class="card picker">
-			<h1>Offer to @player.LabelFor( recipient )</h1>
-			@foreach ( var item in goods.Items )
+			<h1>@(Showing ? "Show" : "Offer") to @player.LabelFor( recipient )</h1>
+			@foreach ( var item in items )
 			{
 				<div class="row">
 					<div class="grow">@Listing( item )</div>
-					@if ( item.Count > 1 )
+					@if ( Showing )
 					{
-						<button onclick=@(() => Offer( recipient, item, 1 ))>One</button>
+						<button class="primary" onclick=@(() => Show( recipient, item ))>Show</button>
 					}
-					<button class="primary" onclick=@(() => Offer( recipient, item, item.Count ))>@(item.Count > 1 ? "All of it" : "Offer")</button>
+					else
+					{
+						@if ( item.Count > 1 )
+						{
+							<button onclick=@(() => Offer( recipient, item, 1 ))>One</button>
+						}
+						<button class="primary" onclick=@(() => Offer( recipient, item, item.Count ))>@(item.Count > 1 ? "All of it" : "Offer")</button>
+					}
 				</div>
 			}
-			@foreach ( var door in player.OwnedDoors )
+			@if ( !Showing )
 			{
-				<div class="row">
-					<div class="grow">The title to @door.Name</div>
-					<button class="primary" onclick=@(() => OfferDoor( recipient, door ))>Offer</button>
-				</div>
+				@foreach ( var door in player.OwnedDoors )
+				{
+					<div class="row">
+						<div class="grow">The title to @door.Name</div>
+						<button class="primary" onclick=@(() => OfferDoor( recipient, door ))>Offer</button>
+					</div>
+				}
 			}
-			@if ( goods.Items.Count == 0 && player.OwnedDoors.Count == 0 )
+			@if ( items.Count == 0 && (Showing || player.OwnedDoors.Count == 0) )
 			{
-				<div class="muted">You have nothing to offer.</div>
+				<div class="muted">@(Showing ? "You have no papers to show." : "You have nothing to offer.")</div>
 			}
 			<div class="actions">
 				<button onclick=@(() => Dismiss?.Invoke())>Never mind</button>
 			</div>
-			<div class="muted">They are asked first. Nothing changes hands until they accept.</div>
+			<div class="muted">@(Showing ? "They read it while you hold it up. It stays in your hand." : "They are asked first. Nothing changes hands until they accept.")</div>
 		</div>
 	}
 </root>
@@ -46,7 +59,10 @@
 	/// <summary>Whoever this character is choosing something to offer to.</summary>
 	public Player? Recipient { get; set; }
 
-	/// <summary>Called once something is offered, or the player backs out.</summary>
+	/// <summary>Holding a paper up for them to read, rather than handing something over.</summary>
+	public bool Showing { get; set; }
+
+	/// <summary>Called once something is offered or shown, or the player backs out.</summary>
 	public Action? Dismiss { get; set; }
 
 	public override void Tick()
@@ -59,6 +75,12 @@
 	private void Offer( Player recipient, ItemStack item, int count )
 	{
 		Player.Local?.RequestOffer( recipient, item.Id, count );
+		Dismiss?.Invoke();
+	}
+
+	private void Show( Player reader, ItemStack item )
+	{
+		Player.Local?.RequestShow( reader, item.Id );
 		Dismiss?.Invoke();
 	}
 
@@ -79,5 +101,5 @@
 		return title;
 	}
 
-	protected override int BuildHash() => HashCode.Combine( Recipient, Player.Local?.PrivateVersion );
+	protected override int BuildHash() => HashCode.Combine( Recipient, Showing, Player.Local?.PrivateVersion );
 }

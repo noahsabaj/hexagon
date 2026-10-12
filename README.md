@@ -39,7 +39,7 @@ itself to.
   character knows is its own and is never sent to anyone else.
 - **Making a character.** Everyone is made the same way: a body for life, the engine's citizen or
   a human skin the game lists; hair the game lists; and clothes from the game's wardrobe to arrive
-  in, carrying nothing else. Nobody is made into a faction.
+  in, carrying nothing else but the papers a game gives every arrival. Nobody is made into a faction.
 - **Factions**, as `.faction` assets: a name and a tint. A faction is people: it grants nothing and
   changes nothing about its members. They are recruited, or appointed by staff, and are handed a
   uniform to put on like anything else.
@@ -70,6 +70,13 @@ itself to.
   owned.
 - **Handing over.** Giving someone something, or the title to a door, is an offer they accept or
   refuse. It lapses if they part or wait too long.
+- **Papers.** Paper and printed forms are items. Writing takes something to write with, and ink
+  stays: lines are only added below until the sheet is full, and a form's blanks are filled in once.
+  A stamp leaves its office's mark over what is written by then. A sheet says only what is on it,
+  while the journal knows whose hand it was, so a forgery reads like the real thing and a stamp is
+  what makes a paper official. A sheet is read by whoever holds it, or held up for someone within
+  reach to read without letting go of it. A game can give every new character a form in its name,
+  stamped by the office that issues it.
 - **Violence with consequences.** The host judges where a shot lands, on the body's own hitboxes. A
   weapon's wound to an arm or a leg stays until it is treated: a wounded leg limps, and a wounded arm
   drops what it held and holds nothing. Harm puts a character down, never out, unless a weapon made
@@ -82,8 +89,8 @@ itself to.
 - **Restraints and search**, conserving every item.
 - **Staff tools** in game: the console's own commands, journaled under the staff member's name,
   including restoring a character whose death broke the rules.
-- **Persistence.** Characters, what they know and wear, their health and state, holders and doors
-  survive a restart. So does the journal. A change to two documents, such as a hand-over,
+- **Persistence.** Characters, what they know and wear, their health and state, what is written on
+  their papers, holders and doors survive a restart. So does the journal. A change to two documents, such as a hand-over,
   is saved as one.
 - **A default HUD**: character menu, chat, inventory, the open holder, verbs, offers, staff panel.
   In the city it shows only prompts and chat; a prompt draws the key as the player has it bound.
@@ -124,7 +131,7 @@ pwsh tools/verify.ps1
 
 | Part | Where | How it is checked |
 | --- | --- | --- |
-| Rules with no engine in them: names, lives, wounds, inventory grid, transfers, keys, journal, capabilities, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
+| Rules with no engine in them: names, lives, wounds, inventory grid, transfers, keys, papers, journal, capabilities, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
 | Services and components: the city's services, characters, player, sleeper, door, container, chat, operator commands | `Code` | Compiled against the installed engine, warnings as errors |
 | Default HUD | `Code/UI` | Same compile, then looked at in the play test |
 | A whole game on top | a game project | `tools/playtest.ps1` plays it in the real editor; `tools/playtest-server.ps1` plays it as two clients on a dedicated server |

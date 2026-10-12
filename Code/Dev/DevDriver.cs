@@ -323,7 +323,7 @@ public static class DevCommands
 					player.RequestSay( args[1] );
 					return "sent say";
 				case "move":
-					var item = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
+					var item = Pick( Carried( player.Inventory ), args[1] );
 					if ( item is null ) return "no such item";
 					player.RequestMoveItem( item.Id, int.Parse( args[2] ), int.Parse( args[3] ) );
 					return "sent move";
@@ -366,18 +366,18 @@ public static class DevCommands
 					controller.EyeAngles = Rotation.LookAt( middle - controller.EyePosition ).Angles();
 					return "sent face";
 				case "tune":
-					var radio = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
+					var radio = Pick( Carried( player.Inventory ), args[1] );
 					if ( radio is null ) return "no such item";
 					player.RequestTune( radio.Id, args[2] );
 					return "sent tune";
 				case "split":
-					var whole = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
+					var whole = Pick( Carried( player.Inventory ), args[1] );
 					if ( whole is null ) return "no such item";
 					player.RequestSplitItem( whole.Id, int.Parse( args[2] ) );
 					return "sent split";
 				case "merge":
-					var part = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
-					var onto = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[2] ) );
+					var part = Pick( Carried( player.Inventory ), args[1] );
+					var onto = Pick( Carried( player.Inventory ), args[2] );
 					if ( part is null || onto is null ) return "no such item";
 					player.RequestMoveItem( part.Id, onto.X, onto.Y );
 					return "sent merge";
@@ -388,7 +388,7 @@ public static class DevCommands
 					return $"sent door {args[2]}";
 				case "drop":
 				case "use":
-					var held = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
+					var held = Pick( Carried( player.Inventory ), args[1] );
 					if ( held is null ) return "no such item";
 					player.RequestItemAct( held.Id, $"item.{args[0]}" );
 					return $"sent {args[0]}";
@@ -403,12 +403,12 @@ public static class DevCommands
 					player.RequestAct( container, ((IVerbTarget)container).Verbs[0].Id );
 					return "sent open";
 				case "take":
-					var wanted = Carried( player.OpenInventory ).ElementAtOrDefault( int.Parse( args[1] ) );
+					var wanted = Pick( Carried( player.OpenInventory ), args[1] );
 					if ( wanted is null ) return "no such item";
 					player.RequestTake( wanted.Id );
 					return "sent take";
 				case "put":
-					var given = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
+					var given = Pick( Carried( player.Inventory ), args[1] );
 					if ( given is null ) return "no such item";
 					player.RequestPut( given.Id );
 					return "sent put";
@@ -436,13 +436,44 @@ public static class DevCommands
 					player.RequestAttack( foe is null ? Vector3.Forward : foe.WorldPosition - player.WorldPosition );
 					return "sent attack";
 				case "equip":
-					var inHand = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
+					var inHand = Pick( Carried( player.Inventory ), args[1] );
 					if ( inHand is null ) return "no such item";
 					player.RequestItemAct( inHand.Id, VerbIds.ItemEquip );
 					return "sent equip";
+				case "read":
+					// read|<item> takes out a sheet carried, to read it and write on it.
+					var sheet = Pick( Carried( player.Inventory ), args[1] );
+					if ( sheet is null ) return "no such item";
+					player.RequestRead( sheet.Id );
+					return "sent read";
+				case "write":
+					// write|<words> writes a line below what is on the sheet being read, fill|<blank>|<words>
+					// fills in a blank printed on it, and stamp|<stamp> stamps it with a stamp carried.
+					if ( player.Paper is not { } writing ) return "no paper open";
+					player.RequestWrite( writing.ItemId, args[1] );
+					return "sent write";
+				case "fill":
+					if ( player.Paper is not { } form ) return "no paper open";
+					player.RequestFill( form.ItemId, args[1], args[2] );
+					return "sent fill";
+				case "stamp":
+					var stamp = Pick( Carried( player.Inventory ), args[1] );
+					if ( player.Paper is not { } stamped || stamp is null ) return stamp is null ? "no such item" : "no paper open";
+					player.RequestStamp( stamped.ItemId, stamp.Id );
+					return "sent stamp";
+				case "show":
+					// show|<item> holds up a sheet carried for the nearest other character to read.
+					var shown = Pick( Carried( player.Inventory ), args[1] );
+					var reader = Nearest( player, Others( player ) );
+					if ( shown is null || reader is null ) return shown is null ? "no such item" : "nobody there";
+					player.RequestShow( reader, shown.Id );
+					return "sent show";
+				case "closepaper":
+					player.ClosePaper();
+					return "sent closepaper";
 				case "offer":
-					// offer|<item index>|<count> offers some of a pile to the nearest other character.
-					var gift = Carried( player.Inventory ).ElementAtOrDefault( int.Parse( args[1] ) );
+					// offer|<item>|<count> offers some of a pile to the nearest other character.
+					var gift = Pick( Carried( player.Inventory ), args[1] );
 					var taker = Nearest( player, Others( player ) );
 					if ( gift is null || taker is null ) return gift is null ? "no such item" : "nobody there";
 					player.RequestOffer( taker, gift.Id, args.Length > 2 ? int.Parse( args[2] ) : gift.Count );
@@ -509,6 +540,11 @@ public static class DevCommands
 						$"open=[{player.OpenTitle}: {string.Join( ", ", Carried( player.OpenInventory ).Select( Pile ) )}] openworn=[{string.Join( ", ", Worn( player.OpenInventory ) )}] " +
 						$"bodylooks=[{string.Join( " / ", Game.ActiveScene.GetAllComponents<Corpse>().Where( value => value.IsRevealed ).Select( value => string.Join( ",", Looks.Pieces( value.Look ) ) ) )}] " +
 						$"ground=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<WorldItem>().Where( value => value.IsRevealed ).Select( value => value.Definition?.Title ).OrderBy( value => value ) )}] " +
+						// The sheet being read, its own or held up by someone, as the reader sees it.
+						$"paper='{(player.Paper is { } sight ? ItemDefinition.Find( sight.Definition )?.Title : string.Empty)}' shownby='{player.Paper?.ShownBy}' " +
+						$"lines=[{string.Join( " / ", player.Paper?.Paper.Lines ?? new List<string>() )}] " +
+						$"fields=[{string.Join( ", ", player.Paper?.Paper.Fields.Select( pair => $"{pair.Key}={pair.Value}" ) ?? Enumerable.Empty<string>() )}] " +
+						$"stamps=[{string.Join( ", ", player.Paper?.Paper.Stamps.Select( value => $"{ItemDefinition.Find( value.Stamp )?.StampMark}@{value.AfterLine}" ) ?? Enumerable.Empty<string>() )}] " +
 						$"sleepers={Game.ActiveScene.GetAllComponents<Sleeper>().Count( value => value.IsRevealed )} pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";
 				default:
 					return $"unknown command '{args[0]}'";
@@ -578,6 +614,18 @@ public static class DevCommands
 
 	private static T? Nearest<T>( Player player, IEnumerable<T> candidates ) where T : Component =>
 		candidates.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();
+
+	/// <summary>
+	/// Something carried, as a test names it: by its place in the order <see cref="Carried"/> counts, by
+	/// its title, or by its title and cell as the state reports them, <c>Paper@2,0</c>, when two piles share a title.
+	/// </summary>
+	private static ItemStack? Pick( IReadOnlyList<ItemStack> items, string key )
+	{
+		if ( int.TryParse( key, out var index ) ) return items.ElementAtOrDefault( index );
+		var at = key.LastIndexOf( '@' );
+		var title = at < 0 ? key : key[..at];
+		return items.FirstOrDefault( value => ItemDefinition.Find( value.Definition )?.Title == title && (at < 0 || $"{value.X},{value.Y}" == key[(at + 1)..]) );
+	}
 
 	/// <summary>What is carried, in the order a test counts it: what is worn is not in the grid.</summary>
 	private static IReadOnlyList<ItemStack> Carried( InventoryData? inventory ) =>

@@ -43,12 +43,13 @@ public sealed partial class Player
 			return;
 		}
 		var character = created.Value;
-		// A new character arrives with nothing but its clothes. Whatever it needs, it finds or is given.
+		// A new character arrives with nothing but its clothes and its papers. Whatever else it needs, it finds or is given.
 		foreach ( var clothes in chosen.Value.Clothes )
 		{
 			var worn = clothes.IssueTo( game.Transfers!, Sources.Arrival, character, Actor.Of( character ), worn: true );
 			if ( !worn.Ok ) Log.Warning( $"[create] {character.HolderLabel} arrives without the {clothes.Title}: {worn.Message}" );
 		}
+		HostIssueArrivalPapers( game, character );
 		game.Roster.Save( character );
 		var data = new List<(string, string)> { ("body", body is { Length: > 0 } ? body : "citizen"), ("clothes", chosen.Value.Clothes.Count.ToString()) };
 		if ( character.ArrivesAt is { } arrives ) data.Add( ("arrives", arrives.ToString( "u" )) );
@@ -187,6 +188,7 @@ public sealed partial class Player
 	private void HostUnload()
 	{
 		HostClose();
+		HostStopShown( close: true );
 		HostDropOffer( "left" );
 		var character = _character;
 		var at = new Transform( HostPosition, Rotation.FromYaw( Controller?.Renderer?.WorldRotation.Yaw() ?? 0f ) );
