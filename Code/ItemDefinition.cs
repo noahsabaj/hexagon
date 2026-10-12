@@ -98,6 +98,12 @@ public sealed class ItemDefinition : GameResource
 	/// <summary>What holding this lets a character do, such as <c>person.restrain</c> for a zip tie.</summary>
 	[Property] public List<string> Grants { get; set; } = new();
 
+	/// <summary>
+	/// It is a tool that makes something in hand, such as a die striking a coin from a blank. Whatever it
+	/// makes carries its mark, its own and no other's. See <see cref="Making"/>.
+	/// </summary>
+	[Property] public List<MakingRecipe> Makes { get; set; } = new();
+
 	/// <summary>The title as it reads inside a sentence: "the flat cap", but "the Civil Protection mask".</summary>
 	public string InSentence => Title.Length > 1 && !Title[1..].Any( char.IsUpper ) ? char.ToLowerInvariant( Title[0] ) + Title[1..] : Title;
 
@@ -106,6 +112,9 @@ public sealed class ItemDefinition : GameResource
 
 	/// <summary>Whether it is a stamp.</summary>
 	public bool IsStamp => StampMark.Length > 0;
+
+	/// <summary>Whether it is a tool that makes something in hand.</summary>
+	public bool IsTool => Makes.Any( value => value.IsValid );
 
 	/// <summary>Whether it is a planning map.</summary>
 	public bool IsMap => !string.IsNullOrEmpty( MapImage );

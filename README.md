@@ -85,6 +85,13 @@ itself to.
   can wipe off, and the counters that come with it, moved by hand onto it and back into their box.
   Whoever can see the table sees each mark once it is made. What is on a map goes with it when it is
   picked up, carried, handed over or stolen, and the journal knows whose hand made each mark.
+- **Making things.** A machine, such as a press, is loaded like a crate and worked by holding Use
+  until its work is done; a tool, such as a die, works in hand on what its holder carries. Each lists
+  what it makes from what, and a lock keeps a machine to whoever has the key. Letting go, walking
+  away or putting the tool down stops the work, and then nothing is made. Whatever makes a thing
+  leaves its mark on it, which nobody can read: someone with the right tool, such as a loupe, can
+  tell only whether the things in a pile were made alike. A press can print a serial on each thing
+  it makes, which anyone can read. Every making is on the record, with what made it.
 - **Violence with consequences.** The host judges where a shot lands, on the body's own hitboxes. A
   weapon's wound to an arm or a leg stays until it is treated: a wounded leg limps, and a wounded arm
   drops what it held and holds nothing. Harm puts a character down, never out, unless a weapon made
@@ -98,10 +105,10 @@ itself to.
 - **Staff tools** in game: the console's own commands, journaled under the staff member's name,
   including restoring a character whose death broke the rules.
 - **Persistence.** Characters, what they know and wear, their health and state, what is written on
-  papers and drawn on maps, holders and doors survive a restart. So does the journal. A change to two documents, such as a hand-over,
+  papers and drawn on maps, holders, doors and the last serial each press printed survive a restart. So does the journal. A change to two documents, such as a hand-over,
   is saved as one.
 - **A default HUD**: character menu, chat, inventory, the open holder, verbs, offers, the tools of a
-  map leant over, staff panel.
+  map leant over, how far along some work is, staff panel.
   In the city it shows only prompts and chat; a prompt draws the key as the player has it bound.
   Items are dragged between cells, piles and holders, and out of the window to drop them. Being hurt shows through the engine's
   post-processing instead of a number: the edges of sight darken and the colour drains, and being

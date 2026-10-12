@@ -64,6 +64,10 @@
 		{
 			<LeanBar />
 		}
+		@if ( player.WorkTitle.Length > 0 )
+		{
+			<WorkBar />
+		}
 	}
 </root>
 
@@ -140,5 +144,5 @@
 		HashCode.Combine( Player.Local, Player.Local?.HasCharacter, Player.Local?.OfferText, Player.Local?.MenuTarget, Player.Local?.IsStaff ),
 		HashCode.Combine( Player.Local?.OpenInventory is null, Player.Local?.Inventory is null, Player.UiBusy ),
 		HashCode.Combine( ChatOpen, InventoryOpen, StaffOpen, OfferingTo, ShowingTo, RankingTo, Player.Local?.Paper is null, Player.Local?.LeaningOver ),
-		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.HoveredTooltip is null ) );
+		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.HoveredTooltip is null, Player.Local?.WorkTitle ) );
 }

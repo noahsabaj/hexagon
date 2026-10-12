@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Collections.Generic;
 using System.Linq;
 
 namespace Hexagon.Logic;
@@ -9,7 +10,7 @@ namespace Hexagon.Logic;
 /// are, and nothing a glance would not tell. A key shows its cut, never the pattern that says which
 /// locks it opens. A sheet shows that it is paper, not what is on it: that is read a sheet at a time,
 /// by whoever holds it or has it held up for them to read. A map shows what is on it only laid out,
-/// to whoever can see it lying there.
+/// to whoever can see it lying there. A banknote shows its serial, never what printed it.
 /// </summary>
 public static class Seen
 {
@@ -20,9 +21,14 @@ public static class Seen
 		Items = inventory.Items.Select( Item ).ToList()
 	};
 
-	private static ItemStack Item( ItemStack item ) => item.Pattern is null && item.Paper is null && item.Map is null ? item : new ItemStack
+	private static ItemStack Item( ItemStack item ) => item.Pattern is null && item.Paper is null && item.Map is null && item.Made is null ? item : new ItemStack
 	{
 		Id = item.Id, Definition = item.Definition, X = item.X, Y = item.Y, Width = item.Width, Height = item.Height,
-		Count = item.Count, Max = item.Max, Frequency = item.Frequency, Pattern = item.Pattern is { } pattern ? Keys.Cut( pattern ) : null, Worn = item.Worn
+		Count = item.Count, Max = item.Max, Frequency = item.Frequency, Pattern = item.Pattern is { } pattern ? Keys.Cut( pattern ) : null, Worn = item.Worn,
+		Made = Serials( item )
 	};
+
+	// The serials printed on a pile's things, which anyone can read, without what made them, which nobody can.
+	private static List<MadeMark>? Serials( ItemStack item ) =>
+		item.Made?.Any( mark => mark.Serial.Length > 0 ) == true ? item.Made.Select( mark => new MadeMark { Serial = mark.Serial } ).ToList() : null;
 }

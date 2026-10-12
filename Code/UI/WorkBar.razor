@@ -1,0 +1,28 @@
+@using System
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* At work: what is being made, and how far along it is. Work at a machine stops when Use is let go,
+   work with a tool when the character moves or puts it away; Stop is for when the cursor is up. *@
+<root class="working">
+	@if ( Player.Local is { WorkTitle.Length: > 0 } player )
+	{
+		<div class="card bar">
+			<h1>@player.WorkTitle</h1>
+			<div class="track"><div class="fill" style=@($"width: {Done( player ) * 100:0}%;")></div></div>
+			<div class="row">
+				<div class="muted">Keep at it until it is done. Walking away stops it, and then nothing is made.</div>
+				<button onclick=@(() => player.RequestStopWork())>Stop</button>
+			</div>
+		</div>
+	}
+</root>
+
+@code
+{
+	private static float Done( Player player ) => player.WorkSeconds <= 0f ? 1f : Math.Clamp( player.WorkBegan / player.WorkSeconds, 0f, 1f );
+
+	protected override int BuildHash() => HashCode.Combine( Player.Local?.WorkTitle, Player.Local is { } player ? (int)(Done( player ) * 100) : 0 );
+}

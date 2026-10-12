@@ -233,6 +233,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		HostOfferTick();
 		HostPaperTick();
 		HostLeanTick();
+		HostWorkTick();
 		HostAuditMovement( controller );
 	}
 

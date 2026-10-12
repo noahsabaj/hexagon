@@ -1,4 +1,5 @@
 @using System
+@using System.Collections.Generic
 @using System.Linq
 @using Hexagon.Logic
 @using Sandbox
@@ -111,6 +112,14 @@
 			{
 				<div class="muted">Lay it out on the table in front of you, then lean over it to mark it up with whoever else is there.</div>
 			}
+			@if ( SelectedDefinition is { IsTool: true } tool )
+			{
+				<div class="muted">@string.Join( " ", tool.Makes.Where( value => value.IsValid ).Select( value => value.Summary ) ) Hold it to work with it, and keep still until the work is done.</div>
+			}
+			@if ( SelectedStack?.Made is { Count: > 0 } serials )
+			{
+				<div class="muted">Serials: @Serials( serials )</div>
+			}
 			<div class="actions">
 				@if ( SelectedStack is { Worn: true } )
 				{
@@ -139,9 +148,17 @@
 					{
 						<button class="primary" onclick=@(() => ActOnSelected( VerbIds.ItemUse ))>@usable.UseTitle</button>
 					}
+					@if ( SelectedDefinition is { IsTool: true } )
+					{
+						<button class="primary" onclick=@(() => ActOnSelected( VerbIds.ItemMake ))>Work with it</button>
+					}
 					@if ( SelectedStack is { Count: > 1 } pile )
 					{
 						<button onclick=@(() => SplitSelected( pile ))>Split off @(pile.Count / 2)</button>
+					}
+					@if ( SelectedStack is { Count: > 1 } && CanCompare( inventory ) )
+					{
+						<button onclick=@(() => ActOnSelected( VerbIds.ItemCompare ))>Compare</button>
 					}
 					<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( VerbIds.ItemEquip ))>Hold</button>
 					<button disabled=@(Selected is null) onclick=@(() => ActOnSelected( VerbIds.ItemDrop ))>Drop</button>
@@ -273,6 +290,17 @@
 	{
 		Player.Local?.RequestSplitItem( pile.Id, pile.Count / 2 );
 		Selected = null;
+	}
+
+	/// <summary>Whether something carried lets this character tell whether things were made alike, as a loupe does.</summary>
+	private static bool CanCompare( InventoryData inventory ) =>
+		Capabilities.Can( Capability.Compare, inventory.Items.SelectMany( item => ItemDefinition.Find( item.Definition )?.Grants ?? Enumerable.Empty<string>() ) );
+
+	/// <summary>The serials on a pile, the top first, a few of them.</summary>
+	private static string Serials( IReadOnlyList<MadeMark> marks )
+	{
+		var serials = marks.Reverse().Select( mark => mark.Serial ).Where( serial => serial.Length > 0 ).ToArray();
+		return serials.Length <= 6 ? string.Join( ", ", serials ) : $"{string.Join( ", ", serials.Take( 6 ) )} and {serials.Length - 6} more";
 	}
 
 	private void ActOnSelected( string verb )

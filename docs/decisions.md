@@ -263,8 +263,10 @@ be deleted while anything is in it. A container can have a lock, and a scene's a
 `Transfers` is the only way an item changes hands: between holders, in from a named source, out
 through a named sink, each journaled. Things enter from `operator`, staff giving them on the record,
 `scene`, a container a scene's author stocked, which is filled the first time it is opened and never
-refills, or `arrival`, the clothes a new character chose to arrive in and the papers it arrives with. They leave through `consumed`, `operator`, `character.deleted`, `character.retired`, or
-`character.died` when a death leaves no body. A new character arrives with only its clothes and its papers. There are
+refills, `arrival`, the clothes a new character chose to arrive in and the papers it arrives with, or
+`made`, what a press or a tool made. They leave through `consumed`, `operator`, `made`, what making
+something used up, `character.deleted`, `character.retired`, or `character.died` when a death
+leaves no body. A new character arrives with only its clothes and its papers. There are
 no wages, vendors or starting kits: they made money from nothing and so made it worthless. Money is
 an item like any other, money only because people take it.
 
@@ -273,7 +275,7 @@ records a count, so the supply of anything is the journal's issues minus its des
 holds the supply of pistol rounds to it. A whole pile that lands in a slot of its own keeps its id;
 part of a pile is a new pile. Splitting and merging move nothing between holders and are journaled
 anyway, because "where did the other ten go" is a question a dispute asks. All of a transfer happens
-or none of it does. Deliveries and production come later.
+or none of it does. Deliveries come later.
 
 ## Locks take keys, and a faction grants nothing
 
@@ -368,6 +370,31 @@ leaning stands up when they walk away from it, are down or bound, or it is picke
 map is a picture of its own streets, taken once from straight above through the engine's
 orthographic camera (the test driver's `mapshot`), and its planning table stands beside a case
 holding the map and grease pencils.
+
+## Money is made by someone, from something
+
+A machine placed in the world, such as a press, is a holder: it is loaded like a crate, and makes
+from what it holds only while someone works it, holding Use for as long as the work takes. What it
+makes it keeps, for whoever opens it next, and a lock keeps the opening and the working to whoever
+has a key. A tool, such as a die, is an item whose asset lists what it makes, and it works in its
+holder's hand on what they carry. Either way, letting go, walking away, putting the tool down, or
+being down or bound stops the work, and then nothing is made and nothing used up. What it makes from
+leaves through the `made` sink and what it makes enters through the `made` source, as one transfer,
+so the supply of money is still the journal's issues minus its destroys. The work is timed by the
+host, and the HUD shows how far along it is.
+
+Whatever makes a thing leaves its mark on it, a press its own and a die its own, and a press can
+print a serial on each thing, numbered on from the last, as on a banknote. A pile keeps one mark for
+each thing in it, so handing over some of it hands over those particular things, and the mark goes
+with each through every hand and pile. The mark never leaves the host: a client is sent a serial,
+which anyone can read, and nothing of what made it. Someone carrying a loupe, which grants
+`item.compare`, can look hard at a pile and is told only whether its things were made alike, and
+which go together, never what made them. So a forger's tokens pass among the untrained, and a
+trained eye with one known to be good can tell them apart. Knowing which notes an office issued is
+a matter of keeping a register of its serials, which the game does not keep for it. HL2RP's token
+press stands locked to the city's keycard and strikes tokens from blanks the locker holds; a little
+way off, a forger's crude press does the same for anyone, beside a crate holding blanks, a die and
+a loupe.
 
 ## The HUD shows what a character would know
 
@@ -583,6 +610,8 @@ city it left wrong.
   a person's tooltip.
 - A map's counters are discs painted on it, not things standing on the table, and the map is unlit,
   so it does not darken with the room.
+- Presses and dies have no models of their own: HL2RP's presses are crates, and a die is a word in
+  the inventory. Working shows no pose.
 - Sight is a distance, not a line: a client is sent everyone within `SightRange` of its character,
   through walls. Doors and containers are scene objects, sent to every client.
 - The engine tells every client who is connected, by Steam name, and which connection owns each pawn
@@ -596,8 +625,8 @@ city it left wrong.
   s&box and stay local.
 - The play tests run both clients as one Steam account, so account-level rules are tested by one
   account, and the two-client test allows that account two lives at once.
-- The vision's production, deliveries, recruitment, ranks and player offices are not built. Until
-  they are, things enter the world only from staff, from stocked containers and with new characters.
+- The vision's deliveries and player offices are not built. Until they are, things enter the world
+  only from staff, from stocked containers, with new characters, and made from those.
 
 HL2RP keeps what is about its setting: the scanner, civic records as a view of the journal,
 forcefields and ration dispensers.

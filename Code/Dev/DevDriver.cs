@@ -410,10 +410,30 @@ public static class DevCommands
 					player.RequestAct( lying, VerbIds.ItemTake );
 					return "sent pickup";
 				case "open":
+					// A crate, a locker, or a machine, to load it or take out what it made.
 					var container = Game.ActiveScene.GetAllComponents<Container>().FirstOrDefault( value => value.GameObject.Name == args[1] );
-					if ( container is null ) return "no such container";
-					player.RequestAct( container, ((IVerbTarget)container).Verbs[0].Id );
+					if ( container is not null ) player.RequestAct( container, ((IVerbTarget)container).Verbs[0].Id );
+					else if ( Machine( args[1] ) is { } loaded ) player.RequestAct( loaded, VerbIds.MachineOpen );
+					else return "no such container";
 					return "sent open";
+				case "work":
+					// work|<machine> holds Use on it, until stopwork lets go or the work is done.
+					if ( Machine( args[1] ) is not { } worked ) return "no such machine";
+					player.RequestAct( worked, VerbIds.MachineWork );
+					return "sent work";
+				case "stopwork":
+					player.RequestStopWork();
+					return "sent stopwork";
+				case "make":
+				case "compare":
+					// make|<tool> works with the tool in hand; compare|<pile> looks hard at a pile, with a loupe.
+					var tool = Pick( Carried( player.Inventory ), args[1] );
+					if ( tool is null ) return "no such item";
+					player.RequestItemAct( tool.Id, $"item.{args[0]}" );
+					return $"sent {args[0]}";
+				case "marks":
+					// What this client was sent of how each thing it carries was made: a serial at most, never by what.
+					return string.Join( ", ", Carried( player.Inventory ).Select( value => $"{Pile( value )}:made={value.Made?.Count ?? 0},by={value.Made?.Count( mark => mark.By.Length > 0 ) ?? 0}" ) );
 				case "take":
 					var wanted = Pick( Carried( player.OpenInventory ), args[1] );
 					if ( wanted is null ) return "no such item";
@@ -648,7 +668,7 @@ public static class DevCommands
 						$"lines=[{string.Join( " / ", player.Paper?.Paper.Lines ?? new List<string>() )}] " +
 						$"fields=[{string.Join( ", ", player.Paper?.Paper.Fields.Select( pair => $"{pair.Key}={pair.Value}" ) ?? Enumerable.Empty<string>() )}] " +
 						$"stamps=[{string.Join( ", ", player.Paper?.Paper.Stamps.Select( value => $"{ItemDefinition.Find( value.Stamp )?.StampMark}@{value.AfterLine}" ) ?? Enumerable.Empty<string>() )}] " +
-						$"leaning='{player.LeaningOver?.Definition?.Title}' " +
+						$"leaning='{player.LeaningOver?.Definition?.Title}' working='{player.WorkTitle}' " +
 						$"sleepers={Game.ActiveScene.GetAllComponents<Sleeper>().Count( value => value.IsRevealed )} pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";
 				default:
 					return $"unknown command '{args[0]}'";
@@ -659,6 +679,10 @@ public static class DevCommands
 			return $"threw: {exception.Message}";
 		}
 	}
+
+	/// <summary>The machine in the running scene with this name.</summary>
+	private static Machine? Machine( string name ) =>
+		Game.ActiveScene.GetAllComponents<Machine>().FirstOrDefault( value => value.GameObject.Name == name );
 
 	/// <summary>The maps this client sees laid out.</summary>
 	private static IEnumerable<WorldItem> LaidOut( Player player ) =>
