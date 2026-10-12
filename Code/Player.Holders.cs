@@ -209,10 +209,11 @@ public sealed partial class Player
 		return changed;
 	}
 
-	/// <summary>Takes the item in hand, or puts it away if it already is. What is in hand is visible to everyone.</summary>
+	/// <summary>Takes the item in hand, or puts it away if it already is. What is in hand is visible to everyone. A wounded arm holds nothing.</summary>
 	private Result Equip( HexagonServices game, ItemStack stack )
 	{
-		_character!.Equipped = _character.Equipped == stack.Id ? null : stack.Id;
+		if ( _character!.Equipped != stack.Id && Wounds.CannotHold( _character ) ) return Result.Fail( ErrorCode.Denied, Wounds.CannotHoldMessage );
+		_character.Equipped = _character.Equipped == stack.Id ? null : stack.Id;
 		game.Roster!.Save( _character );
 		SendPrivateState();
 		return Result.Success();
@@ -220,17 +221,40 @@ public sealed partial class Player
 
 	private Result Consume( HexagonServices game, ItemStack stack, ItemDefinition definition )
 	{
-		if ( definition.Heals > 0 )
-		{
-			var healed = Vitals.Heal( _character!, definition.Heals );
-			if ( !healed.Ok ) return healed;
-		}
-		var used = game.Transfers!.Destroy( Sinks.Consumed, _character!, stack.Id, Actor.Of( _character! ), count: 1 );
+		// Something that treats is used on oneself: it closes a wound, gives back health, or both.
+		var used = definition.IsTreatment
+			? game.Characters!.Treat( _character!, _character!, stack, definition )
+			: game.Transfers!.Destroy( Sinks.Consumed, _character!, stack.Id, Actor.Of( _character! ), count: 1 );
 		if ( !used.Ok ) return used;
-		game.Roster!.Save( _character! );
-		SendPrivateState();
+		if ( !definition.IsTreatment )
+		{
+			game.Roster!.Save( _character! );
+			SendPrivateState();
+		}
 		// Those nearby see it happen, as they would.
 		if ( definition.UseEmote.Length > 0 ) Chat.Deliver( this, new ChatMessage( ChatChannel.Me, definition.UseEmote ) );
 		return used;
+	}
+
+	/// <summary>
+	/// Host: treats someone else with what is in hand, which is used up. Only something that treats
+	/// will do, and only from the hand: it is done in front of them, and anyone near sees it.
+	/// </summary>
+	internal Result HostTreat( CharacterData patient )
+	{
+		if ( HexagonServices.Current is not { Characters: { } characters } || _character is null ) return Result.Fail( ErrorCode.Internal, "The city is not ready." );
+		if ( HostHeld is not { } held || ItemDefinition.Find( held.Definition ) is not { IsTreatment: true } definition )
+			return Result.Fail( ErrorCode.Denied, "Hold something to treat them with." );
+		var treated = characters.Treat( patient, _character, held, definition );
+		if ( treated.Ok && definition.UseEmote.Length > 0 ) Chat.Deliver( this, new ChatMessage( ChatChannel.Me, definition.UseEmote ) );
+		return treated;
+	}
+
+	/// <summary>Host: what is in hand falls to the ground beside the character, as from a wounded arm.</summary>
+	internal void HostDropHeld()
+	{
+		if ( HostHeld is not { } held || HexagonServices.Current is not { } game ) return;
+		_character!.Equipped = null;
+		if ( !Drop( game, held ).Ok ) game.Roster!.Save( _character );
 	}
 }

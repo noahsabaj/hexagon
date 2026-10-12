@@ -108,6 +108,35 @@ function Teleport([int] $Client, [string] $Name, [int[]] $At) {
     } while ([DateTime]::UtcNow -lt $until)
 }
 
+# Waits until a client's character has stopped falling: two looks in a row put it at the same height.
+function Wait-Landed([int] $Client) {
+    $last = $null
+    $until = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $height = if ((Send $Client 'state') -match 'pos=[-\d.]+,[-\d.]+,(-?[\d.]+)') { [double] $Matches[1] }
+        if ($null -ne $last -and $null -ne $height -and [Math]::Abs($height - $last) -lt 0.5) { return }
+        $last = $height
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $until)
+}
+
+# Client 1 shoots at a part of someone, from his own eyes, at where the host has it, as a player aims at
+# what they see. Each machine animates a body for itself, a few units apart, so aiming at his own copy
+# of an arm could miss hers on the host. A body still falling is waited for, until two looks agree.
+function Shoot([string] $Name, [string] $Bone) {
+    $last = $null
+    $until = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $reply = Send 0 "part|$Name|$Bone"
+        if ($reply -notmatch '^(-?[\d.]+) (-?[\d.]+) (-?[\d.]+)') { throw "No part '$Bone' of $Name to shoot at: $reply" }
+        $at = @($Matches[1], $Matches[2], $Matches[3])
+        if ($null -ne $last -and ((0..2 | ForEach-Object { [Math]::Abs([double] $at[$_] - [double] $last[$_]) }) | Measure-Object -Sum).Sum -lt 2) { break }
+        $last = $at
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $until)
+    [void](Send 1 "attack|$($at -join '|')")
+}
+
 # Checks a reply. Given the question instead, in braces, it asks until the answer is the one wanted.
 # That something did not happen is checked once, after something sent later has arrived.
 function Expect([string] $What, $State, [string] $Pattern, [switch] $Not) {
@@ -285,9 +314,9 @@ try {
 
     Write-Host '==> Handing over takes two' -ForegroundColor Cyan
     Teleport 2 'Jane Roe' $beside
-    foreach ($gift in 'pistol', 'pistol_round 4', 'zip_tie', 'token 50') { [void](Send 0 "console|hexagon_give `"John Doe`" $gift") }
+    foreach ($gift in 'pistol', 'pistol_round 6', 'zip_tie', 'token 50') { [void](Send 0 "console|hexagon_give `"John Doe`" $gift") }
     [void](Send 0 'console|hexagon_give "Jane Roe" water')
-    Expect 'what staff gave him is in his hands, money with the rest' { Send 1 'state' } 'items=\[Radio~101\.5@0,0, Pistol@2,0, Pistol roundx4@4,0, Zip tie@5,0, Tokenx50@0,1\]'
+    Expect 'what staff gave him is in his hands, money with the rest' { Send 1 'state' } 'items=\[Radio~101\.5@0,0, Pistol@2,0, Pistol roundx6@4,0, Zip tie@5,0, Tokenx50@0,1\]'
     [void](Poll { Send 2 'state' } 'items=\[Water@0,0\]')
     [void](Send 1 'offer|4|30')
     Expect 'she is asked, by the name she was given' { Send 2 'state' } "offer='John Doe offers you 30 Token\.'"
@@ -315,28 +344,58 @@ try {
     Expect 'the hand-over is on record, from him to her' { Send 0 'journal|door.assign' } "actor='John Doe' .*data=\[owner=Jane Roe from=John Doe\]"
 
     Write-Host '==> Violence is slow, visible and on the record' -ForegroundColor Cyan
-    Expect 'four rounds are one pile' (Send 1 'state') 'Pistol roundx4@'
+    # Out on the open floor past the crate, where she has room to fall. Places are measured from the
+    # crate, which never moves: a door turns as it opens, and its back once faced a wall. He stands in
+    # front of her, the way her body faces, so nothing of her is in the way of the part he shoots at.
+    $target = Spot 'Crate' front 150
+    Teleport 2 'Jane Roe' $target
+    Wait-Landed 2
+    Teleport 1 'John Doe' (Spot 'Jane Roe' front 60)
+    Wait-Landed 1
+    Expect 'six rounds are one pile' (Send 1 'state') 'Pistol roundx6@'
     [void](Send 1 'equip|1')
     Expect 'a drawn pistol is something anyone can see' { Send 2 'proxies' } "held='Pistol'"
-    # A pistol fires at most every half second, and the host ignores a shot sooner than that. So each
-    # shot waits for the last to have used its round, and then for the pistol to be ready again.
-    foreach ($left in 'x3', 'x2', '') {
-        [void](Send 1 'attack')
-        [void](Poll { Send 1 'state' } "Pistol round$left@")
-        if ($left) { Start-Sleep -Milliseconds 550 }
-    }
+    [void](Send 2 'equip|0')
+    Expect 'and so is what she holds' { Send 1 'proxies' } "held='Water'"
+    # The host judges where each shot lands, on the body's own hitboxes. A pistol fires at most every
+    # half second, and the host ignores a shot sooner than that, so each shot waits for the last to
+    # have used its round, and then for the pistol to be ready again.
+    Shoot 'Jane Roe' leg_lower_L
+    [void](Poll { Send 1 'state' } 'Pistol roundx5@')
+    $state = Poll { Send 2 'state' } 'wounds=\[left leg\]'
+    Expect 'a shot to the leg wounds it, and she walks on it slowly' $state 'health=60 down=False .*wounds=\[left leg\] limping=True breathing=False speed=60 .*You are hit in the left leg\.'
+    Expect 'a limp anyone can see' { Send 1 'proxies' } 'limping=True breathing=False'
+    Start-Sleep -Milliseconds 550
+    Shoot 'Jane Roe' arm_lower_R
+    [void](Poll { Send 1 'state' } 'Pistol roundx4@')
+    $state = Poll { Send 2 'state' } 'right arm\]'
+    Expect 'a shot to the arm drops what she held' $state "items=\[Tokenx30@1,0\] .*health=20 down=False restrained=False held='' .*wounds=\[left leg, right arm\] .*ground=\[[^\]]*Water"
+    Expect 'badly hurt, she breathes hard, and he hears it' { Send 1 'proxies' } "held='' .*breathing=True"
+    [void](Send 2 'equip|0')
+    Expect 'that hand holds nothing until it is treated' { Send 2 'state' } 'Your arm will not hold anything until the wound is treated\.'
+    [void](Send 2 'pickup|Water')
+    Expect 'but she can pick up what fell' { Send 2 'state' } 'items=\[Tokenx30@1,0, Water@0,0\] '
+    Start-Sleep -Milliseconds 550
+    Shoot 'Jane Roe' spine_2
+    [void](Poll { Send 1 'state' } 'Pistol roundx3@')
     Expect 'three shots put her down, not out' { Send 2 'state' } 'has=True .*health=0 down=True'
     Expect 'he sees her fall but not her health' { Send 1 'proxies' } 'down=True .*health=0 has=True'
-    Expect 'each shot, and the fall, are on record' { Send 0 'journal' } 'combat\.attack=3 .*character\.downed=1'
-    Expect 'each shot used up a round' (Send 1 'state') 'Pistol round@'
+    $lying = Poll { Send 1 'sleepers' } ',down,limp'
+    Expect 'she lies limp where she fell' $lying '^-?\d+,-?\d+,down,limp$'
+    Expect 'and sees from her body, on the ground' { Send 2 'state' } 'view=-?(\d|[12]\d) '
+    $journal = Poll { Send 0 'journal' } '(?<!\S)character\.downed=1(?!\S)'
+    Expect 'each shot, and the fall, are on record' $journal 'combat\.attack=3 .*character\.downed=1'
+    Expect 'and so is each wound' $journal '(?<!\S)character\.wounded=2(?!\S)'
+    Expect 'with where the shot landed' (Send 0 'journal|character.wounded') 'data=\[place=right arm cause=Pistol\]'
+    Expect 'each shot used up a round' (Send 1 'state') 'Pistol roundx3@'
     [void](Send 2 'leave')
     Expect 'she cannot leave the scene' { Send 2 'state' } 'has=True .*cannot leave the city like this'
 
     Write-Host '==> Searching is opening a holder' -ForegroundColor Cyan
     [void](Send 1 'act|person.search')
-    Expect 'he sees what she carries' { Send 1 'state' } 'open=\[Belongings: Water, Tokenx30\] openworn=\[Flannel shirt, Cardigan, Jeans, Black boots\] '
+    Expect 'he sees what she carries' { Send 1 'state' } 'open=\[Belongings: Tokenx30, Water\] openworn=\[Flannel shirt, Cardigan, Jeans, Black boots\] '
     Expect 'and she is told' { Send 2 'state' } 'going through your belongings'
-    [void](Send 1 'take|1')
+    [void](Send 1 'take|0')
     Expect 'what he took left her inventory' { Send 2 'state' } 'items=\[Water@0,0\] '
     Expect 'and joined his own pile' { Send 1 'state' } 'Tokenx50@0,1'
     [void](Send 1 'strip|Cardigan')
@@ -346,6 +405,29 @@ try {
     Expect 'once he puts it on, she sees him in it' { Send 2 'proxies' } 'look=\[flatcap,waistcoat_and_shirt,trousers\.smart,black_boots,cardigan_dark\]'
     [void](Send 1 'act|person.revive')
     Expect 'helped up, she is no longer searchable' { "$(Send 2 'state') $(Send 1 'state')" } 'health=25 down=False .*open=\[: \]'
+    $state = Send 2 'state'
+    Expect 'she stands where her body lay, her wounds still on her' "$(Near $state ([int[]] (($lying -split ',')[0..1] + 0))) $state" "^True .*held='' .*wounds=\[left leg, right arm\] limping=True breathing=True "
+
+    Write-Host '==> Wounds are treated by hand' -ForegroundColor Cyan
+    [void](Send 0 'console|hexagon_give "John Doe" bandage 2')
+    [void](Poll { Send 1 'state' } 'items=\[Radio~101\.5@0,0, Pistol@2,0, Pistol roundx3@4,0, Zip tie@5,0, Tokenx50@0,1, Bandagex2@')
+    [void](Send 1 'act|person.treat')
+    Expect 'what treats her must be in his hand' { Send 1 'state' } 'Hold something to treat them with\.'
+    [void](Send 1 'equip|5')
+    [void](Poll { Send 1 'state' } "held='Bandage'")
+    [void](Send 1 'act|person.treat')
+    $state = Poll { Send 2 'state' } 'wounds=\[right arm\]'
+    Expect 'a bandage from his hand closes her oldest wound and heals a little' $state 'health=55 .*wounds=\[right arm\] limping=False .*Your left leg is treated\.'
+    Expect 'in front of her' $state 'John Doe binds a wound'
+    [void](Send 1 'act|person.treat')
+    $state = Poll { Send 2 'state' } 'wounds=\[\]'
+    Expect 'the second closes the other' $state 'health=85 .*wounds=\[\] limping=False breathing=False .*Your right arm is treated\.'
+    Expect 'and the bandages are used up' { Send 1 'state' } "Zip tie@5,0, Tokenx50@0,1\] .*held='' "
+    [void](Send 2 'equip|0')
+    Expect 'her hand holds again' { Send 2 'state' } "held='Water'"
+    Expect 'each is on record, with what it closed' (Send 0 'journal|character.treated') "actor='John Doe' .*data=\[item=bandage wound=right arm healed=30\]"
+    [void](Send 1 'equip|1')
+    [void](Poll { Send 1 'state' } "held='Pistol'")
 
     Write-Host '==> Restraints' -ForegroundColor Cyan
     [void](Send 2 'act|person.restrain')
@@ -360,13 +442,18 @@ try {
     Write-Host '==> Death is a deliberate act, and it is final' -ForegroundColor Cyan
     [void](Send 1 'act|person.finish')
     Expect 'someone standing cannot be finished: the verb is not even offered' (Send 0 'journal') 'character\.death|verb\.person\.finish' -Not
-    [void](Send 1 'attack')
-    # He can finish her once his own client shows her down and offers it.
-    [void](Poll { Send 1 'proxies' } 'down=True')
-    [void](Send 1 'act|person.finish')
-    Expect 'she is dead, and her player is back at the list, where the dead are kept' { Send 2 'state' } 'has=False .*characters=\[John Doe, Jane Roe\(dead\)\].*Jane Roe has died\.'
+    [void](Send 0 'console|hexagon_hurt "Jane Roe" 60')
+    [void](Poll { Send 2 'state' } 'health=25 ')
+    Shoot 'Jane Roe' spine_2
+    [void](Poll { Send 1 'state' } 'Pistol roundx2@')
+    # A pistol is made to kill: a shot to the head kills outright, someone lying down as much as anyone.
+    [void](Poll { Send 1 'sleepers' } ',down,limp')
+    Start-Sleep -Milliseconds 550
+    Shoot 'Jane Roe' head
+    Expect 'a shot to her head as she lies there kills her, and her player is back at the list, where the dead are kept' { Send 2 'state' } 'has=False .*characters=\[John Doe, Jane Roe\(dead\)\].*Jane Roe has died\.'
     $journal = Poll { Send 0 'journal' } '(?<!\S)character\.death=1(?!\S)'
     Expect 'the death is on record' $journal '(?<!\S)character\.death=1(?!\S)'
+    Expect 'with where the shot landed' (Send 0 'journal|character.death') 'place=head'
     Expect 'and the title she held went with her' $journal '(?<!\S)door\.release=1(?!\S)'
     # He is beside her, so he sees her body as she falls, not once everyone else may be sent it.
     Expect 'he sees her body at once' (Poll { Send 1 'state' } 'bodies=1 ' 2) 'bodies=1 '
@@ -393,7 +480,7 @@ try {
     Expect 'the restore is on record' { Send 0 'journal' } '(?<!\S)operator\.restore=1(?!\S)'
 
     Write-Host '==> Leaving does not end a scene' -ForegroundColor Cyan
-    Teleport 2 'Jane Roe' $beside
+    Teleport 2 'Jane Roe' $target
     [void](Send 0 'console|hexagon_give "John Doe" zip_tie')
     [void](Poll { Send 1 'state' } 'Zip tie@')
     [void](Poll { Send 1 'proxies' } 'down=False restrained=False .*has=True')
@@ -403,7 +490,7 @@ try {
     Wait-Until 'the server to notice the disconnect' { (Send 0 'journal') -match 'connection\.leave=1' }
     Expect 'the player who left is gone from the other client' { Send 1 'proxies' } '^[^A-Za-z]*$'
     # What someone left behind looks like is sent once the network has stopped sending it to those too far away.
-    Expect 'but the character she left bound is still standing there, and he is sent it' { Send 1 'sleepers' } '^\d+,-?\d+,bound$'
+    Expect 'but the character she left bound is still standing there, and he is sent it' { Send 1 'sleepers' } '^-?\d+,-?\d+,bound,standing$'
     Expect 'he can free her' (Send 1 'act|person.release') '^sent person\.release$'
     Expect 'and then nobody is left there' { Send 1 'state' } 'sleepers=0 '
     Expect 'freeing someone whose player has gone is on record like any other' { Send 0 'journal|verb.person.release' } "ok=True actor='John Doe' .*target=Sleeper"

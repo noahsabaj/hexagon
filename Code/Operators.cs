@@ -21,14 +21,14 @@ public static class Operators
 {
 	public const string Help = "give \"<name>\" <item> [count] [pattern] | " +
 		"take \"<name>\" <item> [count] | move \"<from>\" \"<to>\" <item> [count] | " +
-		"teleport \"<name>\" <x> <y> <z> | bring \"<name>\" | goto \"<name>\" | hurt \"<name>\" <amount> | revive \"<name>\" | release \"<name>\" | " +
+		"teleport \"<name>\" <x> <y> <z> | bring \"<name>\" | goto \"<name>\" | hurt \"<name>\" <amount> [\"<place>\"] | revive \"<name>\" | release \"<name>\" | " +
 		"restore \"<name>\" | faction \"<name>\" <faction|none> | door [\"<door>\"] <open|close|lock|unlock|release|assign \"<name>\"> | door | who | journal [text] [count] [days]";
 
 	[ConCmd( "hexagon_give" )] public static void Give( string characterName, string item, int count = 0, string pattern = "" ) => FromConsole( "give", characterName, item, Count( count ), pattern );
 	[ConCmd( "hexagon_take" )] public static void Take( string characterName, string item, int count = 0 ) => FromConsole( "take", characterName, item, Count( count ) );
 	[ConCmd( "hexagon_move" )] public static void MoveBetween( string from, string to, string item, int count = 0 ) => FromConsole( "move", from, to, item, Count( count ) );
 	[ConCmd( "hexagon_teleport" )] public static void Teleport( string characterName, float x, float y, float z ) => FromConsole( "teleport", characterName, Number( x ), Number( y ), Number( z ) );
-	[ConCmd( "hexagon_hurt" )] public static void Hurt( string characterName, int amount ) => FromConsole( "hurt", characterName, Count( amount ) );
+	[ConCmd( "hexagon_hurt" )] public static void Hurt( string characterName, int amount, string place = "" ) => FromConsole( "hurt", characterName, Count( amount ), place );
 	[ConCmd( "hexagon_revive" )] public static void Revive( string characterName ) => FromConsole( "revive", characterName );
 	[ConCmd( "hexagon_release" )] public static void Release( string characterName ) => FromConsole( "release", characterName );
 	[ConCmd( "hexagon_restore" )] public static void Restore( string characterName ) => FromConsole( "restore", characterName );
@@ -150,11 +150,14 @@ public static class Operators
 			}
 			case "hurt":
 			{
-				if ( Find( Word( 1 ) ) is not { } target || !int.TryParse( Word( 2 ), out var amount ) || amount <= 0 )
-					return new[] { "Usage: hurt \"<character name>\" <amount>. The character must be in the city." };
-				journal.Record( JournalKinds.OperatorHurt, by, target.HostCharacter!.HolderLabel, data: ("amount", amount.ToString()) );
-				characters.Damage( target.HostCharacter!, amount, null, "operator", target.HostPosition );
-				return new[] { $"Hurt {target.HostCharacter.Name} for {amount}." };
+				// With a place, it is a wound there, as a weapon leaves, so staff can put right what a bug took away, or test it.
+				var place = Word( 3 ).ToLowerInvariant();
+				if ( Find( Word( 1 ) ) is not { } target || !int.TryParse( Word( 2 ), out var amount ) || amount <= 0 || (place.Length > 0 && !Places.All.Contains( place )) )
+					return new[] { $"Usage: hurt \"<character name>\" <amount> [\"<place>\"], the place one of {string.Join( ", ", Places.All )}. The character must be in the city." };
+				var hurt = target.HostCharacter!;
+				journal.Record( JournalKinds.OperatorHurt, by, hurt.HolderLabel, data: place.Length > 0 ? new[] { ("amount", amount.ToString()), ("place", place) } : new[] { ("amount", amount.ToString()) } );
+				characters.Damage( hurt, new Blow( amount, place.Length > 0 ? place : Places.Body, Wounding: place.Length > 0 ), null, "operator", target.HostPosition );
+				return new[] { $"Hurt {hurt.Name} for {amount}{(place.Length > 0 ? $" in the {place}" : string.Empty)}." };
 			}
 			case "revive":
 			{
@@ -295,6 +298,8 @@ public static class Operators
 	private static string Move( Journal journal, Actor by, Player target, Vector3 to )
 	{
 		target.HostTeleport( to );
+		// Someone down is the body on the ground, so the body is what is moved, and it lies there.
+		if ( target.HostCharacter is { IsDown: true } down ) Sleeper.HostFall( down, null, new Transform( to ), null );
 		journal.Record( JournalKinds.OperatorTeleport, by, target.HostCharacter!.HolderLabel, data: ("to", $"{to.x:0},{to.y:0},{to.z:0}") );
 		return $"Moved {target.HostCharacter.Name}.";
 	}

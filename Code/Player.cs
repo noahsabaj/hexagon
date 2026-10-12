@@ -33,7 +33,7 @@ public sealed record OwnedDoor( Guid Id, string Name );
 /// request, and the host decides.
 /// </summary>
 [Title( "Hexagon Player" ), Category( "Hexagon" ), Icon( "person" )]
-public sealed partial class Player : Component, Component.INetworkVisible, IEmbodiment
+public sealed partial class Player : Component, Component.INetworkVisible, IEmbodiment, ICameraModifier
 {
 	/// <summary>The pawn this client controls, or null before it has spawned.</summary>
 	public static Player? Local { get; private set; }
@@ -70,6 +70,8 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	public InventoryData? Inventory { get; private set; }
 	/// <summary>The doors this character holds the title to.</summary>
 	public IReadOnlyList<OwnedDoor> OwnedDoors { get; private set; } = Array.Empty<OwnedDoor>();
+	/// <summary>Where this character is wounded, oldest first. How hurt someone else is cannot be read off them.</summary>
+	public IReadOnlyList<string> Wounded { get; private set; } = Array.Empty<string>();
 
 	/// <summary>Bumped whenever private state changes so panels can rebuild.</summary>
 	public int PrivateVersion { get; private set; }
@@ -100,6 +102,17 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	/// <summary>How much faster than a run a claim may be before it is disbelieved.</summary>
 	public const float SpeedTolerance = 1.5f;
 
+	/// <summary>Seconds the owner has to slow to a limp before a faster claim is disbelieved.</summary>
+	public const float LimpGrace = 1.5f;
+
+	/// <summary>How fast someone with a wounded leg walks, which is as fast as they go.</summary>
+	public static float LimpSpeed => HexagonServices.Current?.LimpSpeed ?? 60f;
+
+	// The speeds the controller was made with, before any limp: walking, running, ducked, and jumping.
+	private (float Walk, float Run, float Ducked, float Jump) _speeds = (110f, 320f, 70f, 300f);
+	// Host: since the character started limping.
+	private RealTimeSince _sinceLimping;
+
 	/// <summary>How often, at most, the host works out who may see this pawn, in seconds.</summary>
 	public const float ObserverInterval = 0.25f;
 
@@ -116,8 +129,13 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	/// </summary>
 	public bool IsPresent => HasCharacter && (!IsProxy || Networking.IsHost || _sincePulse < PulseTimeout);
 
-	// Another client's person, while they are in sight.
-	bool IEmbodiment.IsShownHere => IsProxy && IsPresent;
+	// Another client's person, while they are in sight and on their feet: someone down is their body on the ground.
+	bool IEmbodiment.IsShownHere => IsProxy && IsPresent && !IsDown;
+
+	// Someone down is carried by their body on the ground, a Sleeper: that is what is acted on and harmed.
+	CharacterData? IEmbodiment.HostCharacter => IsDown ? null : HostCharacter;
+	SkinnedModelRenderer? IEmbodiment.Renderer => Controller?.Renderer;
+	bool IEmbodiment.IsLimp => false;
 
 	/// <summary>Builds the pawn on the host, before it is network-spawned, so clients receive it whole.</summary>
 	public static void Compose( GameObject pawn )
@@ -132,13 +150,18 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		renderer.CreateBoneObjects = true;
 
 		var controller = pawn.AddComponent<PlayerController>();
-		// Left null for controllers created at runtime, yet its generated colliders need a tag set.
+		// Left null for controllers created at runtime, yet its generated colliders need a tag set. The
+		// capsule is only for walking into: a shot passes it by for the body's own hitboxes.
 		controller.BodyCollisionTags = new TagSet();
 		controller.BodyCollisionTags.Add( "player" );
+		controller.BodyCollisionTags.Add( "capsule" );
+		// The controller made its colliders as it was added, before it had the set, so they are told it.
+		controller.ColliderObject?.Tags.SetFrom( controller.BodyCollisionTags );
 		// Linked explicitly: the automatic link runs when the controller enables, before the child exists.
 		controller.Renderer = renderer;
 		pawn.AddComponent<Player>();
 		pawn.AddComponent<CharacterBody>();
+		pawn.AddComponent<BodyCues>();
 	}
 
 	protected override void OnStart()
@@ -148,6 +171,11 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 			Local = this;
 			// Statics outlive a session in the editor, so a new one starts with a clean log.
 			Chat.Clear();
+		}
+		if ( Controller is { } controller )
+		{
+			_speeds = (controller.WalkSpeed, controller.RunSpeed, controller.DuckedSpeed, controller.JumpSpeed);
+			if ( controller.Renderer.IsValid() ) Bodies.AddHitboxes( controller.Renderer, GameObject );
 		}
 		ApplyPresence();
 		if ( !IsProxy ) RequestCharacters();
@@ -211,7 +239,9 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	/// </summary>
 	private void HostAuditMovement( PlayerController controller )
 	{
-		var limit = MathF.Max( controller.RunSpeed, controller.WalkSpeed ) * SpeedTolerance;
+		// The speeds the character was made with. Limping, it is held to a walk once its owner has had time to slow.
+		var limping = IsLimping && _sinceLimping > LimpGrace;
+		var limit = (limping ? LimpSpeed : MathF.Max( _speeds.Run, _speeds.Walk )) * SpeedTolerance;
 		// A fall is judged by the gravity the world has, which a scene may set, not by the engine's default.
 		_movement.Gravity = MathF.Abs( Scene.PhysicsWorld.Gravity.z );
 		var claimed = WorldPosition;
@@ -310,15 +340,19 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	private string? _shownHeld;
 	private GameObject? _heldObject;
 
-	/// <summary>Every client: makes the body look like its look, and hangs what is in hand on the hand.</summary>
+	/// <summary>
+	/// Every machine: makes the body look like its look, and hangs what is in hand on the hand. A server
+	/// with no screen still gives the body its model, which where a shot lands and how it falls are of.
+	/// </summary>
 	private void ApplyAppearance()
 	{
-		if ( Application.IsDedicatedServer || Controller?.Renderer is not { } renderer || !renderer.IsValid() ) return;
+		if ( Controller?.Renderer is not { } renderer || !renderer.IsValid() ) return;
 		if ( _shownLook != Look )
 		{
 			_shownLook = Look;
 			Looks.Apply( renderer, Look );
 		}
+		if ( Application.IsDedicatedServer ) return;
 		var held = ItemDefinition.Find( HeldItemPath );
 		if ( _shownHeld != HeldItemPath )
 		{
@@ -337,23 +371,41 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	/// <summary>
 	/// A connection without a character is in the menu: no body in the world, no movement. Someone
 	/// who has gone out of sight is not left standing, unseen and solid, where they were last seen.
+	/// Someone down is their body on the ground, which the host's Sleeper carries: the pawn holds still,
+	/// unseen and not solid, and its player looks out of the body's eyes.
 	/// </summary>
 	private void ApplyPresence()
 	{
 		if ( Controller is not { } controller ) return;
-		var present = IsPresent;
-		if ( controller.Renderer.IsValid() )
-		{
-			controller.Renderer.GameObject.Enabled = present;
-			// Someone who is down lies down. It is crude, and it is visible from across the street.
-			controller.Renderer.GameObject.LocalRotation = IsDown ? Rotation.From( -90, 0, 0 ) : Rotation.Identity;
-		}
+		var standing = IsPresent && !IsDown;
+		if ( controller.Renderer.IsValid() ) controller.Renderer.GameObject.Enabled = standing;
 		// Another's body is moved by the network, not by physics, so it can lose its colliders safely.
-		if ( IsProxy && controller.ColliderObject.IsValid() ) controller.ColliderObject.Enabled = present;
+		// The owner's own holds still while they are down, so it can lose them too.
+		if ( controller.ColliderObject.IsValid() ) controller.ColliderObject.Enabled = IsProxy ? standing : !IsDown;
 		if ( IsProxy ) return;
+		if ( controller.Body.IsValid() ) controller.Body.MotionEnabled = !IsDown;
 		controller.UseInputControls = HasCharacter && !IsDown;
 		controller.UseLookControls = HasCharacter;
 		controller.UseCameraControls = HasCharacter;
+		// A wounded leg walks, slowly, and neither runs nor jumps.
+		controller.WalkSpeed = IsLimping ? MathF.Min( LimpSpeed, _speeds.Walk ) : _speeds.Walk;
+		controller.RunSpeed = IsLimping ? controller.WalkSpeed : _speeds.Run;
+		controller.DuckedSpeed = IsLimping ? MathF.Min( controller.WalkSpeed, _speeds.Ducked ) : _speeds.Ducked;
+		controller.JumpSpeed = IsLimping ? 0f : _speeds.Jump;
+	}
+
+	// After the controller's own view, before anything that holds the camera for a test.
+	int ICameraModifier.CameraOrder => 10;
+
+	/// <summary>Owner: someone down sees from their body's eyes, on the ground, and can still look about.</summary>
+	void ICameraModifier.ModifyCamera( CameraComponent camera, ref CameraView view )
+	{
+		if ( IsProxy || !IsDown || camera != Scene.Camera || Controller is not { } controller ) return;
+		if ( Sleeper.Find( CharacterId ) is not { IsLimp: true, Renderer: { } body } || body.GetAttachment( "eyes" ) is not { } eyes ) return;
+		view.Position = eyes.Position;
+		view.Rotation = controller.EyeAngles.ToRotation();
+		// Close enough to the ground not to see through it.
+		view.ZNear = MathF.Min( view.ZNear, 1f );
 	}
 
 	/// <summary>
@@ -420,8 +472,13 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	{
 		// Also as the city closes, when the scene may no longer be the active one.
 		if ( !Networking.IsHost || _character is null || HexagonServices.Get( Scene )?.Roster is not { } roster ) return;
-		var at = HostPosition;
-		_character.Position = new[] { at.x, at.y, at.z };
+		// Someone down is where their body lies, which may have been knocked from where they fell.
+		if ( _character.IsDown && Sleeper.Find( _character.Id ) is { IsLimp: true } body ) body.HostKeepPosition( _character );
+		else
+		{
+			var at = HostPosition;
+			_character.Position = new[] { at.x, at.y, at.z };
+		}
 		roster.Save( _character );
 	}
 
@@ -502,7 +559,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 			.Select( value => new OwnedDoor( value.GameObject.Id, value.GameObject.Name ) ).ToArray();
 		using ( Rpc.FilterInclude( owner ) )
 			ReceivePrivateState( _character.Name, _character.Faction, JsonSerializer.Serialize( Keys.AsSeen( _character.Inventory ) ),
-				JsonSerializer.Serialize( _character.Known ), _character.Health, JsonSerializer.Serialize( doors ) );
+				JsonSerializer.Serialize( _character.Known ), _character.Health, JsonSerializer.Serialize( doors ), string.Join( ';', _character.Wounds ) );
 	}
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
@@ -516,13 +573,15 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		Inventory = null;
 		OwnedDoors = Array.Empty<OwnedDoor>();
 		OfferText = string.Empty;
+		Wounded = Array.Empty<string>();
 		PrivateVersion++;
 	}
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
-	private void ReceivePrivateState( string name, string factionPath, string inventoryJson, string knownJson, int health, string doorsJson )
+	private void ReceivePrivateState( string name, string factionPath, string inventoryJson, string knownJson, int health, string doorsJson, string wounds )
 	{
 		Health = health;
+		Wounded = wounds.Split( ';', StringSplitOptions.RemoveEmptyEntries );
 		Known = JsonSerializer.Deserialize<Dictionary<Guid, string>>( knownJson ) ?? new Dictionary<Guid, string>();
 		CharacterName = name;
 		FactionPath = factionPath;
@@ -535,7 +594,10 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	private void ReceiveTeleport( Vector3 position )
 	{
 		WorldPosition = position;
-		if ( Controller?.Body is not { } body || !body.IsValid() ) return;
+		if ( Controller is not { } controller || controller.Body is not { } body || !body.IsValid() ) return;
+		// The controller turns gravity off on the ground it stood on, which was at the old place. Forgetting
+		// it turns gravity back on until the controller finds ground here.
+		controller.PreventGrounding( 0f );
 		body.Velocity = Vector3.Zero;
 		// A body at rest is asleep, and one put in the air asleep would hang there.
 		body.Sleeping = false;

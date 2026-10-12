@@ -206,6 +206,15 @@ public static class DevCommands
 			if ( args.Length > 1 && !args[1].StartsWith( '#' ) ) game.SightRange = float.Parse( args[1], System.Globalization.CultureInfo.InvariantCulture );
 			return $"sight={game.SightRange}";
 		}
+		if ( args[0] == "bind" )
+		{
+			// bind|<name> binds a character's hands with a tie it carries itself, which nobody can do in
+			// the game, so a test with one client can picture bound hands.
+			if ( !Networking.IsHost || HexagonServices.Current is not { Roster: { } roster, Characters: { } characters } ) return "refused: not the host";
+			if ( roster.All.FirstOrDefault( value => value.Name == args[1] ) is not { } character ) return $"no character named '{args[1]}'";
+			var bound = characters.Restrain( character, character );
+			return bound.Ok ? "bound" : bound.Message;
+		}
 		if ( args[0] == "journal" )
 		{
 			// Today's journal as kind=count, refusals marked, so a test can assert what was remembered.
@@ -232,6 +241,23 @@ public static class DevCommands
 			// spot|<object>|<side>|<distance>|<height>: a place beside something named in the scene, as x y z.
 			if ( Spot( args ) is not { } spot ) return $"nothing named '{args.ElementAtOrDefault( 1 )}'";
 			return $"{spot.x:0} {spot.y:0} {spot.z:0}";
+		}
+		if ( args[0] == "part" )
+		{
+			// part|<character>|<bone>: the middle of that part of someone's body as the host has it, standing
+			// or on the ground, as x y z. A part's shape is its model's hitbox on that bone.
+			if ( !Networking.IsHost ) return "refused: not the host";
+			if ( Drawn( args[1] ) is not { Model: { } model } drawn || model.Bones.GetBone( args[2] ) is not { } named
+				|| !drawn.TryGetBoneTransform( named, out var bone ) ) return $"no part '{args[2]}' of '{args[1]}'";
+			var middle = model.HitboxSet.All.FirstOrDefault( value => value.Bone?.Name == named.Name )?.Shape switch
+			{
+				Capsule capsule => (capsule.CenterA + capsule.CenterB) / 2f,
+				Sphere sphere => sphere.Center,
+				BBox box => box.Center,
+				_ => Vector3.Zero
+			};
+			var at = bone.PointToWorld( middle );
+			return $"{at.x.ToString( "0.#", Invariant )} {at.y.ToString( "0.#", Invariant )} {at.z.ToString( "0.#", Invariant )}";
 		}
 		if ( args[0] == "hostid" ) return $"local={Connection.Local?.SteamId.ValueUnsigned} host={Connection.Host?.SteamId.ValueUnsigned} address={Connection.Local?.Address} name={Connection.Local?.DisplayName}";
 		if ( args[0] == "convar" ) return ConsoleSystem.GetValue( args[1] ) ?? "unset";
@@ -321,7 +347,14 @@ public static class DevCommands
 					if ( args.Length >= 7 && !args[1].StartsWith( '#' ) )
 					{
 						if ( Spot( args ) is not { } eye ) return $"nothing named '{args[1]}'";
-						var seen = args[5] == "self" ? player.WorldPosition : Middle( args[5] );
+						// Or at the nearest other person, standing or lying, or at a body.
+						var seen = args[5] switch
+						{
+							"self" => player.WorldPosition,
+							"person" => Person( player )?.WorldPosition,
+							"body" => Game.ActiveScene.GetAllComponents<Corpse>().FirstOrDefault( value => value.IsRevealed )?.WorldPosition,
+							_ => Middle( args[5] )
+						};
 						if ( seen is not { } looked ) return $"nothing named '{args[5]}'";
 						HeldCamera = new Transform( eye, Rotation.LookAt( looked.WithZ( looked.z + float.Parse( args[6], Invariant ) ) - eye ) );
 					}
@@ -391,6 +424,14 @@ public static class DevCommands
 					player.RequestAct( subject, args[1] );
 					return $"sent {args[1]}";
 				case "attack":
+					// attack|<x>|<y>|<z> shoots from this client's eyes, where the host shoots from, at a point, such
+					// as where the host has part of someone (part). attack alone shoots level at the nearest other person.
+					if ( args.Length > 3 && !args[1].StartsWith( '#' ) && player.GetComponent<PlayerController>() is { } shooter )
+					{
+						var point = new Vector3( float.Parse( args[1], Invariant ), float.Parse( args[2], Invariant ), float.Parse( args[3], Invariant ) );
+						player.RequestAttack( point - player.WorldPosition - Vector3.Up * (shooter.CurrentHeight - shooter.EyeDistanceFromTop) );
+						return "sent attack";
+					}
 					Component? foe = Person( player );
 					player.RequestAttack( foe is null ? Vector3.Forward : foe.WorldPosition - player.WorldPosition );
 					return "sent attack";
@@ -427,7 +468,7 @@ public static class DevCommands
 				case "proxies":
 					// What this client was told about everyone else. Names and factions must be empty.
 					return string.Join( " ; ", Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy )
-						.Select( value => $"down={value.IsDown} restrained={value.IsRestrained} held='{ItemDefinition.Find( value.HeldItemPath )?.Title}' health={value.Health} has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}' seen='{value.CharacterDescription}' label='{player.LabelFor( value )}' look=[{string.Join( ",", Looks.Pieces( value.Look ) )}]" ) );
+						.Select( value => $"down={value.IsDown} restrained={value.IsRestrained} held='{ItemDefinition.Find( value.HeldItemPath )?.Title}' health={value.Health} has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}' seen='{value.CharacterDescription}' label='{player.LabelFor( value )}' look=[{string.Join( ",", Looks.Pieces( value.Look ) )}] limping={value.IsLimping} breathing={value.IsBreathingHard}" ) );
 				case "pawns":
 					// Every pawn this client holds for someone else, including those the network has made
 					// inactive: whether it shows them, and where each was when it was last sent. What is no
@@ -446,9 +487,10 @@ public static class DevCommands
 					player.WorldPosition = new Vector3( float.Parse( args[1] ), float.Parse( args[2] ), float.Parse( args[3] ) );
 					return "moved";
 				case "sleepers":
-					// Where everyone left lying, or standing bound, is, as this client was shown them.
+					// Where every body nobody walks in is, as this client was shown them: down and limp on the
+					// ground, or bound and standing.
 					return string.Join( " ", Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed )
-						.Select( value => $"{value.WorldPosition.x:0},{value.WorldPosition.y:0},{(value.IsDown ? "down" : "bound")}" ) );
+						.Select( value => $"{value.WorldPosition.x:0},{value.WorldPosition.y:0},{(value.IsDown ? "down" : "bound")},{(value.IsLimp ? "limp" : "standing")}" ) );
 				case "state":
 					return $"has={player.HasCharacter} name='{player.CharacterName}' faction='{player.Faction?.Title}' " +
 						$"characters=[{string.Join( ", ", player.Characters.Select( value => value.Name + (value.IsDead ? "(dead)" : value.IsWaiting ? "(waits)" : string.Empty) ) )}] " +
@@ -457,6 +499,11 @@ public static class DevCommands
 						$"doors=[{string.Join( ", ", Game.ActiveScene.GetAllComponents<Door>().Select( value => $"{value.GameObject.Name}:open={value.IsOpen},locked={value.IsLocked},swinging={value.IsSwinging}" ) )}] " +
 						$"owned=[{string.Join( ", ", player.OwnedDoors.Select( value => value.Name ) )}] offer='{player.OfferText}' " +
 						$"health={player.Health} down={player.IsDown} restrained={player.IsRestrained} held='{ItemDefinition.Find( player.HeldItemPath )?.Title}' bodies={Game.ActiveScene.GetAllComponents<Corpse>().Count( value => value.IsRevealed )} " +
+						// Wounds as the character knows them, the limp and the breathing as anyone sees and hears
+						// them, how fast it may go, and how high above its feet it looks out from, as the camera
+						// composed its last view.
+						$"wounds=[{string.Join( ", ", player.Wounded )}] limping={player.IsLimping} breathing={player.IsBreathingHard} " +
+						$"speed={player.GetComponent<PlayerController>()?.RunSpeed:0} view={(Game.ActiveScene.Camera is { } lens ? lens.View.Position.z - player.WorldPosition.z : 0f):0} " +
 						$"staff={player.IsStaff} said=[{string.Join( " / ", player.StaffLines.TakeLast( 4 ) )}] " +
 						$"known=[{string.Join( ", ", player.Known.Values.OrderBy( value => value ) )}] " +
 						$"open=[{player.OpenTitle}: {string.Join( ", ", Carried( player.OpenInventory ).Select( Pile ) )}] openworn=[{string.Join( ", ", Worn( player.OpenInventory ) )}] " +
@@ -473,15 +520,21 @@ public static class DevCommands
 		}
 	}
 
-	/// <summary>Everyone else this client can see in the city.</summary>
+	/// <summary>Everyone else this client can see standing in the city. Someone down is the body on the ground.</summary>
 	private static IEnumerable<Player> Others( Player player ) =>
-		Game.ActiveScene.GetAllComponents<Player>().Where( value => value != player && value.IsProxy && value.IsPresent );
+		Game.ActiveScene.GetAllComponents<Player>().Where( value => value != player && value.IsProxy && value.IsPresent && !value.IsDown );
 
 	private static readonly System.Globalization.CultureInfo Invariant = System.Globalization.CultureInfo.InvariantCulture;
 
 	/// <summary>The first object in the running scene with this name.</summary>
 	private static GameObject? Named( string name ) =>
 		Game.ActiveScene?.Directory.FindByName( name, caseinsensitive: false ).FirstOrDefault( value => value.IsValid() );
+
+	/// <summary>Host: the body a living character is drawn in, standing or on the ground.</summary>
+	private static SkinnedModelRenderer? Drawn( string name ) =>
+		HexagonServices.Current?.Roster?.All.FirstOrDefault( value => value.Name == name && !value.IsDead ) is { } character
+			? Sleeper.Find( character.Id )?.Renderer ?? (Player.HostLoaded( character.Id ) as IEmbodiment)?.Renderer
+			: null;
 
 	/// <summary>The middle of something named, as its bounds have it.</summary>
 	private static Vector3? Middle( string name ) => Named( name )?.GetBounds().Center;
@@ -490,11 +543,12 @@ public static class DevCommands
 	/// A place beside something named, so a test says where its characters stand by what is there
 	/// rather than by coordinates: <c>&lt;name&gt;|&lt;side&gt;|&lt;distance&gt;|&lt;height&gt;</c> after the command.
 	/// The side is the object's own front, back, left or right; the distance is from its face on that
-	/// side; the height is above the floor found there.
+	/// side; the height is above the floor found there. On the host the name can be a character's, and
+	/// their front is the way their body faces.
 	/// </summary>
 	private static Vector3? Spot( string[] args )
 	{
-		if ( args.Length < 2 || Named( args[1] ) is not { } named ) return null;
+		if ( args.Length < 2 || (Named( args[1] ) ?? Drawn( args[1] )?.GameObject) is not { } named ) return null;
 		var side = args.ElementAtOrDefault( 2 ) ?? "front";
 		var distance = args.Length > 3 ? float.Parse( args[3], Invariant ) : 30f;
 		var height = args.Length > 4 ? float.Parse( args[4], Invariant ) : 0f;
@@ -517,9 +571,10 @@ public static class DevCommands
 		return at.WithZ( (floor.Hit ? floor.HitPosition.z : bounds.Mins.z) + height );
 	}
 
-	/// <summary>The nearest other person this client can see: someone in the city, or someone left lying where they were.</summary>
+	/// <summary>The nearest other person this client can see: someone standing in the city, someone down on the ground, or someone left bound where they were.</summary>
 	private static CharacterBody? Person( Player player ) =>
-		(Nearest( player, Others( player ) ) as Component ?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed ) ))?.GetComponent<CharacterBody>();
+		(Nearest( player, Others( player ) ) as Component
+			?? Nearest( player, Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed && value.CharacterId != player.CharacterId ) ))?.GetComponent<CharacterBody>();
 
 	private static T? Nearest<T>( Player player, IEnumerable<T> candidates ) where T : Component =>
 		candidates.OrderBy( value => value.WorldPosition.Distance( player.WorldPosition ) ).FirstOrDefault();

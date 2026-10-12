@@ -36,6 +36,8 @@ public sealed class CharacterData : IHolder
 	/// <summary>How long it has been down while the city was running. Kept here so leaving and returning does not restart it.</summary>
 	public double SecondsDown { get; set; }
 	public bool IsRestrained { get; set; }
+	/// <summary>Where it is wounded, by place, oldest first, until someone treats it. Nothing heals by itself. See <see cref="Hexagon.Logic.Wounds"/>.</summary>
+	public List<string> Wounds { get; set; } = new();
 	/// <summary>The item in hand, if any. Anyone can see what it is.</summary>
 	public Guid? Equipped { get; set; }
 	/// <summary>The characters who have introduced themselves to this one, and the name each gave.</summary>

@@ -35,9 +35,16 @@ public sealed class ItemDefinition : GameResource
 
 	/// <summary>Health restored by using it. Only consumables heal.</summary>
 	[Property] public int Heals { get; set; }
+	/// <summary>
+	/// The wounds it treats, by kind: <c>arm</c>, <c>leg</c>. Each use closes one, on whoever uses it, or
+	/// on someone else by whoever holds it in hand. See <see cref="Wounds"/>.
+	/// </summary>
+	[Property] public List<string> Treats { get; set; } = new();
 
-	/// <summary>Harm done per attack while it is in hand. Zero means it is not a weapon.</summary>
+	/// <summary>Harm done per attack while it is in hand. Zero means it is not a weapon. A weapon wounds where it lands.</summary>
 	[Property] public int Damage { get; set; }
+	/// <summary>Made to kill: a blow from it to the head is death, whether they stand or are already down.</summary>
+	[Property] public bool Lethal { get; set; }
 	[Property] public float Range { get; set; } = 1500f;
 	/// <summary>Seconds between attacks.</summary>
 	[Property] public float Cooldown { get; set; } = 0.5f;
@@ -67,6 +74,9 @@ public sealed class ItemDefinition : GameResource
 
 	/// <summary>The title as it reads inside a sentence: "the flat cap", but "the Civil Protection mask".</summary>
 	public string InSentence => Title.Length > 1 && !Title[1..].Any( char.IsUpper ) ? char.ToLowerInvariant( Title[0] ) + Title[1..] : Title;
+
+	/// <summary>Whether using it treats anything: a wound, or lost health.</summary>
+	public bool IsTreatment => Consumable && (Heals > 0 || Treats.Count > 0);
 
 	/// <summary>The picture to show for it, if there is one.</summary>
 	public string? IconPath => !string.IsNullOrEmpty( Icon ) ? Icon : Wearable?.Icon.Path is { Length: > 0 } worn ? worn : null;

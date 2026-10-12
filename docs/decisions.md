@@ -55,12 +55,14 @@ conservation and memory. The README states them; the sections below are how each
 
 ## Death is final, and the dead are kept
 
-A character that can come back has nothing to lose. `Vitals.Damage` never kills: at no health a
-character is down, visible to all, unable to act or to leave the city, and part of the scene. Anyone
-can help them up or search them; finishing them is its own verb, journaled with its witnesses, and a
-game can require a capability for it (`FinishRequires`). After `DownedSeconds` a downed character gets
-back up, or dies if the game sets `BleedOutKills`. How hurt someone else is cannot be read off them;
-that they are down, bound or armed can.
+A character that can come back has nothing to lose. Harm puts a character down rather than killing
+them: at no health a character is down, visible to all, unable to act or to leave the city, and part
+of the scene. Anyone can help them up, search them or treat them; finishing them is its own verb,
+journaled with its witnesses, and a game can require a capability for it (`FinishRequires`). After
+`DownedSeconds` a downed character gets back up, or dies if the game sets `BleedOutKills`. The one
+exception is a weapon made to kill (`Lethal`), such as a pistol: a shot from it to the head kills
+outright, whether the one shot is standing or already down. How hurt someone else is cannot be read
+off them; that they are down, bound, armed, limping or breathing hard can.
 
 Death is `Permanent` unless a game turns respawning on (`HexagonServices.Death`), as the tests may. The
 dead are kept: on the list as dead, under names nobody else can take, with what they carried left on
@@ -79,16 +81,53 @@ is refused while the account has all the lives it may, so it never makes an extr
 Restraints are thin on purpose: a zip tie grants `person.restrain`, is used up by it, and the bound
 character is denied every act until released, by anyone or by staff. There is no struggle or timer.
 
+## Harm lands somewhere
+
+Harm is a blow: how much, where on the body it lands, whether it wounds, and whether the weapon is made
+to kill. The host judges where. A shot is traced from the attacker's eyes, as the host places them,
+along the aim they claim, against the hitboxes of the bodies in its way: the engine's `ModelHitboxes`,
+from each body's own model, kept on the host alone, whose tags name the head, the body, an arm or a
+leg. The capsule a body walks with has a tag of its own and is left out, or it would take every shot.
+A limp body is struck where its parts are, which are named for their bones.
+
+A weapon's wound to an arm or a leg stays on the character until it is treated; nothing heals by
+itself, and a restore brings a character back wounds and all. A wounded leg walks, slowly
+(`LimpSpeed`), and neither runs nor jumps; the host holds it to that speed. A wounded arm drops what
+is in hand onto the ground, and holds nothing until it is treated. Fists only hurt. An item lists the
+wounds it treats (`Treats`) and what it heals: used on oneself, or held and used on someone else with
+Treat, it closes the oldest wound it can, gives back what it heals, and is used up. On someone it can
+do nothing for, it is kept. Wounds, treatments and where each shot landed are journaled.
+
+## A body is the engine's ragdoll
+
+Someone down or dead lies as the engine's ragdoll, `ModelPhysics`, in the model of their look. The host
+owns it and simulates it, and the engine sends where its parts are to those it is sent to. It falls from
+the pose of the body it replaces, pushed by the blow that did it, and a shot pushes it again. A body
+with nothing to fall from, after a restart, is laid on its back with its middle where it was kept;
+laid with its feet there instead, it once moved its own height at every restart. Where it lies is
+saved with the city, and staff moving someone down move the body. The body's model is set on a
+dedicated server too, though nobody there is dressed, because where a shot lands and how a body falls
+are the model's.
+
+Someone down is that body, whether or not their player is connected: their pawn holds still, unseen
+and not solid, and its player looks out of the body's eyes, from the ground, and can look about.
+Helped up, they stand where it lies. What anyone near notices is shown by the body itself
+(`BodyCues`): a limp in the walk, bound hands behind the back by the engine's hand IK, a flinch where
+a blow lands, and the hard breathing of someone badly hurt or down, which they and anyone close hear.
+The breathing is a game's own sound (`BreathingSound`); Hexagon ships none.
+
 ## Leaving does not end a scene
 
-A player who leaves while their character is down or bound leaves the character where it was, as a
-`Sleeper`: someone lying in the street or standing bound, who keeps bleeding, and whom anyone can help
-up, search, release or finish exactly as if the player were there. When the player returns with that
-character, they pick up from there and the sleeper goes. Whoever is down or bound when the server
-stops is put back the same way when it starts. Someone who leaves on their feet leaves nothing behind:
-a city of the logged-off would be a city of loot. Removing an object waits for the end of the frame,
-so the character leaves its pawn before the pawn goes; otherwise the sleeper, looking a moment later,
-takes the character for still being in the city and removes itself.
+A character's body is a `Sleeper` whenever its pawn does not carry it: limp on the ground while it is
+down, connected or not, and standing bound where it was if its player left it with its hands tied. It
+keeps bleeding, and anyone can help it up, search it, treat it, release it or finish it exactly as if
+the player were there. When the player returns with that character they pick up from there: bound,
+back in their pawn; down, still looking out of the body on the ground. Whoever is down or bound when
+the server stops is put back the same way when it starts, where the closing save found them. Someone
+who leaves on their feet leaves nothing behind: a city of the logged-off would be a city of loot. The
+character leaves its pawn before its sleeper is made: removing an object waits for the end of the
+frame, and a sleeper that looked before then took the character for still being in the city and
+removed itself.
 
 ## Sight is a distance
 
@@ -267,10 +306,11 @@ radio. Someone down or bound cannot reach theirs. People beside a listener do no
 
 In the city the HUD shows prompts and chat. Health is not a number, because nobody knows their health
 as one: being hurt darkens the edges of sight and drains the colour, and being down narrows, dims and
-blurs the view without hiding it. These are the engine's own post-processing (`HarmCues`): two global
-volumes with its vignette, colour adjustment and blur, weighted by the character's state, blended over
-whatever the game's camera does. At its defaults the engine's vignette left someone down all but
-blind, and someone down still sees who comes near, so it was eased until the world shows through.
+blurs the view from the ground without hiding it. These are the engine's own post-processing
+(`HarmCues`): two global volumes with its vignette, colour adjustment and blur, weighted by the
+character's state, blended over whatever the game's camera does. At its defaults the engine's
+vignette left someone down all but blind, and someone down still sees who comes near, so it was
+eased until the world shows through.
 
 What is looked at is described by its own `IPressable` tooltip, as the engine's `PlayerController`
 gathers it: an icon, a title and a line about it, with the key that acts on it drawn by the engine as
@@ -364,7 +404,9 @@ by a person.
 A test says where its characters stand by what is there, beside `Door 1` or behind the `Crate`, never
 by coordinates. `spot` finds the object by name, goes out from the face on the side asked for by its
 own facing, and finds the floor there, so moving the map about does not break the tests, and a check
-on where someone is asks whether they are near the place rather than matching numbers.
+on where someone is asks whether they are near the place rather than matching numbers. On the host it
+also finds a character, whose front is the way their body faces, and `part` says where the middle of
+a part of their body is, so a test shoots at what the host would judge.
 
 While working, the editor stays open: `dotnet test Tests` for a rule, and `playtest.ps1 -Attach`,
 which plays in that editor once it has built the edit, in about forty seconds, or less with `-Until`.
@@ -378,7 +420,22 @@ merging, `tools/test.ps1` runs verify and both play tests as one, in three to fo
   spawn points, and falls were free. A game's own spawn points now come first, falls are limited by
   gravity, and every claim is traced. The editor test tries exactly that drop, and steps through a
   locked door.
-- A body at rest is asleep, and one teleported into the air asleep hung there. A teleport wakes it.
+- A body at rest is asleep, and one teleported into the air asleep hung there. A teleport wakes it,
+  and makes the engine's controller forget the ground it stood on: on ground the controller turns
+  gravity off, and a body woken without gravity went back to sleep in the air.
+- The engine's `GetComponent` passes over a disabled component unless asked not to. A body's model
+  is off until the body is revealed, so a lookup without `includeDisabled` found none, and limp
+  bodies and the dead were never shown.
+- Shots at a leg and an arm once struck a wall: their places were measured from a door an earlier
+  section had opened, and an open door is turned. Places are measured from what never moves. Each
+  machine also animates a body for itself, a few units apart, so a client aiming at its own copy of
+  an arm could miss the host's, and one shot at a far leg struck the near arm. The shooter now stands
+  in front of the one shot, and aims where the host has the part.
+- Even then every shot at someone standing landed on "the body". On the host it struck their walking
+  capsule, which a shot is meant to pass by its `capsule` tag. The engine's controller makes its
+  colliders when it is added, before the pawn gave it that tag set, and it never reapplies it; the
+  clients receive the pawn with the set, so only the host, which judges, was wrong. The pawn now
+  tells the colliders the set once it has one.
 - The editor builds the game's code in the background and swaps it in when done. A scene played
   before then has none of the game's components; the driver says so and the scene is played again.
   Now and then the editor opens the scene mid-build and never takes the build in, and the test starts
@@ -399,7 +456,15 @@ merging, `tools/test.ps1` runs verify and both play tests as one, in three to fo
 
 ## What is thin, and known
 
-- Weapons hit by a host ray along the attacker's claimed aim. There is no recoil, spread or cover.
+- Weapons hit by a host ray along the attacker's claimed aim, against the bodies' hitboxes. There is
+  no recoil, spread or cover.
+- A shot is judged against where bodies are on the host when it arrives, with no allowance for what
+  the attacker saw: the engine has no lag compensation. Over a slow connection, someone moving is
+  harder to hit than they look.
+- A ragdoll is announced with its model, the citizen or a human skin, to every client, before the
+  reveal's hold. A client far away can learn which kind of body lies somewhere, though not whose.
+- Bodies cannot be dragged yet; that comes with stealth.
+- A body emptied of what it carried is removed, so someone who dies carrying nothing leaves no body.
 - The engine ships no weapon models, so HL2RP's pistol is a block held in a pistol stance.
 - A new character's body, hair and clothes are chosen from pictures; there is no preview of the
   character wearing them yet.

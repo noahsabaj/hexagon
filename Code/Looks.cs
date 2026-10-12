@@ -42,16 +42,21 @@ public static class Looks
 		look.Split( ';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries )
 			.Select( value => ResourceLibrary.Get<Clothing>( value ) ).Where( value => value.IsValid() );
 
+	/// <summary>The model a look's body is: a human skin carries its own; without one it is the engine's citizen.</summary>
+	public static Model ModelOf( string look ) =>
+		Model.Load( Clothing( look ).FirstOrDefault( value => value.HasHumanSkin && !string.IsNullOrEmpty( value.HumanSkinModel ) )?.HumanSkinModel ?? DefaultBody );
+
 	/// <summary>
-	/// Every client dresses the body itself. A human skin carries its own model; without one the body
-	/// is the engine's citizen. A server with no screen has nothing to dress.
+	/// Every client dresses the body itself. A server with no screen has nothing to dress, but it gives
+	/// the body its model all the same: where a shot lands, and how the body falls, are the model's.
 	/// </summary>
 	public static void Apply( SkinnedModelRenderer renderer, string look )
 	{
-		if ( Application.IsDedicatedServer || !renderer.IsValid() ) return;
+		if ( !renderer.IsValid() ) return;
+		var model = ModelOf( look );
+		if ( renderer.Model != model ) renderer.Model = model;
+		if ( Application.IsDedicatedServer ) return;
 		var pieces = Clothing( look ).ToList();
-		var skin = pieces.FirstOrDefault( value => value.HasHumanSkin && !string.IsNullOrEmpty( value.HumanSkinModel ) );
-		renderer.Model = Model.Load( skin?.HumanSkinModel ?? DefaultBody );
 		// Built by hand rather than with Add, which silently drops whatever a new piece cannot be worn with:
 		// the host has already decided what is worn.
 		var outfit = new ClothingContainer();
