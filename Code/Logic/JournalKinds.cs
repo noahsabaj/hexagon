@@ -73,6 +73,11 @@ public static class JournalKinds
 	public const string DoorAssign = "door.assign";
 	public const string DoorRelease = "door.release";
 
+	/// <summary>A train stood at its station, with what it brought.</summary>
+	public const string TrainArrive = "train.arrive";
+	/// <summary>A train left its station, with what it took.</summary>
+	public const string TrainDepart = "train.depart";
+
 	/// <summary>Asked for faster than the budget allows.</summary>
 	public const string RequestLimited = "request.limited";
 	/// <summary>Sent in the name of someone else's pawn.</summary>
@@ -89,6 +94,7 @@ public static class JournalKinds
 	public const string OperatorFaction = "operator.faction";
 	public const string OperatorDoor = "operator.door";
 	public const string OperatorTeleport = "operator.teleport";
+	public const string OperatorTrain = "operator.train";
 
 	/// <summary>An act on something in the world, or on an item, is journaled under its verb.</summary>
 	public static string Verb( string verbId ) => $"verb.{verbId}";

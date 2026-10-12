@@ -26,6 +26,10 @@ public static class Sources
 	public const string Made = "made";
 	/// <summary>What a new character arrives wearing, chosen as it is made: the one thing a character has that nobody gave it.</summary>
 	public const string Arrival = "arrival";
+	/// <summary>Brought into the city by train, on its schedule. See <see cref="Deliveries"/>.</summary>
+	public const string Delivery = "delivery";
+	/// <summary>Taken out of a site, such as a mine or a scrap yard, by whoever worked it. See <see cref="Sites"/>.</summary>
+	public const string Site = "site";
 }
 
 /// <summary>Where items may leave the world.</summary>
@@ -43,6 +47,8 @@ public static class Sinks
 	public const string CharacterDied = "character.died";
 	/// <summary>Taken out of the world by staff, as when settling a dispute.</summary>
 	public const string Operator = "operator";
+	/// <summary>Taken out of the city by train: what was loaded for it, and what nobody unloaded.</summary>
+	public const string Departed = "departed";
 }
 
 /// <summary>

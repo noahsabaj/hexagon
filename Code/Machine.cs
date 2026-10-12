@@ -101,7 +101,7 @@ public sealed class Machine : Component, Component.IPressable, IVerbTarget
 			actor.HostOpen( this, holder, Title );
 			return Result.Success();
 		}
-		return actor.HostStartWork( this, holder, holder, Makes, Maker, this );
+		return actor.HostStartMaking( this, holder, holder, Makes, Maker, this );
 	}
 
 	/// <summary>Host: what it holds.</summary>

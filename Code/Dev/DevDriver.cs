@@ -269,6 +269,20 @@ public static class DevCommands
 			var at = bone.PointToWorld( middle );
 			return $"{at.x.ToString( "0.#", Invariant )} {at.y.ToString( "0.#", Invariant )} {at.z.ToString( "0.#", Invariant )}";
 		}
+		if ( args[0] == "floor" )
+		{
+			// floor|<x>|<y>: how high the floor is there, traced down from far above, as this machine has the world.
+			var x = float.Parse( args[1], Invariant );
+			var y = float.Parse( args[2], Invariant );
+			var floor = Game.ActiveScene.Trace.Ray( new Vector3( x, y, 4096f ), new Vector3( x, y, -4096f ) ).WithoutTags( "player", "item", "corpse", "sleeper" ).Run();
+			return floor.Hit ? $"{floor.HitPosition.z:0} {floor.GameObject?.Name}" : "no floor";
+		}
+		if ( args[0] == "trains" )
+		{
+			// What this machine has of each train: where it is on its way, and where it stands.
+			return string.Join( ", ", Game.ActiveScene.GetAllComponents<Train>().Select( value =>
+				$"{value.GameObject.Name}:phase={value.Phase} at={value.WorldPosition.x:0},{value.WorldPosition.y:0}" ) );
+		}
 		if ( args[0] == "hostid" ) return $"local={Connection.Local?.SteamId.ValueUnsigned} host={Connection.Host?.SteamId.ValueUnsigned} address={Connection.Local?.Address} name={Connection.Local?.DisplayName}";
 		if ( args[0] == "convar" ) return ConsoleSystem.GetValue( args[1] ) ?? "unset";
 		// A scene played before the editor had the game's code in has none of its systems or components.
@@ -414,12 +428,14 @@ public static class DevCommands
 					var container = Game.ActiveScene.GetAllComponents<Container>().FirstOrDefault( value => value.GameObject.Name == args[1] );
 					if ( container is not null ) player.RequestAct( container, ((IVerbTarget)container).Verbs[0].Id );
 					else if ( Machine( args[1] ) is { } loaded ) player.RequestAct( loaded, VerbIds.MachineOpen );
+					else if ( Game.ActiveScene.GetAllComponents<Wagon>().FirstOrDefault( value => value.GameObject.Name == args[1] ) is { } wagon ) player.RequestAct( wagon, VerbIds.WagonOpen );
 					else return "no such container";
 					return "sent open";
 				case "work":
-					// work|<machine> holds Use on it, until stopwork lets go or the work is done.
-					if ( Machine( args[1] ) is not { } worked ) return "no such machine";
-					player.RequestAct( worked, VerbIds.MachineWork );
+					// work|<machine or site> holds Use on it, until stopwork lets go or the work is done.
+					if ( Machine( args[1] ) is { } worked ) player.RequestAct( worked, VerbIds.MachineWork );
+					else if ( Game.ActiveScene.GetAllComponents<Site>().FirstOrDefault( value => value.GameObject.Name == args[1] ) is { } site ) player.RequestAct( site, VerbIds.SiteWork );
+					else return "no such machine or site";
 					return "sent work";
 				case "stopwork":
 					player.RequestStopWork();

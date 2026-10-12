@@ -38,6 +38,8 @@ public static class HolderKinds
 	public const string Corpse = "corpse";
 	/// <summary>What a machine is loaded with, and what it has made.</summary>
 	public const string Machine = "machine";
+	/// <summary>What a train's wagon carries while it stands at the station.</summary>
+	public const string Wagon = "wagon";
 }
 
 /// <summary>Every holder that is not a character, in memory and written through, like the roster.</summary>
