@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Hexagon.Logic;
 using Sandbox;
 
@@ -33,6 +34,8 @@ public interface IEmbodiment
 	bool IsLimping { get; }
 	/// <summary>Breathing hard, badly hurt or down, as anyone close can hear.</summary>
 	bool IsBreathingHard { get; }
+	/// <summary>What anyone can see of it: its body and what it wears. See <see cref="Looks"/>.</summary>
+	string Look { get; }
 }
 
 /// <summary>
@@ -79,7 +82,12 @@ public sealed class CharacterBody : Component, Component.IPressable, Component.I
 	}
 
 	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) =>
-		Player.Local is null || Embodiment?.IsShownHere != true ? null : new IPressable.Tooltip( Player.Local.LabelFor( this ), "person", CharacterDescription );
+		Player.Local is null || Embodiment?.IsShownHere != true ? null : new IPressable.Tooltip( Player.Local.LabelFor( this ), "person", Seen );
+
+	/// <summary>What an onlooker makes of them: how they look, and the insignia they wear, which say what they wear, not what they are.</summary>
+	public string Seen => Looks.Insignia( Embodiment?.Look ?? string.Empty ).ToArray() is { Length: > 0 } insignia
+		? $"{CharacterDescription} Wearing {string.Join( ", ", insignia )}."
+		: CharacterDescription;
 
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
@@ -101,6 +109,12 @@ public sealed class CharacterBody : Component, Component.IPressable, Component.I
 			// What is offered, or held up to read, is chosen from the inventory, and sent with RequestOffer or RequestShow.
 			case VerbIds.PersonOffer: return Result.Fail( ErrorCode.Invalid, "Choose what to offer from your inventory." );
 			case VerbIds.PersonShow: return Result.Fail( ErrorCode.Invalid, "Choose a paper to show from your inventory." );
+			// A place in a faction is an offer, so only someone whose player is here to answer can be enlisted.
+			case VerbIds.PersonEnlist:
+				return GetComponent<Player>() is { } recruit ? actor.HostOfferEnlistment( recruit ) : Result.Fail( ErrorCode.Denied, "They are in no state to answer." );
+			// The rank to give is chosen from those the superior's own allows, and sent with RequestSetRank.
+			case VerbIds.PersonRank: return Result.Fail( ErrorCode.Invalid, "Choose the rank to give them." );
+			case VerbIds.PersonDischarge: return characters.Discharge( character, other );
 			case VerbIds.PersonFinish:
 				var can = Vitals.CanFinish( character );
 				if ( can.Ok ) characters.Die( character, Embodiment!.HostPosition, "finished", other );

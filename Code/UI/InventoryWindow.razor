@@ -51,7 +51,14 @@
 		}
 		<div class="card" ondrop=@DropOnCard>
 			<h1>@player.CharacterName</h1>
-			<div class="muted">@(player.Faction?.Title ?? "Unaffiliated")</div>
+			<div class="row">
+				<div class="muted grow">@(player.Faction is { } faction ? player.RankTitle.Length > 0 ? $"{faction.Title}, {player.RankTitle}" : faction.Title : "Unaffiliated")</div>
+				@if ( player.Faction is not null )
+				{
+					@* Walking out is for good, so it takes a second click. *@
+					<button onclick=@(() => WalkOut( player ))>@(WalkingOut ? "Walk out for good" : "Walk out")</button>
+				}
+			</div>
 			<label>Wearing</label>
 			<div class="row wrap wearing" ondrop=@DropOnWorn>
 				@foreach ( var item in Wearing.Worn( inventory ) )
@@ -158,6 +165,14 @@
 
 	private Guid? Selected { get; set; }
 	private string FrequencyDraft { get; set; } = string.Empty;
+	/// <summary>Walking out of the faction was asked once, and waits for the second click.</summary>
+	private bool WalkingOut { get; set; }
+
+	private void WalkOut( Player player )
+	{
+		if ( WalkingOut ) player.RequestLeaveFaction();
+		WalkingOut = !WalkingOut;
+	}
 
 	// The pile being dragged, and where on it the mouse took hold, in panel units.
 	private Guid? _dragging;
@@ -269,7 +284,7 @@
 	}
 
 	protected override int BuildHash() => HashCode.Combine(
-		HashCode.Combine( Player.Local?.PrivateVersion, Player.Local?.OpenInventory, Selected, _dragging ),
+		HashCode.Combine( Player.Local?.PrivateVersion, Player.Local?.OpenInventory, Selected, _dragging, WalkingOut ),
 		// A dragged pile follows the mouse.
 		_dragging is null ? 0 : MousePosition.GetHashCode() );
 }

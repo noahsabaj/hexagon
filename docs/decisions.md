@@ -163,8 +163,8 @@ Every pawn replicates a face, `CharacterId`, which is the same tomorrow and says
 is, and a description, which is what an onlooker sees. Names are in each character's own document,
 under the faces that have introduced themselves, and reach only that character's owner. Chat is
 formatted per listener: the name if they know it, otherwise the speaker's description in brackets.
-Out-of-character chat carries the player's name, not the character's. A faction is told only to its
-own member. Staff are the exception, through `who` and the journal, and both are journaled.
+Out-of-character chat carries the player's name, not the character's. A faction and a rank are told
+only to their own member. Staff are the exception, through `who` and the journal, and both are journaled.
 
 ## Everyone arrives the same way
 
@@ -279,7 +279,8 @@ or none of it does. Deliveries and production come later.
 
 A permission that lives in an object can be stolen, lent and confiscated; a flag on a faction cannot.
 So the host asks `Player.HostCan( capability )`, answered only from what the character carries, and
-a faction is a title, a description and a tint, and grants and changes nothing. A door or a container has a
+a faction is a title, a description, a tint and its ranks, and grants and changes nothing: a rank says
+only what its holder may do to those below them in it. A door or a container has a
 `LockPattern`, and a key item is cut to a pattern when it is made, by staff's `give` or by a scene's
 stock. Any key cut to a lock works it, whoever holds it, so a ministry's doors can share one pattern
 while each flat has its own. A client is told a key's cut, a short code anyone holding two keys can
@@ -295,6 +296,24 @@ still has it and that both are still there and able. An offer lapses after thirt
 as the two part, either is down or bound, or the giver leaves. Every offer, answer and lapse is
 journaled. Slipping something into someone's pockets unasked is a different act, and will be done by
 stealth.
+
+## Rank is given in person, by a superior
+
+A faction lists its ranks, lowest first, and each says whether whoever holds it may enlist, promote,
+up to which rank, and discharge. Staff appoint a faction's head once, with `faction`; everyone else
+is brought in and raised in the world. Enlisting is an offer, like handing something over: the
+recruit accepts or refuses, and joins at the lowest rank. Promoting, demoting and discharging are a
+superior's act on someone below them in the same faction, and nobody acts on their own rank or above
+it. A member can walk out of their own accord. Every one of these is journaled, refusals too. The
+verb menu lists enlisting, promoting and discharging only to someone whose rank allows them, and the
+host checks again.
+
+Enlisting changes only the record. Papers and a uniform are separate acts: the recruiter fills in and
+stamps the faction's form and hands over a uniform from stock, and being discharged takes nothing off
+anyone. A rank names its insignia, an item the superior hands over and the member puts on. Onlookers
+see the insignia someone wears, which is clothing tagged `insignia`, and not their rank: a recruit
+still wearing a recruit's armband looks like one after a promotion, and an armband taken from a
+locker says the same as one earned.
 
 ## A radio is an object with a dial
 
@@ -381,8 +400,8 @@ under their name or as the console, refusals included, and reading the journal i
 
 A dispute ends with something put back, so staff can: `take` sends items out through the `operator`
 sink, `move` carries them between characters by the same transfers as anything else, `release` frees
-bound hands, `revive` helps someone up, `faction` appoints a character to a faction or, with `none`,
-takes it out of one, `door` works a door whatever key it asks for or assigns and releases its title,
+bound hands, `revive` helps someone up, `faction` appoints a character to a faction, at its head
+unless a rank is named, or, with `none`, takes it out of one, `door` works a door whatever key it asks for or assigns and releases its title,
 and `restore` undoes a death that broke the rules. Commands that name a character find it whether or
 not it is in the city, except `teleport`, `bring`, `goto` and `hurt`, which need it there.
 
@@ -459,11 +478,27 @@ a part of their body is, so a test shoots at what the host would judge.
 While working, the editor stays open: `dotnet test Tests` for a rule, and `playtest.ps1 -Attach`,
 which plays in that editor once it has built the edit, in about forty seconds, or less with `-Until`.
 It points the editor at the run's own data folder and asks again, and points it back after. Before
-merging, `tools/test.ps1` runs verify and both play tests as one, in three to four minutes.
+merging, `tools/test.ps1` runs verify and both play tests as one, in five to six minutes.
+
+The two-client test spends half its time starting a server and two clients, so with `-Keep` it
+leaves them running, and the next run starts the city over on them: `fresh` loads the scene again,
+which brings everyone connected back into it, and opens the city on an empty data folder. The
+server's output goes to a file rather than to the script, so it outlives the run. Anything that
+changed the code or an asset since starts them again, because what they loaded is no longer what
+is being tested. The run stops at its first failed check, since everything after it plays on a
+city it left wrong.
 
 ## What the play tests taught
 
 - A failed run keeps its data folder. Its journal has explained every run that looked unexplained.
+- A dedicated server reads only compiled assets, and only the editor compiles them. A run once
+  played a faction with none of the ranks just written into it, and could not find the new items
+  at all, so the two-client test now has the editor compile what changed before it starts.
+- A client sometimes drops its first connection and never tries again, and a run once waited out
+  its whole timeout on one. A client that has not joined in two and a half minutes is started
+  again.
+- A game started on a dedicated server is loaded into an empty scene, which keeps no note of the
+  file it came from, so `fresh` loads again the scene the game started on.
 - A character was once believed through a roof onto a door: it had spawned on one of the map's own
   spawn points, and falls were free. A game's own spawn points now come first, falls are limited by
   gravity, and every claim is traced. The editor test tries exactly that drop, and steps through a
@@ -544,6 +579,8 @@ merging, `tools/test.ps1` runs verify and both play tests as one, in three to fo
   reading, and a sheet held up for someone shows no model.
 - Leaning over a map has no pose: the body stands as it was while its view looks down at the map.
 - Others see a line or a word on a map only once it is finished, not as it is drawn.
+- Insignia have no models yet: HL2RP's armbands are clothing with no model, seen only as words in
+  a person's tooltip.
 - A map's counters are discs painted on it, not things standing on the table, and the map is unlit,
   so it does not darken with the room.
 - Sight is a distance, not a line: a client is sent everyone within `SightRange` of its character,

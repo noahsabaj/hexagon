@@ -1,4 +1,5 @@
 @using System
+@using System.Collections.Generic
 @using System.Linq
 @using Hexagon.Logic
 @using Sandbox
@@ -6,13 +7,14 @@
 @namespace Hexagon.UI
 @inherits Panel
 
-@* Everything a target offers, chosen by name, or by its number while the menu is open. *@
+@* Everything a target offers, chosen by name, or by its number while the menu is open. What only a
+   superior can do is listed only for someone whose rank allows it. *@
 <root class="center">
 	@if ( Player.Local is { MenuTarget: IVerbTarget offered } player )
 	{
 		<div class="card menu">
 			<h1>@Title( player )</h1>
-			@foreach ( var (verb, index) in offered.Verbs.Select( ( value, index ) => (value, index) ) )
+			@foreach ( var (verb, index) in Listed( player, offered ).Select( ( value, index ) => (value, index) ) )
 			{
 				<button class="@(index == 0 ? "primary" : "")" onclick=@(() => Choose( verb ))>@(index + 1). @verb.Title</button>
 			}
@@ -29,11 +31,18 @@
 	/// <summary>Called when showing someone a paper was chosen, which is picked from the papers this character has.</summary>
 	public Action<Player>? ShowTo { get; set; }
 
+	/// <summary>Called when promoting or demoting someone was chosen, which is picked from the ranks this character may give.</summary>
+	public Action<CharacterBody>? RankTo { get; set; }
+
+	/// <summary>The verbs this character is offered: all of them, but those its rank does not allow.</summary>
+	private static IReadOnlyList<Verb> Listed( Player player, IVerbTarget target ) =>
+		target.Verbs.Where( verb => verb.Rank is null || player.HasRankPower( verb.Rank ) ).ToArray();
+
 	public override void Tick()
 	{
 		if ( Player.Local is not { MenuTarget: { } menu } player ) return;
 		// The menu is over once something is chosen, the target is gone, or the player backs out.
-		var verbs = (menu as IVerbTarget)?.Verbs;
+		var verbs = menu is IVerbTarget target ? Listed( player, target ) : null;
 		if ( !menu.IsValid() || verbs is null || Input.EscapePressed || player.IsIncapable )
 		{
 			Input.EscapePressed = false;
@@ -65,6 +74,11 @@
 		if ( verb.Id == VerbIds.PersonShow && target.GetComponent<Player>() is { } reader )
 		{
 			ShowTo?.Invoke( reader );
+			return;
+		}
+		if ( verb.Id == VerbIds.PersonRank && target is CharacterBody member )
+		{
+			RankTo?.Invoke( member );
 			return;
 		}
 		player.RequestAct( target, verb.Id );

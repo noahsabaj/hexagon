@@ -198,6 +198,16 @@ public static class DevCommands
 			else if ( args.Length > 1 && !args[1].StartsWith( '#' ) ) return $"unknown policy '{args[1]}'";
 			return $"death={game.Death} living={game.LivingCharacters} hours={game.NewLifeHours}";
 		}
+		if ( args[0] == "fresh" )
+		{
+			// fresh|<folder> starts the city over on an empty data folder, with everyone connected joining it
+			// afresh, so a test that keeps its server and clients between runs starts each run on a new city.
+			if ( !Networking.IsHost || HexagonServices.Current is not { } game ) return "refused: not the host";
+			if ( !game.HostStartOver( args[1] ) ) return "could not load the scene again";
+			// The inbox is in the data folder, so it moves too, and is announced again.
+			_announced = false;
+			return "fresh";
+		}
 		if ( args[0] == "sight" )
 		{
 			// sight alone says how far characters see; sight|<units> changes it, so a test can step out
@@ -577,10 +587,22 @@ public static class DevCommands
 					if ( stranger is null ) return "nobody to meet";
 					player.RequestAct( stranger.GetComponent<CharacterBody>(), VerbIds.PersonIntroduce );
 					return "sent introduce";
+				case "rank":
+					// rank|<title> gives the nearest other character that rank, as a superior choosing it from the list.
+					if ( Person( player ) is not CharacterBody member ) return "nobody there";
+					player.RequestSetRank( member, args[1] );
+					return "sent rank";
+				case "walkout":
+					player.RequestLeaveFaction();
+					return "sent walkout";
+				case "verbs":
+					// What the menu lists for this character on the nearest other character: what only a superior can do is left out for the rest.
+					if ( Person( player ) is not CharacterBody listed ) return "nobody there";
+					return string.Join( ",", listed.Verbs.Where( verb => verb.Rank is null || player.HasRankPower( verb.Rank ) ).Select( verb => verb.Id ) );
 				case "proxies":
 					// What this client was told about everyone else. Names and factions must be empty.
 					return string.Join( " ; ", Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy )
-						.Select( value => $"down={value.IsDown} restrained={value.IsRestrained} held='{ItemDefinition.Find( value.HeldItemPath )?.Title}' health={value.Health} has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}' seen='{value.CharacterDescription}' label='{player.LabelFor( value )}' look=[{string.Join( ",", Looks.Pieces( value.Look ) )}] limping={value.IsLimping} breathing={value.IsBreathingHard}" ) );
+						.Select( value => $"down={value.IsDown} restrained={value.IsRestrained} held='{ItemDefinition.Find( value.HeldItemPath )?.Title}' health={value.Health} has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}' rank='{value.RankTitle}' seen='{value.CharacterDescription}' label='{player.LabelFor( value )}' look=[{string.Join( ",", Looks.Pieces( value.Look ) )}] insignia=[{string.Join( ", ", Looks.Insignia( value.Look ) )}] limping={value.IsLimping} breathing={value.IsBreathingHard}" ) );
 				case "pawns":
 					// Every pawn this client holds for someone else, including those the network has made
 					// inactive: whether it shows them, and where each was when it was last sent. What is no
@@ -604,7 +626,7 @@ public static class DevCommands
 					return string.Join( " ", Game.ActiveScene.GetAllComponents<Sleeper>().Where( value => value.IsRevealed )
 						.Select( value => $"{value.WorldPosition.x:0},{value.WorldPosition.y:0},{(value.IsDown ? "down" : "bound")},{(value.IsLimp ? "limp" : "standing")}" ) );
 				case "state":
-					return $"has={player.HasCharacter} name='{player.CharacterName}' faction='{player.Faction?.Title}' " +
+					return $"has={player.HasCharacter} name='{player.CharacterName}' faction='{player.Faction?.Title}' rank='{player.RankTitle}' " +
 						$"characters=[{string.Join( ", ", player.Characters.Select( value => value.Name + (value.IsDead ? "(dead)" : value.IsWaiting ? "(waits)" : string.Empty) ) )}] " +
 						$"items=[{string.Join( ", ", Carried( player.Inventory ).Select( value => $"{Pile( value )}@{value.X},{value.Y}" ) )}] " +
 						$"wearing=[{string.Join( ", ", Worn( player.Inventory ) )}] look=[{string.Join( ",", Looks.Pieces( player.Look ) )}] " +

@@ -34,6 +34,14 @@ public static class Looks
 		return string.Join( ';', parts.Concat( clothes ).Select( value => value.ResourcePath ) );
 	}
 
+	/// <summary>The tag on a clothing asset worn to be read, such as a rank's insignia: anyone who sees it is told what it is.</summary>
+	public const string InsigniaTag = "insignia";
+
+	/// <summary>The insignia in a look, by what they are called. They say what someone wears, not what they are.</summary>
+	public static IEnumerable<string> Insignia( string look ) =>
+		Clothing( look ).Where( value => (value.Tags ?? string.Empty).Split( new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries )
+			.Contains( InsigniaTag, StringComparer.OrdinalIgnoreCase ) ).Select( value => value.Title );
+
 	/// <summary>The engine clothing pieces a look is made of, by name, as anyone could describe them.</summary>
 	public static IEnumerable<string> Pieces( string look ) =>
 		Clothing( look ).Select( value => value.ResourceName );

@@ -17,6 +17,8 @@ public sealed class CharacterData : IHolder
 	public string Description { get; set; } = string.Empty;
 	/// <summary>The faction it belongs to, or empty: everyone is made belonging to none, and joins one in the world.</summary>
 	public string Faction { get; set; } = string.Empty;
+	/// <summary>Its rank in its faction, by title, given by a superior in person; empty while it belongs to none. See <see cref="Ranks"/>.</summary>
+	public string Rank { get; set; } = string.Empty;
 	/// <summary>
 	/// The body it was made with, for life: the parts of the person that are not clothes, such as a
 	/// skin and hair, as the engine's clothing assets name them. What it wears is in its inventory.

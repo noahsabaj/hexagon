@@ -11,7 +11,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-if (Get-Process -Name 'sbox', 'sbox-server', 'sbox-dev' -ErrorAction SilentlyContinue) { throw 'Close s&box, its editor and any dedicated server first.' }
+# A server and clients the two-client test kept for its next run are its own, and everything here starts afresh.
+& (Join-Path $PSScriptRoot 'playtest-server.ps1') -Close
+if (@(Get-Process -Name 'sbox', 'sbox-server', 'sbox-dev' -ErrorAction SilentlyContinue | Where-Object { -not $_.HasExited }).Count -gt 0) { throw 'Close s&box, its editor and any dedicated server first.' }
 
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 $passOn = @{ SboxRoot = $SboxRoot }

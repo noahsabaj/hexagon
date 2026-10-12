@@ -9,14 +9,15 @@ namespace Hexagon;
 
 // Handing something over takes two. One character offers; the other accepts or refuses, and nothing
 // changes hands until they accept. An offer that waits too long, or whose two sides part, lapses.
-// The title to a door is handed over the same way as anything carried.
+// The title to a door is handed over the same way as anything carried, and so is a place in a faction:
+// a recruiter offers it, and the recruit accepts or refuses.
 public sealed partial class Player
 {
 	/// <summary>Owner-side: what this character is being offered, in words, or empty.</summary>
 	public string OfferText { get; private set; } = string.Empty;
 
 	/// <summary>Host: an offer waiting on this character's answer. What it names is checked again when it is accepted.</summary>
-	private sealed record Offer( Player From, Guid ItemId, int Count, Door? Door, string What, RealTimeSince Made );
+	private sealed record Offer( Player From, Guid ItemId, int Count, Door? Door, string What, RealTimeSince Made, FactionDefinition? Faction = null );
 
 	private Offer? _offer;
 
@@ -81,6 +82,7 @@ public sealed partial class Player
 			: giver.IsIncapable ? Result.Fail( ErrorCode.Denied, "They cannot hand it over now." )
 			: giver.HostPosition.Distance( HostPosition ) > PersonReach ? Result.Fail( ErrorCode.Denied, "They are too far away." )
 			: offer.Door is { } door ? HostTakeTitle( door, from, _character! )
+			: offer.Faction is { } faction ? game.Characters!.Enlist( _character!, from, faction )
 			: HostTakeOffered( game, from, offer );
 		HostRecord( JournalKinds.OfferAccept, from?.HolderLabel, outcome.Ok, ("reason", outcome.Code.ToString()) );
 		if ( !outcome.Ok )
@@ -89,25 +91,31 @@ public sealed partial class Player
 			if ( told is not null ) Chat.Tell( told, "Your offer could not be taken." );
 			return;
 		}
+		// Joining a faction is told in the faction's own words, to both.
+		if ( offer.Faction is not null ) return;
 		Chat.Tell( caller, $"You take {offer.What}." );
 		if ( told is not null ) Chat.Tell( told, "Your offer is taken." );
 	}
 
 	private void HostMakeOffer( Connection caller, Player recipient, Offer offer, params (string Key, string Value)[] data )
 	{
+		var made = HostPlaceOffer( recipient, offer );
+		var subject = recipient.IsValid() ? recipient._character?.HolderLabel : null;
+		HostRecord( JournalKinds.Verb( VerbIds.PersonOffer ), subject, made.Ok, made.Ok ? data : data.Append( ("reason", made.Message) ).ToArray() );
+		if ( !made.Ok ) Chat.Tell( caller, made.Message );
+	}
+
+	/// <summary>Host: puts an offer to someone within reach, if both are free to hand it over, and tells them both.</summary>
+	private Result HostPlaceOffer( Player recipient, Offer offer )
+	{
 		var there = recipient.IsValid() && recipient != this && recipient._character is not null;
 		var refusal = OfferRules.ToOffer( IsIncapable, there, there ? recipient.HostPosition.Distance( HostPosition ) : 0f, PersonReach,
 			there && recipient.IsIncapable, there && recipient._offer is not null );
-		var subject = recipient.IsValid() ? recipient._character?.HolderLabel : null;
-		HostRecord( JournalKinds.Verb( VerbIds.PersonOffer ), subject, refusal is null, refusal is null ? data : data.Append( ("reason", refusal) ).ToArray() );
-		if ( refusal is not null )
-		{
-			Chat.Tell( caller, refusal );
-			return;
-		}
+		if ( refusal is not null ) return Result.Fail( ErrorCode.Denied, refusal );
 		recipient._offer = offer;
 		recipient.HostShowOffer( $"{Recognition.Label( recipient._character!, _character! )} offers you {offer.What}." );
-		Chat.Tell( caller, $"You offer {offer.What}." );
+		if ( Network.Owner is { } owner ) Chat.Tell( owner, $"You offer {offer.What}." );
+		return Result.Success();
 	}
 
 	/// <summary>Host: the offered things pass from the giver's hands to this character's, as one saved change.</summary>

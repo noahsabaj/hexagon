@@ -1,0 +1,56 @@
+@using System
+@using System.Linq
+@using Hexagon.Logic
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* The ranks this character's own lets it give someone under it, lowest first. *@
+<root class="center">
+	@if ( Player.Local is { } player && Member is { } member )
+	{
+		<div class="card picker">
+			<h1>Promote or demote @player.LabelFor( member )</h1>
+			@foreach ( var rank in player.GiveableRanks )
+			{
+				<div class="row">
+					<div class="grow">@rank.Title</div>
+					<button class="primary" onclick=@(() => Give( member, rank ))>Make them @rank.Title</button>
+				</div>
+			}
+			@if ( player.GiveableRanks.Count == 0 )
+			{
+				<div class="muted">Your rank lets you give no rank.</div>
+			}
+			<div class="actions">
+				<button onclick=@(() => Dismiss?.Invoke())>Never mind</button>
+			</div>
+			<div class="muted">Only those under you, in your own faction. Their insignia are yours to hand over.</div>
+		</div>
+	}
+</root>
+
+@code
+{
+	/// <summary>Whoever this character is choosing a rank for.</summary>
+	public CharacterBody? Member { get; set; }
+
+	/// <summary>Called once a rank is given, or the player backs out.</summary>
+	public Action? Dismiss { get; set; }
+
+	public override void Tick()
+	{
+		if ( Member is { } member && member.IsValid() && !Input.EscapePressed && Player.Local is { IsIncapable: false } ) return;
+		Input.EscapePressed = false;
+		Dismiss?.Invoke();
+	}
+
+	private void Give( CharacterBody member, FactionRank rank )
+	{
+		Player.Local?.RequestSetRank( member, rank.Title );
+		Dismiss?.Invoke();
+	}
+
+	protected override int BuildHash() => HashCode.Combine( Member, Player.Local?.PrivateVersion );
+}

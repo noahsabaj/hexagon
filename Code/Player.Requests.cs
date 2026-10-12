@@ -255,23 +255,35 @@ public sealed partial class Player
 	[Rpc.Host]
 	public void RequestAct( Component target, string verbId )
 	{
-		if ( !Authorize( nameof( RequestAct ), out var caller, out _ ) ) return;
+		if ( Authorize( nameof( RequestAct ), out var caller, out _ ) )
+			HostAct( caller, nameof( RequestAct ), target, verbId, ( actable, verb ) => actable.Perform( this, verb ) );
+	}
+
+	/// <summary>
+	/// Host: a verb on a target, once the target offers it and this character is able, near enough and
+	/// can reach it, recorded with its outcome. A request that carries more than the verb, such as the
+	/// rank to give, comes through here too, and says what more it carried.
+	/// </summary>
+	private void HostAct( Connection caller, string request, Component target, string verbId, Func<IVerbTarget, Verb, Result> perform,
+		params (string Key, string Value)[] more )
+	{
 		if ( !target.IsValid() || target is not IVerbTarget actable )
 		{
-			HostInvalid( nameof( RequestAct ), "target", verbId );
+			HostInvalid( request, "target", verbId );
 			return;
 		}
 		// Asking for something the target does not offer, such as finishing someone still standing.
 		if ( actable.Verbs.FirstOrDefault( value => value.Id == verbId ) is not { } verb )
 		{
-			HostInvalid( nameof( RequestAct ), "verb", verbId );
+			HostInvalid( request, "verb", verbId );
 			return;
 		}
 
 		var subject = actable.JournalSubject ?? $"{target.GetType().Name}:{target.GameObject.Id:N}";
 		var outcome = IsIncapable ? Result.Fail( ErrorCode.Denied, "You cannot do that now." ) : Judge( target, actable, verb );
-		if ( outcome.Ok ) outcome = actable.Perform( this, verb );
-		HostRecord( JournalKinds.Verb( verb.Id ), subject, outcome.Ok, ("target", target.GameObject.Name), ("reason", outcome.Code.ToString()) );
+		if ( outcome.Ok ) outcome = perform( actable, verb );
+		HostRecord( JournalKinds.Verb( verb.Id ), subject, outcome.Ok,
+			new[] { ("target", target.GameObject.Name) }.Concat( more ).Append( ("reason", outcome.Code.ToString()) ).ToArray() );
 		if ( !outcome.Ok ) Chat.Tell( caller, outcome.Message );
 	}
 

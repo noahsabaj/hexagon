@@ -40,9 +40,11 @@ itself to.
 - **Making a character.** Everyone is made the same way: a body for life, the engine's citizen or
   a human skin the game lists; hair the game lists; and clothes from the game's wardrobe to arrive
   in, carrying nothing else but the papers a game gives every arrival. Nobody is made into a faction.
-- **Factions**, as `.faction` assets: a name and a tint. A faction is people: it grants nothing and
-  changes nothing about its members. They are recruited, or appointed by staff, and are handed a
-  uniform to put on like anything else.
+- **Factions**, as `.faction` assets: a name, a tint and its ranks. A faction is people: it grants
+  nothing and changes nothing about its members. Staff appoint its head; its members offer newcomers
+  a place, and a superior promotes, demotes and discharges those below them, as each rank allows. A
+  member can walk out. A uniform and a rank's insignia are handed over and put on like anything else,
+  so what others see is what someone wears; their rank is told only to them.
 - **Items**, as `.item` assets in a grid inventory. An item can grant capabilities (a zip tie
   restrains), be a key cut to a lock, be used up (food, or a bandage that treats a wound), be held
   in view of everyone, or be a weapon that uses ammunition, made to kill or not. Identical items
@@ -165,9 +167,10 @@ running and takes about three minutes.
 
 While working, keep the editor open on the game and run the least that covers the change:
 `dotnet test Tests` for a rule in `Code/Logic`, in seconds, and `playtest.ps1 -Attach`, which plays
-in the open editor once it has built the edit, in about forty seconds, or less with `-Until`. Close
-the editor and run `test.ps1` once before merging: it also compiles with warnings as errors and
-plays two clients on a dedicated server.
+in the open editor once it has built the edit, in about forty seconds, or less with `-Until`; for
+what one player is told about another, `playtest-server.ps1 -Keep -Until <section>`. Close the
+editor and run `test.ps1` once before merging: it also compiles with warnings as errors and plays
+two clients on a dedicated server.
 
 ```bash
 pwsh tools/verify.ps1
@@ -200,8 +203,27 @@ pwsh tools/playtest-server.ps1
 
 Starts a real dedicated server and joins two real game clients to it, then asks each client what
 it was actually told: that the other player's name never arrived, that a whisper stopped at its
-range, that a door one opened is open for the other. Needs Steam running and takes about two
-minutes.
+range, that a door one opened is open for the other. Needs Steam running and takes about three
+minutes, half of it starting the server and the clients. It stops at the first check that fails.
+
+```bash
+pwsh tools/playtest-server.ps1 -Keep -Until 'A faction'
+```
+
+`-Keep` leaves the server and both clients running when the run ends, and the next run with
+`-Keep` starts on them, in a fresh city: the whole test then takes about half a minute. A change to
+the code or an asset since starts them again. `-Close` closes them, and so does a run without `-Keep`, or `test.ps1`. `-Until` stops
+once the section it names is played; with `-Keep`, the backup section, which stops the server, is
+left out.
+
+```bash
+pwsh tools/compile-assets.ps1
+```
+
+A dedicated server reads assets only as the editor compiled them. This opens the editor hidden
+when an asset is new or has changed since it was compiled, waits until it has compiled them, and
+closes it. The two-client test runs it first: it costs nothing when nothing changed, and about a
+minute and a half when something did.
 
 ```bash
 pwsh tools/generate-confusables.ps1
@@ -225,7 +247,7 @@ Typed in the host's console as `hexagon_<command>`, or by staff in game (Tab) wi
 | `hurt "<character name>" <amount> ["<place>"]` / `revive "<character name>"` | Harm a character in the city, or help one up, here or not. With a place (`head`, `body`, `left arm`, `right arm`, `left leg`, `right leg`), it lands there as a weapon's would, without killing outright: a wound to an arm or a leg stays until it is treated |
 | `release "<character name>"` | Free a character's bound hands, here or not |
 | `restore "<character name>"` | Undo a death that broke the rules. The character gets up where its body lies, with whatever is still on it. Refused while the account has all the living characters it may |
-| `faction "<character name>" <faction\|none>` | Appoint a character to a faction, or take it out of one. Nothing else about the character changes |
+| `faction "<character name>" <faction\|none> ["<rank>"]` | Appoint a character to a faction, at its head unless a rank is named, or take it out of one. Nothing else about the character changes |
 | `door ["<door>"] <open\|close\|lock\|unlock\|release\|assign "<character name>">` | Work a door whatever key it asks for, give its title to a character, or take the title back. The keys are not part of the title. In game an unnamed door is the one beside you; `door` alone lists them |
 | `who` | Who is playing whom, and where, and who was left down or bound. The one place a name is shown to someone never told it |
 | `journal [text] [count] [days]` | The latest entries containing the text, from the last two days unless told otherwise |

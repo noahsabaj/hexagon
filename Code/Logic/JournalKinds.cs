@@ -57,6 +57,15 @@ public static class JournalKinds
 	/// <summary>One of a map's counters stood on it, moved, or put back in its box.</summary>
 	public const string MapMove = "map.move";
 
+	/// <summary>A recruit joins a faction, at its lowest rank, having accepted the recruiter's offer.</summary>
+	public const string FactionJoin = "faction.join";
+	/// <summary>A superior gives a member of their faction another rank, higher or lower.</summary>
+	public const string FactionRank = "faction.rank";
+	/// <summary>A superior discharges a member of their faction.</summary>
+	public const string FactionDischarge = "faction.discharge";
+	/// <summary>A member walks out of their faction of their own accord.</summary>
+	public const string FactionLeave = "faction.leave";
+
 	public const string OfferAccept = "offer.accept";
 	public const string OfferRefuse = "offer.refuse";
 	public const string OfferLapse = "offer.lapse";
