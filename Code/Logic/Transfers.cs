@@ -30,6 +30,8 @@ public static class Sources
 	public const string Delivery = "delivery";
 	/// <summary>Taken out of a site, such as a mine or a scrap yard, by whoever worked it. See <see cref="Sites"/>.</summary>
 	public const string Site = "site";
+	/// <summary>Taken out of a door or a locker as a new lock went in: the lock that was in it.</summary>
+	public const string Fitted = "fitted";
 }
 
 /// <summary>Where items may leave the world.</summary>
@@ -49,6 +51,8 @@ public static class Sinks
 	public const string Operator = "operator";
 	/// <summary>Taken out of the city by train: what was loaded for it, and what nobody unloaded.</summary>
 	public const string Departed = "departed";
+	/// <summary>Fitted into a door or a locker: a lock, which is part of it until another takes its place.</summary>
+	public const string Fitted = "fitted";
 }
 
 /// <summary>
@@ -196,14 +200,22 @@ public sealed class Transfers
 		foreach ( var item in from.Inventory.Items.ToArray() ) Destroy( sink, from, item.Id, by );
 	}
 
+	/// <summary>Some of one thing a piece of work makes: like <paramref name="Like"/>, <paramref name="Count"/> of them, each with its mark.</summary>
+	public sealed record Made( ItemStack Like, int Count, IReadOnlyList<MadeMark> Marks );
+
+	/// <summary>Something is made, of one kind only.</summary>
+	public Result<ItemStack> Make( IHolder from, IHolder to, IReadOnlyList<(string Definition, int Count)> inputs, ItemStack made, int count,
+		IReadOnlyList<MadeMark> marks, string maker, Actor by ) =>
+		Make( from, to, inputs, new[] { new Made( made, count, marks ) }, maker, by );
+
 	/// <summary>
 	/// Something is made. What it is made from is used up, out of <paramref name="from"/>, top of each
 	/// pile first; what it makes enters the world in <paramref name="to"/>, each with its mark, from the
-	/// made source; <paramref name="maker"/> names what made it, for the record. All of it happens or
-	/// none does: there must be enough to make it from, and room for what it makes.
+	/// made source, the first of <paramref name="outputs"/> first; <paramref name="maker"/> names what
+	/// made it, for the record. All of it happens or none does: there must be enough to make it from,
+	/// and room for all it makes. Returns the pile the first thing made went into.
 	/// </summary>
-	public Result<ItemStack> Make( IHolder from, IHolder to, IReadOnlyList<(string Definition, int Count)> inputs, ItemStack made, int count,
-		IReadOnlyList<MadeMark> marks, string maker, Actor by )
+	public Result<ItemStack> Make( IHolder from, IHolder to, IReadOnlyList<(string Definition, int Count)> inputs, IReadOnlyList<Made> outputs, string maker, Actor by )
 	{
 		if ( inputs.Any( input => Making.Has( from.Inventory, input.Definition ) < input.Count ) )
 			return Result<ItemStack>.Fail( ErrorCode.NotFound, Making.NothingToMakeFrom );
@@ -224,29 +236,38 @@ public sealed class Transfers
 				left -= taken;
 			}
 		}
-		var template = Like( made, Guid.NewGuid() );
-		template.Made = marks.Select( mark => mark.Copy() ).ToList();
-		var placed = Add( to.Inventory, template, count );
-		if ( !placed.Ok )
+		var placed = new List<(Made Output, ItemStack Pile)>();
+		foreach ( var output in outputs )
 		{
-			from.Inventory.Items.Clear();
-			from.Inventory.Items.AddRange( fromWas );
-			if ( from is CharacterData character ) character.Equipped = heldWas;
-			if ( toWas is not null )
+			var template = Like( output.Like, Guid.NewGuid() );
+			template.Made = output.Marks.Select( mark => mark.Copy() ).ToList();
+			var pile = Add( to.Inventory, template, output.Count );
+			if ( !pile.Ok )
 			{
-				to.Inventory.Items.Clear();
-				to.Inventory.Items.AddRange( toWas );
+				from.Inventory.Items.Clear();
+				from.Inventory.Items.AddRange( fromWas );
+				if ( from is CharacterData character ) character.Equipped = heldWas;
+				if ( toWas is not null )
+				{
+					to.Inventory.Items.Clear();
+					to.Inventory.Items.AddRange( toWas );
+				}
+				return Result<ItemStack>.Fail( ErrorCode.Conflict, Making.NoRoom );
 			}
-			return Result<ItemStack>.Fail( ErrorCode.Conflict, Making.NoRoom );
+			placed.Add( (output, pile.Value) );
 		}
 		foreach ( var (pile, taken) in used )
 			_journal.Record( JournalKinds.ItemDestroy, by, from.HolderLabel,
 				data: new[] { ("sink", Sinks.Made), ("item", pile.Id.ToString( "N" )), ("definition", pile.Definition), ("count", taken.ToString()), ("maker", maker) } );
-		var serials = marks.Where( mark => mark.Serial.Length > 0 ).Select( mark => mark.Serial ).ToArray();
-		var data = new List<(string, string)> { ("source", Sources.Made), ("item", placed.Value.Id.ToString( "N" )), ("definition", made.Definition), ("count", count.ToString()), ("maker", maker) };
-		if ( serials.Length > 0 ) data.Add( ("serials", serials.Length == 1 ? serials[0] : $"{serials[0]}-{serials[^1]}") );
-		_journal.Record( JournalKinds.ItemIssue, by, to.HolderLabel, data: data.ToArray() );
-		return placed;
+		foreach ( var (output, pile) in placed )
+		{
+			var serials = output.Marks.Where( mark => mark.Serial.Length > 0 ).Select( mark => mark.Serial ).ToArray();
+			var data = new List<(string, string)> { ("source", Sources.Made), ("item", pile.Id.ToString( "N" )), ("definition", output.Like.Definition), ("count", output.Count.ToString()), ("maker", maker) };
+			if ( serials.Length > 0 ) data.Add( ("serials", serials.Length == 1 ? serials[0] : $"{serials[0]}-{serials[^1]}") );
+			if ( output.Like.Pattern is { } pattern ) data.Add( ("pattern", pattern) );
+			_journal.Record( JournalKinds.ItemIssue, by, to.HolderLabel, data: data.ToArray() );
+		}
+		return Result<ItemStack>.Success( placed[0].Pile );
 	}
 
 	// What an inventory held, as it was, to put back if a change cannot be finished.

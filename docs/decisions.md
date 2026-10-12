@@ -287,18 +287,49 @@ only what its holder may do to those below them in it. A door or a container has
 `LockPattern`, and a key item is cut to a pattern when it is made, by staff's `give` or by a scene's
 stock. Any key cut to a lock works it, whoever holds it, so a ministry's doors can share one pattern
 while each flat has its own. A client is told a key's cut, a short code anyone holding two keys can
-compare, and never the pattern, which would say what it opens. Owning a door is title only, the right
-to sell or rent it: staff assign it, an owner hands it over by offering it, and the keys go
-separately.
+compare, and never the pattern, which would say what it opens. Owning a building opens none of its
+locks; see below.
 
 ## Handing over takes two
 
-A character offers something, some of a pile or the title to a door, to someone within reach, who
+A character offers something, some of a pile or the title to a building, to someone within reach, who
 accepts or refuses. Nothing moves until they accept, and then the host checks again that the giver
 still has it and that both are still there and able. An offer lapses after thirty seconds, or as soon
 as the two part, either is down or bound, or the giver leaves. Every offer, answer and lapse is
 journaled. Slipping something into someone's pockets unasked is a different act, and will be done by
 stealth.
+
+## A title is held, or its office's, and an office is a stamp
+
+A building or a flat is a `Hexagon Property`: the doors and lockers whose title passes together. Who
+holds it is on the host's record, kept with the world by the property's id, and told to nobody but
+whoever acts for it and staff. A character holds it, or nobody does and it is its office's. An
+office is not a team, which would be a faction granting something, but a stamp: whoever carries a
+stamp that leaves the office's mark acts for it, to sell what it holds or to take a title back for
+it, as a stolen stamp does too. A sale is an offer of the title like any other, and the money is
+handed over apart, by hand, and put in the office's till, on trust: the title and the money never
+move as one, so a clerk can pocket it and a buyer can be cheated, and the journal knows. Someone who
+carries the office's stamp may take a title offered to them back for the office rather than for
+themselves. The certificate a clerk fills in and stamps is evidence, as any paper is; the record is
+the host's. Staff assign titles and give them back to their offices, and a character gone for good
+leaves its buildings to theirs.
+
+Owning a building opens nothing: a lock takes its key, owner or not. What whoever acts for it may do
+that nobody else may is change its locks. A lock not yet fitted is an item, cut to a pattern as a
+key is, and they fit it to one of the building's doors from the edge, standing open, or to one of
+its lockers they can open. The old lock comes out in their hands, cut as it was, to be kept, sold
+or fitted somewhere else, so every key cut to it is still good for something. The lock fitted leaves
+the world through the `fitted` sink and the old one enters it from the `fitted` source, so locks are
+conserved like everything else, and which locks were changed is kept with the world, by the door's
+or the locker's id. Fitting a lock is a request on an item, `item.fit`, not a door's verb: what a
+door lists is what anyone in reach may try, and a lock is fitted with the lock in hand. A door
+already had an owner of its own before buildings had titles; a saved world with one passes it to
+the building the door is part of, once, as it is restored.
+
+A locksmith's bench is a machine. It makes a lock with two keys, all cut alike to a pattern nobody
+has cut before, and copies a key onto a blank, keeping the key it copies. So a piece of work can
+keep what it is worked from, make more than one thing, and cut the keys and locks it makes, to a
+new pattern or to the one it copies.
 
 ## Rank is given in person, by a superior
 
@@ -502,8 +533,9 @@ under their name or as the console, refusals included, and reading the journal i
 A dispute ends with something put back, so staff can: `take` sends items out through the `operator`
 sink, `move` carries them between characters by the same transfers as anything else, `release` frees
 bound hands, `revive` helps someone up, `faction` appoints a character to a faction, at its head
-unless a rank is named, or, with `none`, takes it out of one, `door` works a door whatever key it asks for or assigns and releases its title,
-and `restore` undoes a death that broke the rules. Commands that name a character find it whether or
+unless a rank is named, or, with `none`, takes it out of one, `door` works a door whatever key it asks for,
+`property` gives a building's title to a character or back to its office, and `restore` undoes a death that
+broke the rules. Commands that name a character find it whether or
 not it is in the city, except `teleport`, `bring`, `goto` and `hurt`, which need it there.
 
 ## The journal is evidence, never state
@@ -709,7 +741,11 @@ city it left wrong.
   s&box and stay local.
 - The play tests run both clients as one Steam account, so account-level rules are tested by one
   account, and the two-client test allows that account two lives at once.
-- Player offices are not built yet. Until they are, things enter the world only from staff, from
+- An office keeps no books: what it sold, and to whom, is in the journal, and on whatever
+  certificates its clerks fill in. Its till is a locked container like any other.
+- Only the locks of a building's doors and lockers can be changed; a machine's or a truck's stays as
+  it was built. A lock has no model, and fitting one shows no pose.
+- Things enter the world only from staff, from
   stocked containers, with new characters, by train, from sites, and made from those.
 
 HL2RP keeps what is about its setting: the scanner, civic records as a view of the journal,

@@ -68,6 +68,6 @@ public sealed partial class Player
 		var can = faction is null ? Result.Fail( ErrorCode.Denied, Logic.Ranks.NoPower )
 			: Logic.Ranks.ToEnlist( ranks, standing, recruit.IsValid() && recruit._character?.Faction.Length > 0 );
 		if ( !can.Ok ) return can;
-		return HostPlaceOffer( recruit, new Offer( this, Guid.Empty, 0, null, $"a place in {faction!.Title}, as {Ranks.Article( ranks[0].Title )}", 0, faction ) );
+		return HostPlaceOffer( recruit, new Offer( this, Guid.Empty, 0, $"a place in {faction!.Title}, as {Ranks.Article( ranks[0].Title )}", 0, faction ) );
 	}
 }

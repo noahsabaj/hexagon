@@ -98,6 +98,82 @@ public sealed class MakingTests
 		CollectionAssert.AreEqual( new[] { "press:a" }, given.Made!.Select( mark => mark.By ).ToArray() );
 	}
 
+	private const string Scrap = "items/scrap_metal.item";
+	private const string Lock = "items/lock.item";
+	private const string Key = "items/key.item";
+	private const string KeyBlank = "items/key_blank.item";
+
+	[TestMethod]
+	public void ALockIsMadeWithItsKeysAllCutToAPatternNobodyHasCutBefore()
+	{
+		var journal = new Journal( new MemoryFiles(), () => Now );
+		var transfers = new Transfers( journal );
+		var bench = Press( 4, 2 );
+		transfers.Issue( Sources.Scene, bench, Scrap, 1, 1, Actor.Console, count: 4, max: 50 );
+		var recipe = new Recipe( "Make a lock", new[] { (Scrap, 2) }, Lock, 1, 10f, Also: new[] { (Key, 2) }, Cut: MakingCut.New );
+		Assert.IsTrue( Making.Enough( recipe, bench.Inventory ) );
+
+		var cut = Making.Cut( recipe, bench.Inventory ).Value!;
+		Assert.IsTrue( Keys.Pattern( cut ).Ok, "a new pattern is one staff could have typed" );
+		Assert.AreNotEqual( cut, Making.Cut( recipe, bench.Inventory ).Value, "and no two locks are made alike" );
+		var made = transfers.Make( bench, bench, recipe.Inputs, new[]
+		{
+			new Transfers.Made( new ItemStack { Definition = Lock, Pattern = cut }, 1, Making.Marks( "bench:a", 1 ) ),
+			new Transfers.Made( new ItemStack { Definition = Key, Max = 10, Pattern = cut }, 2, Making.Marks( "bench:a", 2 ) ),
+		}, "bench:a", Actor.Console );
+
+		Assert.IsTrue( made.Ok, made.Message );
+		Assert.AreEqual( Lock, made.Value.Definition, "what is made first is what the work is for" );
+		Assert.AreEqual( 2, Making.Has( bench.Inventory, Scrap ), "two of the four pieces of scrap are used up" );
+		Assert.AreEqual( cut, bench.Inventory.Items.Single( item => item.Definition == Lock ).Pattern );
+		var keys = bench.Inventory.Items.Single( item => item.Definition == Key );
+		Assert.AreEqual( 2, keys.Count );
+		Assert.AreEqual( cut, keys.Pattern, "the keys that come with a lock turn it" );
+		var issued = journal.Read( Now ).Where( entry => entry.Kind == "item.issue" && entry.Data["source"] == Sources.Made ).ToArray();
+		CollectionAssert.AreEqual( new[] { Lock, Key }, issued.Select( entry => entry.Data["definition"] ).ToArray(), "each thing made is on record" );
+		Assert.IsTrue( issued.All( entry => entry.Data["pattern"] == cut ), "with what it is cut to, as a key issued by staff is" );
+	}
+
+	[TestMethod]
+	public void AKeyIsCopiedFromOneThatIsKept()
+	{
+		var journal = new Journal( new MemoryFiles(), () => Now );
+		var transfers = new Transfers( journal );
+		var bench = Press( 4, 2 );
+		var recipe = new Recipe( "Copy a key", new[] { (KeyBlank, 1) }, Key, 1, 5f, Kept: new[] { (Key, 1) }, Cut: MakingCut.Copied );
+		transfers.Issue( Sources.Scene, bench, KeyBlank, 1, 1, Actor.Console, count: 2, max: 10 );
+		Assert.IsFalse( Making.Enough( recipe, bench.Inventory ), "a blank alone is not enough: there is nothing to copy" );
+
+		transfers.Issue( Sources.Scene, bench, Key, 1, 1, Actor.Console, max: 10 );
+		Assert.IsTrue( Making.Enough( recipe, bench.Inventory ) );
+		Assert.AreEqual( Making.NothingToCopy, Making.Cut( recipe, bench.Inventory ).Message, "a key cut to nothing has nothing to copy" );
+
+		bench.Inventory.Items.Clear();
+		transfers.Issue( Sources.Scene, bench, KeyBlank, 1, 1, Actor.Console, count: 2, max: 10 );
+		var model = transfers.Issue( Sources.Scene, bench, Key, 1, 1, Actor.Console, max: 10, pattern: "flat2" ).Value;
+		var cut = Making.Cut( recipe, bench.Inventory );
+		Assert.AreEqual( "flat2", cut.Value );
+		var made = transfers.Make( bench, bench, recipe.Inputs,
+			new[] { new Transfers.Made( new ItemStack { Definition = Key, Max = 10, Pattern = cut.Value }, 1, Making.Marks( "bench:a", 1 ) ) }, "bench:a", Actor.Console );
+
+		Assert.IsTrue( made.Ok, made.Message );
+		Assert.AreEqual( 1, Making.Has( bench.Inventory, KeyBlank ), "the blank is used up" );
+		Assert.AreEqual( 2, model.Count, "and the copy is cut like the key it was copied from, which is kept, so the two pile together" );
+		Assert.IsTrue( Keys.Opens( bench.Inventory, "flat2" ) );
+	}
+
+	[TestMethod]
+	public void EnoughCountsWhatIsUsedUpAndWhatIsKeptOfOneThingTogether()
+	{
+		var bench = Press( 4, 1 );
+		bench.Inventory.Items.Add( new ItemStack { Id = Guid.NewGuid(), Definition = Key, Count = 1, Max = 10, Pattern = "flat2" } );
+		var recipe = new Recipe( "Recut", new[] { (Key, 1) }, Key, 1, 5f, Kept: new[] { (Key, 1) }, Cut: MakingCut.Copied );
+
+		Assert.IsFalse( Making.Enough( recipe, bench.Inventory ), "one key cannot be both used up and kept" );
+		bench.Inventory.Items.Add( new ItemStack { Id = Guid.NewGuid(), Definition = Key, Count = 1, Max = 10, X = 1 } );
+		Assert.IsTrue( Making.Enough( recipe, bench.Inventory ) );
+	}
+
 	[TestMethod]
 	public void AnEyeUnderTheRightToolTellsOnlyWhetherThingsWereMadeAlike()
 	{

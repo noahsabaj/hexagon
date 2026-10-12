@@ -303,7 +303,7 @@ public sealed class CharacterService
 		{
 			// Whatever no body took leaves the world on the record, not by vanishing with the character.
 			_game.Transfers!.DestroyAll( Sinks.CharacterDied, character, actor );
-			Door.HostReleaseOwnedBy( character.Id, actor );
+			Property.HostReleaseOwnedBy( character.Id, actor, "died" );
 		}
 		Roster.Save( character );
 		Sleeper.HostRefresh( character );

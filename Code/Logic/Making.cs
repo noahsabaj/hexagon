@@ -9,9 +9,24 @@ namespace Hexagon.Logic;
 /// <summary>
 /// What something is made from, what it makes, and how long the work takes: a press striking tokens
 /// from blanks, a die striking one by hand. Its inputs and output are item assets, by path.
-/// <paramref name="Serial"/> numbers each thing it makes, as a banknote is.
+/// <paramref name="Serial"/> numbers each thing it makes, as a banknote is. <paramref name="Kept"/> is
+/// what it is worked from without being used up, such as the key a copy is cut from, and
+/// <paramref name="Also"/> what else the same work makes, such as the keys that come with a lock;
+/// <paramref name="Cut"/> says what the keys and locks it makes are cut to.
 /// </summary>
-public sealed record Recipe( string Title, IReadOnlyList<(string Definition, int Count)> Inputs, string Output, int Count, float Seconds, bool Serial = false );
+public sealed record Recipe( string Title, IReadOnlyList<(string Definition, int Count)> Inputs, string Output, int Count, float Seconds, bool Serial = false,
+	IReadOnlyList<(string Definition, int Count)>? Kept = null, IReadOnlyList<(string Definition, int Count)>? Also = null, MakingCut Cut = MakingCut.None );
+
+/// <summary>What the keys and locks a piece of work makes are cut to.</summary>
+public enum MakingCut
+{
+	/// <summary>Nothing: a key made so is a blank.</summary>
+	None,
+	/// <summary>A pattern nobody has cut before, the same for everything the work makes: a lock, and the keys that come with it.</summary>
+	New,
+	/// <summary>The pattern of what the work is worked from: a key copied, a key cut to fit a lock.</summary>
+	Copied,
+}
 
 /// <summary>
 /// Money is made by someone, from something. Whatever makes a thing leaves its mark on it, a press its
@@ -27,6 +42,7 @@ public static class Making
 
 	public const string NothingToMakeFrom = "There is nothing here to make anything from.";
 	public const string NoRoom = "There is no room for what it makes.";
+	public const string NothingToCopy = "There is nothing here cut to a lock, to copy.";
 
 	/// <summary>The serial printed on the <paramref name="number"/>th thing a press numbers: its prefix, then the number.</summary>
 	public static string Serial( string prefix, long number ) => $"{prefix}{number.ToString().PadLeft( SerialDigits, '0' )}";
@@ -40,9 +56,25 @@ public static class Making
 			.Select( index => new MadeMark { By = maker, Serial = serialPrefix is null ? string.Empty : Serial( serialPrefix, firstSerial + index ) } )
 			.ToList();
 
-	/// <summary>Whether there is enough in the inventory to make it.</summary>
+	/// <summary>Whether there is enough in the inventory to make it: what it uses up, and what it is worked from.</summary>
 	public static bool Enough( Recipe recipe, InventoryData inventory ) =>
-		recipe.Inputs.All( input => Has( inventory, input.Definition ) >= input.Count );
+		recipe.Inputs.Concat( recipe.Kept ?? Array.Empty<(string, int)>() )
+			.GroupBy( need => need.Item1 )
+			.All( need => Has( inventory, need.Key ) >= need.Sum( value => value.Item2 ) );
+
+	/// <summary>
+	/// What the keys and locks a recipe makes are cut to, from what is there to make them: nothing, a
+	/// new pattern, or the pattern of the first thing there it is worked from that is cut to one.
+	/// </summary>
+	public static Result<string?> Cut( Recipe recipe, InventoryData inventory )
+	{
+		if ( recipe.Cut == MakingCut.New ) return Result<string?>.Success( Keys.NewPattern() );
+		if ( recipe.Cut != MakingCut.Copied ) return Result<string?>.Success( null );
+		var model = (recipe.Kept ?? Array.Empty<(string Definition, int Count)>())
+			.SelectMany( kept => inventory.Items.Where( item => !item.Worn && item.Definition == kept.Definition && item.Pattern is { Length: > 0 } ) )
+			.FirstOrDefault();
+		return model is null ? Result<string?>.Fail( ErrorCode.NotFound, NothingToCopy ) : Result<string?>.Success( model.Pattern );
+	}
 
 	/// <summary>How many of a thing an inventory holds, worn or carried loose.</summary>
 	public static int Has( InventoryData inventory, string definition ) =>

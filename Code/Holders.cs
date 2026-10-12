@@ -28,18 +28,25 @@ internal static class HostScene
 /// Storage placed in the scene: a crate, a locker, a safe. What is inside is a holder saved under the
 /// scene object's id. Only someone who has opened it is told what it holds. A scene's author can
 /// stock it, once: what the world is built holding is placed the first time it is opened, and
-/// nothing refills it. One with a lock opens only to a key cut to its pattern.
+/// nothing refills it. One with a lock opens only to a key cut to its pattern, and a locker that is part
+/// of a building has its lock changed by whoever holds the building's title (see <see cref="Property"/>).
 /// </summary>
 [Title( "Hexagon Container" ), Category( "Hexagon" ), Icon( "inventory_2" )]
-public sealed class Container : Component, Component.IPressable, IVerbTarget
+public sealed class Container : Component, Component.IPressable, IVerbTarget, ILockable
 {
 	[Property] public string Title { get; set; } = "Crate";
 	[Property, Range( 1, 10 )] public int Width { get; set; } = 4;
 	[Property, Range( 1, 10 )] public int Height { get; set; } = 4;
-	/// <summary>What its lock is cut to: only a key cut the same opens it. Empty means it has no lock.</summary>
+	/// <summary>What the lock it is built with is cut to: only a key cut the same opens it. Empty means it is built with no lock.</summary>
 	[Property] public string LockPattern { get; set; } = string.Empty;
 	/// <summary>What it holds as the world is built.</summary>
 	[Property] public List<Stocked> Stock { get; set; } = new();
+
+	/// <summary>Whether it has a lock, the one it was built with or one fitted since. What the lock is cut to is never sent.</summary>
+	[Sync( SyncFlags.FromHost )] public bool HasLock { get; set; }
+
+	/// <summary>Host: what its lock is cut to now, the one fitted last or else the one it was built with. Empty is no lock.</summary>
+	public string HostPattern => HexagonServices.Current is { } game && game.World.Locks.TryGetValue( GameObject.Id, out var fitted ) ? fitted : LockPattern;
 
 	/// <summary>Some of an item, as a scene's author places it.</summary>
 	public sealed class Stocked
@@ -56,7 +63,9 @@ public sealed class Container : Component, Component.IPressable, IVerbTarget
 
 	protected override void OnUpdate()
 	{
-		if ( !_joined ) _joined = HostScene.Join( this );
+		if ( _joined || !HostScene.Join( this ) ) return;
+		_joined = true;
+		HasLock = HostPattern.Length > 0;
 	}
 
 	bool IPressable.CanPress( IPressable.Event e ) => true;
@@ -68,13 +77,21 @@ public sealed class Container : Component, Component.IPressable, IVerbTarget
 	}
 
 	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) =>
-		new IPressable.Tooltip( $"Open {Title.ToLowerInvariant()}", "inventory_2", LockPattern.Length > 0 ? "It locks with a key." : string.Empty );
+		new IPressable.Tooltip( $"Open {Title.ToLowerInvariant()}", "inventory_2", HasLock ? "It locks with a key." : string.Empty );
 
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
-		if ( LockPattern.Length > 0 && !actor.HostHasKey( LockPattern ) ) return Result.Fail( ErrorCode.Denied, "It is locked, and you have no key that fits." );
+		if ( HostPattern.Length > 0 && !actor.HostHasKey( HostPattern ) ) return Result.Fail( ErrorCode.Denied, "It is locked, and you have no key that fits." );
 		actor.HostOpen( this, Holder(), Title );
 		return Result.Success();
+	}
+
+	/// <summary>Host: a new lock goes in, cut to <paramref name="pattern"/>. See <see cref="ILockable.HostFit"/>.</summary>
+	public void HostFit( string pattern )
+	{
+		if ( HexagonServices.Current is not { } game ) return;
+		game.World.Locks[GameObject.Id] = pattern;
+		HasLock = pattern.Length > 0;
 	}
 
 	/// <summary>Host: what it holds, stocked as its author placed it the first time it is asked for.</summary>

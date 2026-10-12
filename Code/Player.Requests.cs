@@ -74,7 +74,7 @@ public sealed partial class Player
 		// Staff may have given it something already. That leaves the world on the record, not by vanishing with the file.
 		var by = Actor.Of( doomed );
 		game.Transfers!.DestroyAll( Sinks.CharacterDeleted, doomed, by );
-		Door.HostReleaseOwnedBy( doomed.Id, by );
+		Property.HostReleaseOwnedBy( doomed.Id, by, "deleted" );
 		game.Journal!.Record( JournalKinds.CharacterDelete, by, doomed.HolderLabel );
 		game.Roster.Delete( steamId, characterId );
 		SendCharacterList( caller, game );
@@ -99,7 +99,7 @@ public sealed partial class Player
 		}
 		var by = Actor.Of( retiring );
 		game.Transfers!.DestroyAll( Sinks.CharacterRetired, retiring, by );
-		Door.HostReleaseOwnedBy( retiring.Id, by );
+		Property.HostReleaseOwnedBy( retiring.Id, by, "retired" );
 		Vitals.Die( retiring, DateTimeOffset.UtcNow );
 		game.Roster.Save( retiring );
 		game.Journal!.Record( JournalKinds.CharacterRetire, by, retiring.HolderLabel );

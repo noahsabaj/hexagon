@@ -185,6 +185,20 @@ public sealed class WorldData
 	public Dictionary<Guid, TrainData> Trains { get; set; } = new();
 	public Dictionary<Guid, SiteData> Sites { get; set; } = new();
 	public Dictionary<Guid, VehicleData> Vehicles { get; set; } = new();
+	/// <summary>Who holds the title to each building or flat, by the scene object's id. One nobody owns is its office's.</summary>
+	public Dictionary<Guid, PropertyData> Properties { get; set; } = new();
+	/// <summary>
+	/// The locks fitted since the world was built, by the id of the door or locker they are in: what each
+	/// is cut to. Anything not here keeps the lock it was built with.
+	/// </summary>
+	public Dictionary<Guid, string> Locks { get; set; } = new();
+}
+
+/// <summary>The title to a building or a flat: the right to sell or rent it. It opens nothing; a lock takes its key.</summary>
+public sealed class PropertyData
+{
+	/// <summary>The character who holds it, or nobody, and then it is its office's, to sell.</summary>
+	public Guid? Owner { get; set; }
 }
 
 /// <summary>What a truck keeps across a restart: where it was left, which way it faced, and what is in its tank.</summary>
@@ -223,6 +237,9 @@ public sealed class DoorData
 {
 	public bool IsOpen { get; set; }
 	public bool IsLocked { get; set; }
-	/// <summary>The character who holds its title: the right to sell or rent it. Locking it takes its key, as for anyone.</summary>
+	/// <summary>
+	/// Before buildings had titles of their own, the character who held this door's. Read once, into the
+	/// title of the building the door is part of, and cleared.
+	/// </summary>
 	public Guid? Owner { get; set; }
 }

@@ -24,14 +24,25 @@ public sealed class MakingRecipe
 	[Property, Range( 0.5f, 120f )] public float Seconds { get; set; } = 5f;
 	/// <summary>A machine prints a serial on each thing it makes, numbered on from the last, as on a banknote.</summary>
 	[Property] public bool Serial { get; set; }
+	/// <summary>What it is worked from without being used up, such as the key a copy is cut from.</summary>
+	[Property] public List<MakingInput> Kept { get; set; } = new();
+	/// <summary>What else the same work makes, such as the keys that come with a lock.</summary>
+	[Property] public List<MakingInput> Also { get; set; } = new();
+	/// <summary>What the keys and locks it makes are cut to: nothing, a new pattern, or the pattern of what it is worked from.</summary>
+	[Property] public MakingCut Cut { get; set; }
 
-	public bool IsValid => Output.IsValid() && Inputs.Count > 0 && Inputs.All( input => input.Item.IsValid() );
+	public bool IsValid => Output.IsValid() && Inputs.Count > 0 && Inputs.Concat( Kept ).Concat( Also ).All( input => input.Item.IsValid() );
 
 	/// <summary>The recipe as the rules weigh it.</summary>
-	public Recipe Rule => new( Title, Inputs.Select( input => (input.Item!.ResourcePath, input.Count) ).ToArray(), Output!.ResourcePath, Count, Seconds, Serial );
+	public Recipe Rule => new( Title, Paths( Inputs ), Output!.ResourcePath, Count, Seconds, Serial, Paths( Kept ), Paths( Also ), Cut );
 
-	/// <summary>What it makes from what, as a line: "Strike tokens: Token x10 from Token blank x10."</summary>
-	public string Summary => $"{Title}: {Output?.Title} x{Count} from {string.Join( " and ", Inputs.Select( input => $"{input.Item?.Title} x{input.Count}" ) )}.";
+	/// <summary>What it makes from what, as a line: "Make a lock: Lock x1 and Key x2 from Scrap metal x2."</summary>
+	public string Summary => $"{Title}: {Listed( new[] { new MakingInput { Item = Output, Count = Count } }.Concat( Also ) )} from {Listed( Inputs )}" +
+		(Kept.Count > 0 ? $", working from {Listed( Kept )}." : ".");
+
+	private static (string, int)[] Paths( IEnumerable<MakingInput> inputs ) => inputs.Select( input => (input.Item!.ResourcePath, input.Count) ).ToArray();
+
+	private static string Listed( IEnumerable<MakingInput> inputs ) => string.Join( " and ", inputs.Select( input => $"{input.Item?.Title} x{input.Count}" ) );
 }
 
 /// <summary>Some of one thing a recipe uses up.</summary>

@@ -12,6 +12,10 @@
 		<div class="row prompt muted">
 			<Image class="glyph" Texture=@Input.GetGlyph( "Slot1", InputGlyphSize.Medium, false ) /><div>Accept</div>
 			<Image class="glyph" Texture=@Input.GetGlyph( "Slot2", InputGlyphSize.Medium, false ) /><div>Refuse</div>
+			@if ( player.OfferOffice.Length > 0 )
+			{
+				<Image class="glyph" Texture=@Input.GetGlyph( "Slot3", InputGlyphSize.Medium, false ) /><div>Take it for @player.OfferOffice</div>
+			}
 		</div>
 	}
 </root>
@@ -26,7 +30,8 @@
 		if ( !Answering || Player.Local is not { OfferText.Length: > 0 } player ) return;
 		if ( Input.Pressed( "Slot1" ) ) player.RequestAnswerOffer( true );
 		else if ( Input.Pressed( "Slot2" ) ) player.RequestAnswerOffer( false );
+		else if ( Input.Pressed( "Slot3" ) && player.OfferOffice.Length > 0 ) player.RequestTakeForOffice();
 	}
 
-	protected override int BuildHash() => HashCode.Combine( Player.Local?.OfferText );
+	protected override int BuildHash() => HashCode.Combine( Player.Local?.OfferText, Player.Local?.OfferOffice );
 }

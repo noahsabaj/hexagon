@@ -22,7 +22,8 @@ public static class Operators
 	public const string Help = "give \"<name>\" <item> [count] [pattern] | " +
 		"take \"<name>\" <item> [count] | move \"<from>\" \"<to>\" <item> [count] | " +
 		"teleport \"<name>\" <x> <y> <z> | bring \"<name>\" | goto \"<name>\" | hurt \"<name>\" <amount> [\"<place>\"] | revive \"<name>\" | release \"<name>\" | " +
-		"restore \"<name>\" | faction \"<name>\" <faction|none> [\"<rank>\"] | door [\"<door>\"] <open|close|lock|unlock|release|assign \"<name>\"> | door | " +
+		"restore \"<name>\" | faction \"<name>\" <faction|none> [\"<rank>\"] | door [\"<door>\"] <open|close|lock|unlock> | door | " +
+		"property \"<property>\" <assign \"<name>\"|release> | property | " +
 		"train \"<train>\" <send|away|hold|resume> | train | who | journal [text] [count] [days]";
 
 	[ConCmd( "hexagon_give" )] public static void Give( string characterName, string item, int count = 0, string pattern = "" ) => FromConsole( "give", characterName, item, Count( count ), pattern );
@@ -34,7 +35,8 @@ public static class Operators
 	[ConCmd( "hexagon_release" )] public static void Release( string characterName ) => FromConsole( "release", characterName );
 	[ConCmd( "hexagon_restore" )] public static void Restore( string characterName ) => FromConsole( "restore", characterName );
 	[ConCmd( "hexagon_faction" )] public static void SetFaction( string characterName, string faction, string rank = "" ) => FromConsole( "faction", characterName, faction, rank );
-	[ConCmd( "hexagon_door" )] public static void OperateDoor( string door, string action, string owner = "" ) => FromConsole( "door", door, action, owner );
+	[ConCmd( "hexagon_door" )] public static void OperateDoor( string door = "", string action = "" ) => FromConsole( "door", door, action );
+	[ConCmd( "hexagon_property" )] public static void OperateProperty( string property = "", string action = "", string owner = "" ) => FromConsole( "property", property, action, owner );
 	[ConCmd( "hexagon_train" )] public static void OperateTrain( string train = "", string action = "" ) => FromConsole( "train", train, action );
 	[ConCmd( "hexagon_who" )] public static void Who() => FromConsole( "who" );
 	[ConCmd( "hexagon_journal" )] public static void Journal( string text = "", int count = 0, int days = 0 ) => FromConsole( "journal", text, Count( count ), Count( days ) );
@@ -212,7 +214,7 @@ public static class Operators
 				var doors = game.Scene.GetAllComponents<Door>().ToArray();
 				// Alone, it lists them: in game there is no other way to learn what a door is called.
 				if ( words.Length == 1 )
-					return doors.Length == 0 ? new[] { "There are no doors." } : doors.Select( value => value.HostDescribe( id => roster.Find( id )?.Name ) ).ToArray();
+					return doors.Length == 0 ? new[] { "There are no doors." } : doors.Select( value => value.HostDescribe() ).ToArray();
 				var door = doors.FirstOrDefault( value => value.GameObject.Name.Equals( Word( 1 ), StringComparison.OrdinalIgnoreCase ) );
 				// Where the action is: after the door's name, or first when the door is left unnamed.
 				var at = 2;
@@ -226,18 +228,37 @@ public static class Operators
 				}
 				if ( door is null ) return new[] { $"Usage: door [\"<door>\"] <{string.Join( "|", DoorActions )}>. No door is named '{Word( 1 )}'; door alone lists them." };
 				var action = Word( at ).ToLowerInvariant();
-				if ( action == "assign" )
-				{
-					// Staff hand out a building outright, as a player office would sell one.
-					if ( Character( Word( at + 1 ) ) is not { } owner ) return new[] { "Usage: door [\"<door>\"] assign \"<living character's name>\"." };
-					door.HostAssign( owner, by );
-					journal.Record( JournalKinds.OperatorDoor, by, $"Door:{door.GameObject.Id:N}", data: new[] { ("action", action), ("owner", owner.Name) } );
-					return new[] { $"{door.GameObject.Name}: assigned to {owner.Name}. The keys are not part of the title; give them separately." };
-				}
 				var done = door.HostOperate( action, by );
 				if ( !done.Ok ) return new[] { done.Message };
 				journal.Record( JournalKinds.OperatorDoor, by, $"Door:{door.GameObject.Id:N}", data: ("action", action) );
 				return new[] { $"{door.GameObject.Name}: {action}." };
+			}
+			case "property":
+			{
+				var properties = game.Scene.GetAllComponents<Property>().ToArray();
+				// Alone, it lists them, with who holds each: nobody else is told.
+				if ( words.Length == 1 )
+					return properties.Length == 0 ? new[] { "Nothing here has a title." } : properties.Select( value => value.HostDescribe( id => roster.Find( id )?.Name ) ).ToArray();
+				if ( properties.FirstOrDefault( value => value.Title.Equals( Word( 1 ), StringComparison.OrdinalIgnoreCase ) ) is not { } property )
+					return new[] { $"Usage: property \"<property>\" <{string.Join( "|", PropertyActions )}>. Nothing is called '{Word( 1 )}'; property alone lists them." };
+				var subject = $"Property:{property.GameObject.Id:N}";
+				var action = Word( 2 ).ToLowerInvariant();
+				switch ( action )
+				{
+					case "assign":
+						// Staff hand out a building outright, as its office would sell one.
+						if ( Character( Word( 3 ) ) is not { } owner ) return new[] { "Usage: property \"<property>\" assign \"<living character's name>\"." };
+						property.HostAssign( owner, by );
+						journal.Record( JournalKinds.OperatorProperty, by, subject, data: new[] { ("action", action), ("owner", owner.Name) } );
+						return new[] { $"{property.Title}: assigned to {owner.Name}. The keys are not part of the title; give them separately." };
+					case "release":
+						if ( property.HostOwner is null ) return new[] { $"{property.Title} is not held by anyone." };
+						property.HostRelease( by, "released by staff" );
+						journal.Record( JournalKinds.OperatorProperty, by, subject, data: ("action", action) );
+						return new[] { $"{property.Title}: held by {(property.Office.Length > 0 ? property.Office : "no office")} again." };
+					default:
+						return new[] { $"Usage: property \"<property>\" <{string.Join( "|", PropertyActions )}>." };
+				}
 			}
 			case "train":
 			{
@@ -300,7 +321,8 @@ public static class Operators
 		}
 	}
 
-	private static readonly string[] DoorActions = { "open", "close", "lock", "unlock", "release", "assign" };
+	private static readonly string[] DoorActions = { "open", "close", "lock", "unlock" };
+	private static readonly string[] PropertyActions = { "assign", "release" };
 	private static readonly string[] TrainActions = { "send", "away", "hold", "resume" };
 
 	private static FactionDefinition? Faction( string name ) =>

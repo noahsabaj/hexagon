@@ -49,7 +49,7 @@ $script:nonce = 0
 # short for the moment a request takes to arrive. Reading its own state, or moving its own view, asks
 # the host for nothing.
 $requests = 'create', 'enter', 'leave', 'delete', 'retire', 'say', 'introduce', 'door', 'open', 'take', 'put', 'close',
-    'pickup', 'drop', 'use', 'equip', 'move', 'split', 'merge', 'tune', 'act', 'attack', 'offer', 'offerdoor', 'answer', 'staff',
+    'pickup', 'drop', 'use', 'equip', 'move', 'split', 'merge', 'tune', 'act', 'attack', 'offer', 'offertitle', 'answer', 'staff', 'fit',
     'wear', 'strip', 'item', 'read', 'write', 'fill', 'stamp', 'show', 'closepaper',
     'layout', 'lean', 'standup', 'mapdraw', 'mapword', 'mapwipe', 'mapmove', 'mapmouse'
 $script:allowance = 10.0
@@ -567,12 +567,12 @@ try {
     Expect 'he stands where his body lay' "near=$(Near $state ([int[]] (($lying -split ',')[0..1] + 0))) $state" '^near=True'
     Teleport 'John Doe' $door
 
-    Section 'Owning a door is title; its lock takes its key'
-    [void](Send 'console|hexagon_door "Door 2" assign "John Doe"')
+    Section 'Owning a flat is title; its lock takes its key'
+    [void](Send 'console|hexagon_property "Flat 2" assign "John Doe"')
     [void](Send 'door|Door 2|lock')
     [void](Poll { Send 'journal' } '(?<!\S)verb\.door\.lock!=4(?!\S)')
     $state = Send 'state'
-    Expect 'staff assigned the flat to him' $state 'owned=\[Door 2\]'
+    Expect 'staff assigned the flat to him' $state 'owned=\[Flat 2\]'
     Expect 'but owning it is not holding its key' $state 'Door 2:open=False,locked=True.*You have no key that fits'
     [void](Send 'open|Locker')
     Expect 'a locked locker opens only to a key that fits' { Send 'state' } 'It is locked, and you have no key that fits'
@@ -583,10 +583,10 @@ try {
     [void](Send 'take|Key')
     [void](Send 'door|Door 2|lock')
     [void](Send 'door|Door 2|use')
-    Expect 'the spare key from the locker turned the flat''s lock' { Send 'state' } "Key#$flatCut@2,0.*Door 2:open=True,locked=False.*owned=\[Door 2\]"
+    Expect 'the spare key from the locker turned the flat''s lock' { Send 'state' } "Key#$flatCut@2,0.*Door 2:open=True,locked=False.*owned=\[Flat 2\]"
     Snapshot 'locker'
     [void](Send 'close')
-    [void](Send 'console|hexagon_door "Door 2" release')
+    [void](Send 'console|hexagon_property "Flat 2" release')
     Expect 'staff can take a title back' { Send 'state' } 'owned=\[\]'
 
     Section 'Papers: ink stays, and a stamp makes them official'
@@ -720,8 +720,8 @@ try {
     [void](Send 'panel|none')
     [void](Send 'staff|give "John Doe" radio')
     Expect 'a staff command does what the console command does' { Send 'state' } 'Radio@0,1.*said=\[Gave Radio to John Doe\.\]'
-    [void](Send 'staff|journal door.assign')
-    Expect 'staff can read the journal' { Send 'state' } 'said=\[\d\d:\d\d:\d\d door\.assign by console on Door:\w+ \(owner=John Doe\)'
+    [void](Send 'staff|journal property.assign')
+    Expect 'staff can read the journal' { Send 'state' } 'said=\[\d\d:\d\d:\d\d property\.assign by console on Property:\w+ \(property=Flat 2 owner=John Doe from=Combine Civil Authority\)'
     [void](Send 'staff|journal "REFUSED by John Doe (line=who)"')
     Expect 'including what staff themselves did, refusals too' { Send 'state' } 'staff\.command REFUSED by John Doe \(line=who\)'
     [void](Send "console|hexagon_staff $steamId 0")
@@ -917,7 +917,7 @@ try {
     Expect 'refused uses are on record' $journal '(?<!\S)verb\.door\.use!=5(?!\S)'
     Expect 'and the locker that would not open, and the crate behind a wall' $journal '(?<!\S)verb\.container\.open!=2(?!\S)'
     Expect 'the operator is on record too, appointing him' $journal '(?<!\S)operator\.faction=1(?!\S)'
-    Expect 'and so is what staff did to a door' $journal '(?<!\S)door\.assign=1(?!\S).*(?<!\S)door\.release=1(?!\S)'
+    Expect 'and so is what staff did to a flat''s title' $journal '(?<!\S)property\.assign=1(?!\S).*(?<!\S)property\.release=1(?!\S)'
     Expect 'every character made, and every one refused' $journal '(?<!\S)character\.create=3(?!\S).*(?<!\S)character\.create!=4(?!\S)|(?<!\S)character\.create!=4(?!\S).*(?<!\S)character\.create=3(?!\S)'
     Expect 'the refused deletion and the allowed one' $journal '(?<!\S)character\.delete!=1(?!\S).*(?<!\S)character\.delete=1(?!\S)'
     Expect 'the death, the retirement and the restore' $journal '(?<!\S)character\.death=1(?!\S).*(?<!\S)character\.retire=1(?!\S).*(?<!\S)operator\.restore=1(?!\S)'
