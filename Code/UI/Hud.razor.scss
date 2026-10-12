@@ -238,6 +238,27 @@ Hud {
 	}
 }
 
+// Leaning over a map: a bar at the foot of the screen, which alone takes the mouse; the rest of the
+// screen is the map, reached through the world.
+.leaning {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 24px;
+	justify-content: center;
+	pointer-events: none;
+
+	.bar {
+		width: 560px;
+		padding: 14px 18px;
+		pointer-events: all;
+
+		h1 {
+			margin-bottom: 8px;
+		}
+	}
+}
+
 // A key as the player has it bound, drawn by the engine: a keyboard key or a controller button.
 .prompt {
 	flex-direction: row;

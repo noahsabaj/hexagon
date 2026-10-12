@@ -48,6 +48,15 @@ public static class JournalKinds
 	/// <summary>A sheet held up for someone to read, without letting go of it.</summary>
 	public const string PaperShow = "paper.show";
 
+	/// <summary>A line drawn on a map laid out on a table, in grease pencil.</summary>
+	public const string MapDraw = "map.draw";
+	/// <summary>A word written on a map, with the word.</summary>
+	public const string MapWrite = "map.write";
+	/// <summary>A line or a word wiped off a map.</summary>
+	public const string MapWipe = "map.wipe";
+	/// <summary>One of a map's counters stood on it, moved, or put back in its box.</summary>
+	public const string MapMove = "map.move";
+
 	public const string OfferAccept = "offer.accept";
 	public const string OfferRefuse = "offer.refuse";
 	public const string OfferLapse = "offer.lapse";

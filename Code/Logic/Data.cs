@@ -76,6 +76,49 @@ public sealed class ItemStack
 	public bool Worn { get; set; }
 	/// <summary>What is written on it, if it is paper or a printed form, and the stamps on it. It goes wherever the sheet goes. See <see cref="Papers"/>.</summary>
 	public PaperData? Paper { get; set; }
+	/// <summary>What is drawn on it, if it is a planning map, and where its counters stand. It goes wherever the map goes. See <see cref="Maps"/>.</summary>
+	public MapData? Map { get; set; }
+}
+
+/// <summary>
+/// What is on a planning map: grease pencil, which wipes off, and the counters that came with it. A place
+/// on a map is in thousandths of its width and height, from its top left corner as printed.
+/// </summary>
+public sealed class MapData
+{
+	/// <summary>The lines and words on it, in the order they were put down.</summary>
+	public List<MapMark> Marks { get; set; } = new();
+	/// <summary>The counters standing on it. One that is not here is beside the map, in its box.</summary>
+	public List<MapCounter> Counters { get; set; } = new();
+	/// <summary>The number the next mark is given, so a mark wiped off is never mistaken for one put down later.</summary>
+	public int NextMark { get; set; } = 1;
+
+	public MapData Copy() => new()
+	{
+		Marks = Marks.Select( value => new MapMark { Id = value.Id, Points = new List<int>( value.Points ), Text = value.Text, Ink = value.Ink } ).ToList(),
+		Counters = Counters.Select( value => new MapCounter { Number = value.Number, X = value.X, Y = value.Y } ).ToList(),
+		NextMark = NextMark
+	};
+}
+
+/// <summary>A line drawn on a map, or a word written on it, in the colour of what drew it.</summary>
+public sealed class MapMark
+{
+	public int Id { get; set; }
+	/// <summary>A line's points, x then y, one after another; a word's one point is where it starts.</summary>
+	public List<int> Points { get; set; } = new();
+	/// <summary>The word, or empty for a line.</summary>
+	public string Text { get; set; } = string.Empty;
+	/// <summary>The colour it was drawn in, as <c>#rrggbb</c>.</summary>
+	public string Ink { get; set; } = string.Empty;
+}
+
+/// <summary>A counter standing on a map: which of the map's counters, by its number, and where.</summary>
+public sealed class MapCounter
+{
+	public int Number { get; set; }
+	public int X { get; set; }
+	public int Y { get; set; }
 }
 
 /// <summary>

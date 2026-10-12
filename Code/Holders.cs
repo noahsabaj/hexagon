@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Hexagon.Logic;
 using Sandbox;
 
@@ -228,20 +229,27 @@ public sealed class Corpse : Component, Component.IPressable, Component.INetwork
 /// ordinary transfers and the item is the same object, with the same id, before and after. Whoever
 /// can see it can see what it is; that is appearance. It is sent only to clients near enough to see
 /// it, and what it is only as <see cref="Reveal"/> allows, so each machine gives it its model and its
-/// shape itself, once it knows.
+/// shape itself, once it knows. A map lies flat, printed side up, and what is on it is there for
+/// anyone at the table to see: it was laid out to be looked at. It is marked up by leaning over it.
 /// </summary>
 [Title( "Hexagon World Item" ), Category( "Hexagon" ), Icon( "category" )]
 public sealed class WorldItem : Component, Component.IPressable, Component.INetworkVisible, IVerbTarget
 {
 	private static readonly Verb Take = new( VerbIds.ItemTake, "Pick up" );
+	private static readonly Verb Lean = new( VerbIds.MapLean, "Lean over it" );
+	private static readonly Verb[] Lying = { Take };
+	private static readonly Verb[] LaidOut = { Lean, Take };
 
-	// What it is, sent to all it is sent to once the reveal's hold is over.
+	// What it is, and what is on it if it is a map, sent to all it is sent to once the reveal's hold is over.
 	[Sync( SyncFlags.FromHost )] public bool IsShown { get; set; }
 	[Sync( SyncFlags.FromHost )] public string ShownDefinition { get; set; } = string.Empty;
-	// What it is, as this client was told at once because it could see the place.
+	[Sync( SyncFlags.FromHost )] public string ShownMap { get; set; } = string.Empty;
+	// What it is, and what is on it, as this client was told at once because it could see the place.
 	private string? _toldDefinition;
+	private string? _toldMap;
 	private string? _builtFor;
 	private RealTimeSince _sinceSpawned;
+	private (string Json, MapData? Map) _read = (string.Empty, null);
 
 	/// <summary>Host: the holder this object stands for.</summary>
 	public Guid HolderId { get; private set; }
@@ -250,7 +258,18 @@ public sealed class WorldItem : Component, Component.IPressable, Component.INetw
 	public bool IsRevealed => IsShown || _toldDefinition is not null;
 	public string DefinitionPath => IsShown ? ShownDefinition : _toldDefinition ?? string.Empty;
 	public ItemDefinition? Definition => ItemDefinition.Find( DefinitionPath );
-	public IReadOnlyList<Verb> Verbs { get; } = new[] { Take };
+	public IReadOnlyList<Verb> Verbs => Definition is { IsMap: true } ? LaidOut : Lying;
+
+	/// <summary>What is on the map lying here, as this client knows it, or null for nothing.</summary>
+	public MapData? Map
+	{
+		get
+		{
+			var json = IsShown ? ShownMap : _toldMap ?? string.Empty;
+			if ( _read.Json != json ) _read = (json, json.Length == 0 ? null : JsonSerializer.Deserialize<MapData>( json ));
+			return _read.Map;
+		}
+	}
 
 	/// <summary>Host: puts a ground holder into the world, when it is dropped and again after a restart.</summary>
 	public static WorldItem? Spawn( HolderData holder )
@@ -259,23 +278,39 @@ public sealed class WorldItem : Component, Component.IPressable, Component.INetw
 		// Named for nothing it holds: every client is sent every object's name.
 		var item = new GameObject( true, "Item" );
 		item.WorldPosition = new Vector3( at[0], at[1], at[2] );
+		item.WorldRotation = Rotation.FromYaw( holder.Yaw );
 		item.Tags.Add( "item" );
 		var component = item.AddComponent<WorldItem>();
 		component.HolderId = holder.Id;
 		item.NetworkSpawn( Reveal.Options );
-		component.Tell( stack.Definition );
-		using ( Rpc.FilterInclude( Reveal.Witnesses( item.WorldPosition ) ) ) component.TellWitnesses( stack.Definition );
+		component.Tell( stack.Definition, MapOf( stack ) );
+		using ( Rpc.FilterInclude( Reveal.Witnesses( item.WorldPosition ) ) ) component.TellWitnesses( stack.Definition, MapOf( stack ) );
 		return component;
 	}
 
-	private void Tell( string definition )
+	private static string MapOf( ItemStack stack ) => stack.Map is null ? string.Empty : JsonSerializer.Serialize( stack.Map );
+
+	private void Tell( string definition, string map )
 	{
 		_toldDefinition = definition;
+		_toldMap = map;
 		Build();
 	}
 
 	[Rpc.Broadcast( NetFlags.HostOnly | NetFlags.Reliable )]
-	private void TellWitnesses( string definition ) => Tell( definition );
+	private void TellWitnesses( string definition, string map ) => Tell( definition, map );
+
+	/// <summary>Host: what is on the map lying here changed, and whoever can see it sees the change.</summary>
+	internal void HostShowMap( ItemStack stack )
+	{
+		var map = MapOf( stack );
+		_toldMap = map;
+		if ( IsShown ) ShownMap = map;
+		else using ( Rpc.FilterInclude( Reveal.Witnesses( WorldPosition ) ) ) TellMapWitnesses( map );
+	}
+
+	[Rpc.Broadcast( NetFlags.HostOnly | NetFlags.Reliable )]
+	private void TellMapWitnesses( string map ) => _toldMap = map;
 
 	protected override void OnAwake() => _sinceSpawned = 0;
 
@@ -284,6 +319,7 @@ public sealed class WorldItem : Component, Component.IPressable, Component.INetw
 		if ( !Networking.IsHost || IsShown || _sinceSpawned < Reveal.HoldSeconds ) return;
 		IsShown = true;
 		ShownDefinition = _toldDefinition ?? string.Empty;
+		ShownMap = _toldMap ?? string.Empty;
 	}
 
 	protected override void OnUpdate() => Build();
@@ -298,6 +334,11 @@ public sealed class WorldItem : Component, Component.IPressable, Component.INetw
 		_builtFor = DefinitionPath;
 		var shape = new GameObject( GameObject, true, "Shape" ) { NetworkMode = NetworkMode.Never };
 		var definition = Definition;
+		if ( definition is { IsMap: true } )
+		{
+			UI.MapBoard.Build( shape, this, definition );
+			return;
+		}
 		var renderer = Looks.Show( shape, definition, 0.2f );
 		var collider = shape.AddComponent<BoxCollider>();
 		var bounds = renderer.Model.Bounds;
@@ -316,14 +357,16 @@ public sealed class WorldItem : Component, Component.IPressable, Component.INetw
 		return true;
 	}
 
-	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) =>
-		IsRevealed ? new IPressable.Tooltip( $"Pick up {Definition?.Title ?? "item"}", "category", Definition?.Description ?? string.Empty ) : null;
+	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) => !IsRevealed ? null
+		: Definition is { IsMap: true } map ? new IPressable.Tooltip( $"Lean over the {map.InSentence}", "map", "Mark it up with whoever else is at the table." )
+		: new IPressable.Tooltip( $"Pick up {Definition?.Title ?? "item"}", "category", Definition?.Description ?? string.Empty );
 
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
 		var game = HexagonServices.Current!;
 		if ( game.Holders!.Find( HolderId ) is not { } holder || holder.Inventory.Items.FirstOrDefault() is not { } stack )
 			return Result.Fail( ErrorCode.NotFound, "It is gone." );
+		if ( verb.Id == VerbIds.MapLean ) return actor.HostLean( this );
 		var taken = actor.HostTakeFrom( holder, stack.Id );
 		if ( !taken.Ok ) return taken;
 		game.Holders.Delete( holder.Id );

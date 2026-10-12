@@ -100,6 +100,10 @@
 			{
 				<div class="muted">Read it to write on it, fill it in or stamp it. Writing takes a pen or a pencil, and ink stays.</div>
 			}
+			@if ( SelectedDefinition is { IsMap: true } )
+			{
+				<div class="muted">Lay it out on the table in front of you, then lean over it to mark it up with whoever else is there.</div>
+			}
 			<div class="actions">
 				@if ( SelectedStack is { Worn: true } )
 				{
@@ -119,6 +123,10 @@
 					@if ( SelectedDefinition is { IsPaper: true } )
 					{
 						<button class="primary" onclick=@(() => ReadSelected())>Read</button>
+					}
+					@if ( SelectedDefinition is { IsMap: true } )
+					{
+						<button class="primary" onclick=@(() => ActOnSelected( VerbIds.ItemLayOut ))>Lay out</button>
 					}
 					@if ( SelectedDefinition is { Consumable: true } usable )
 					{

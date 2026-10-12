@@ -150,6 +150,7 @@ public sealed partial class Player
 		else if ( stack.Worn && verbId != VerbIds.ItemWear ) outcome = Result.Fail( ErrorCode.Conflict, Wearing.TakeOffFirst );
 		else if ( verbId == VerbIds.ItemWear && definition?.Wearable is { } wearable ) outcome = Wear( game, stack, wearable );
 		else if ( verbId == VerbIds.ItemDrop ) outcome = Drop( game, stack );
+		else if ( verbId == VerbIds.ItemLayOut && definition is { IsMap: true } ) outcome = LayOut( game, stack );
 		else if ( verbId == VerbIds.ItemUse && definition is { Consumable: true } ) outcome = Consume( game, stack, definition );
 		else if ( verbId == VerbIds.ItemEquip ) outcome = Equip( game, stack );
 		else outcome = Result.Fail( ErrorCode.Invalid, "That cannot be done with it." );
@@ -175,11 +176,42 @@ public sealed partial class Player
 		if ( !tuned.Ok ) Chat.Tell( caller, tuned.Message );
 	}
 
-	private Result Drop( HexagonServices game, ItemStack stack )
+	private Result Drop( HexagonServices game, ItemStack stack ) => Put( game, stack, HostPosition + Vector3.Up * 8f + Vector3.Random.WithZ( 0 ) * 24f, 0f );
+
+	/// <summary>How far in front of a character a map can be laid out.</summary>
+	public const float LayOutReach = 100f;
+
+	/// <summary>
+	/// Lays a map out flat on what is in front of the character, a table or the floor, printed side up
+	/// with its near edge toward it, for anyone there to see and to lean over.
+	/// </summary>
+	private Result LayOut( HexagonServices game, ItemStack stack )
 	{
-		var at = HostPosition + Vector3.Up * 8f + Vector3.Random.WithZ( 0 ) * 24f;
+		if ( Controller is not { } controller ) return Result.Fail( ErrorCode.Internal, "You have no body to lay it out with." );
+		var eye = HostPosition + Vector3.Up * EyeHeight;
+		var facing = controller.EyeAngles.WithPitch( 0f );
+		// On what the character looks down at, within reach, or else on what stands just in front of it.
+		var surface = Flat( eye, eye + controller.EyeAngles.Forward * LayOutReach ) ?? Flat( eye + facing.Forward * 40f, HostPosition + facing.Forward * 40f - Vector3.Up * 16f );
+		if ( surface is not { } at ) return Result.Fail( ErrorCode.Denied, "There is nowhere flat in front of you to lay it out." );
+		return Put( game, stack, at + Vector3.Up * 0.1f, facing.yaw );
+	}
+
+	/// <summary>Host: where a line first meets something flat enough to lay a map on, or null.</summary>
+	private Vector3? Flat( Vector3 from, Vector3 to )
+	{
+		var trace = Scene.Trace.Ray( from, to )
+			.WithoutTags( "player", "item", "corpse", "sleeper" )
+			.IgnoreGameObjectHierarchy( GameObject )
+			.Run();
+		return trace.Hit && !trace.StartedSolid && trace.Normal.z > 0.7f ? trace.HitPosition : null;
+	}
+
+	/// <summary>Host: puts something carried down in the world, lying at a place and turned a way.</summary>
+	private Result Put( HexagonServices game, ItemStack stack, Vector3 at, float yaw )
+	{
 		var ground = game.Holders!.GetOrCreate( Guid.NewGuid(), HolderKinds.Ground, "Ground", 4, 4 );
 		ground.Position = new[] { at.x, at.y, at.z };
+		ground.Yaw = yaw;
 		var moved = HostMove( _character!, ground, stack.Id );
 		if ( moved.Ok ) WorldItem.Spawn( ground );
 		else game.Holders.Delete( ground.Id );

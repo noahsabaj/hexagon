@@ -177,11 +177,11 @@ public sealed class Transfers
 	}
 
 	private static ItemStack Like( ItemStack item, Guid id ) =>
-		new() { Id = id, Definition = item.Definition, Width = item.Width, Height = item.Height, Max = item.Max, Frequency = item.Frequency, Pattern = item.Pattern, Paper = item.Paper?.Copy() };
+		new() { Id = id, Definition = item.Definition, Width = item.Width, Height = item.Height, Max = item.Max, Frequency = item.Frequency, Pattern = item.Pattern, Paper = item.Paper?.Copy(), Map = item.Map?.Copy() };
 
-	/// <summary>Only the same thing piles up: two keys cut differently, or two radios tuned apart, are two things, and a sheet with anything on it is one of a kind.</summary>
+	/// <summary>Only the same thing piles up: two keys cut differently, or two radios tuned apart, are two things, and a sheet or a map with anything on it is one of a kind.</summary>
 	private static bool Alike( ItemStack a, ItemStack b ) =>
-		a.Definition == b.Definition && a.Frequency == b.Frequency && a.Pattern == b.Pattern && a.Paper is null && b.Paper is null;
+		a.Definition == b.Definition && a.Frequency == b.Frequency && a.Pattern == b.Pattern && a.Paper is null && b.Paper is null && a.Map is null && b.Map is null;
 
 	private static void Take( IHolder holder, ItemStack item, int count )
 	{

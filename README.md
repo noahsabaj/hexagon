@@ -77,6 +77,12 @@ itself to.
   what makes a paper official. A sheet is read by whoever holds it, or held up for someone within
   reach to read without letting go of it. A game can give every new character a form in its name,
   stamped by the office that issues it.
+- **Maps.** A planning map is an item printed with a picture, laid out on a table in front of whoever
+  carries it. Leaning over it looks straight down at it, and the mouse works on the map itself: lines
+  and short words in grease pencil, which takes something to write with and which anyone at the table
+  can wipe off, and the counters that come with it, moved by hand onto it and back into their box.
+  Whoever can see the table sees each mark once it is made. What is on a map goes with it when it is
+  picked up, carried, handed over or stolen, and the journal knows whose hand made each mark.
 - **Violence with consequences.** The host judges where a shot lands, on the body's own hitboxes. A
   weapon's wound to an arm or a leg stays until it is treated: a wounded leg limps, and a wounded arm
   drops what it held and holds nothing. Harm puts a character down, never out, unless a weapon made
@@ -90,9 +96,10 @@ itself to.
 - **Staff tools** in game: the console's own commands, journaled under the staff member's name,
   including restoring a character whose death broke the rules.
 - **Persistence.** Characters, what they know and wear, their health and state, what is written on
-  their papers, holders and doors survive a restart. So does the journal. A change to two documents, such as a hand-over,
+  papers and drawn on maps, holders and doors survive a restart. So does the journal. A change to two documents, such as a hand-over,
   is saved as one.
-- **A default HUD**: character menu, chat, inventory, the open holder, verbs, offers, staff panel.
+- **A default HUD**: character menu, chat, inventory, the open holder, verbs, offers, the tools of a
+  map leant over, staff panel.
   In the city it shows only prompts and chat; a prompt draws the key as the player has it bound.
   Items are dragged between cells, piles and holders, and out of the window to drop them. Being hurt shows through the engine's
   post-processing instead of a number: the edges of sight darken and the colour drains, and being
@@ -131,7 +138,7 @@ pwsh tools/verify.ps1
 
 | Part | Where | How it is checked |
 | --- | --- | --- |
-| Rules with no engine in them: names, lives, wounds, inventory grid, transfers, keys, papers, journal, capabilities, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
+| Rules with no engine in them: names, lives, wounds, inventory grid, transfers, keys, papers, maps, journal, capabilities, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
 | Services and components: the city's services, characters, player, sleeper, door, container, chat, operator commands | `Code` | Compiled against the installed engine, warnings as errors |
 | Default HUD | `Code/UI` | Same compile, then looked at in the play test |
 | A whole game on top | a game project | `tools/playtest.ps1` plays it in the real editor; `tools/playtest-server.ps1` plays it as two clients on a dedicated server |

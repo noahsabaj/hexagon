@@ -1,0 +1,66 @@
+@using System
+@using Hexagon.Logic
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* Leaning over a map: what the hands can do with it, and the way back up. The map itself is in the
+   world, under the cursor, and only this bar takes the mouse from it. *@
+<root class="leaning">
+	@if ( Player.Local is { LeaningOver: { } map } player )
+	{
+		<div class="card bar">
+			<h1>@(map.Definition?.Title ?? "Map")</h1>
+			<div class="row">
+				<button class=@Chosen( MapTool.Draw ) onclick=@(() => Choose( MapTool.Draw ))>Draw</button>
+				<button class=@Chosen( MapTool.Write ) onclick=@(() => Choose( MapTool.Write ))>Write</button>
+				<button class=@Chosen( MapTool.Wipe ) onclick=@(() => Choose( MapTool.Wipe ))>Wipe</button>
+				<button onclick=@(() => player.StandUp())>Stand up</button>
+			</div>
+			@if ( MapTools.Tool == MapTool.Write )
+			{
+				<TextEntry Value:bind="@Word" MaxLength="@(Maps.WordLength)" Placeholder="A word, then click where it goes" />
+			}
+			<div class="muted">@Hint</div>
+			<div class="muted">Drag a counter to move it, or off the map to put it back in its box. Escape stands you up.</div>
+		</div>
+	}
+</root>
+
+@code
+{
+	private string Word
+	{
+		get => MapTools.Word;
+		set => MapTools.Word = value ?? string.Empty;
+	}
+
+	private string Hint => MapTools.Tool switch
+	{
+		MapTool.Write => "Type a word, then click on the map where it starts. Writing takes a pen or a pencil.",
+		MapTool.Wipe => "Click a line or a word to wipe it off. Grease pencil leaves nothing behind.",
+		_ => "Drag across the map to draw on it. Drawing takes a pen or a pencil, and wipes off again."
+	};
+
+	private static string Chosen( MapTool tool ) => MapTools.Tool == tool ? "primary" : string.Empty;
+
+	private static void Choose( MapTool tool ) => MapTools.Tool = tool;
+
+	public override void Tick()
+	{
+		base.Tick();
+		if ( Player.Local is not { LeaningOver: not null } player ) return;
+		if ( !Input.EscapePressed ) return;
+		Input.EscapePressed = false;
+		player.StandUp();
+	}
+
+	protected override void OnAfterTreeRender( bool firstTime )
+	{
+		base.OnAfterTreeRender( firstTime );
+		if ( firstTime ) MapTools.Reset();
+	}
+
+	protected override int BuildHash() => HashCode.Combine( Player.Local?.LeaningOver, MapTools.Tool, MapTools.Word.Length == 0 );
+}

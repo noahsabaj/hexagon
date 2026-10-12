@@ -83,6 +83,18 @@ public sealed class ItemDefinition : GameResource
 	/// <summary>The colour of the ink a stamp leaves.</summary>
 	[Property] public Color StampInk { get; set; } = new Color( 0.2f, 0.25f, 0.6f );
 
+	/// <summary>
+	/// It is a planning map, printed with this picture. Laid out on a table, it is marked up by whoever
+	/// leans over it. See <see cref="Maps"/>.
+	/// </summary>
+	[Property, ImageAssetPath] public string? MapImage { get; set; }
+	/// <summary>How big a map is laid out, in world units: its width, and its depth from the near edge to the far.</summary>
+	[Property] public Vector2 MapSize { get; set; } = new Vector2( 36, 24 );
+	/// <summary>The counters that come with a map, in a box beside it, one of each colour listed.</summary>
+	[Property] public List<Color> Counters { get; set; } = new();
+	/// <summary>The colour something to write with marks a map in: a pen's ink, a pencil's lead.</summary>
+	[Property] public Color MapInk { get; set; } = new Color( 0.12f, 0.16f, 0.43f );
+
 	/// <summary>What holding this lets a character do, such as <c>person.restrain</c> for a zip tie.</summary>
 	[Property] public List<string> Grants { get; set; } = new();
 
@@ -94,6 +106,9 @@ public sealed class ItemDefinition : GameResource
 
 	/// <summary>Whether it is a stamp.</summary>
 	public bool IsStamp => StampMark.Length > 0;
+
+	/// <summary>Whether it is a planning map.</summary>
+	public bool IsMap => !string.IsNullOrEmpty( MapImage );
 
 	/// <summary>Whether using it treats anything: a wound, or lost health.</summary>
 	public bool IsTreatment => Consumable && (Heals > 0 || Treats.Count > 0);

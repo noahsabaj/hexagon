@@ -368,6 +368,42 @@ try {
     Expect 'once they part, he can no longer read it' { Send 1 'state' } "paper='' shownby='' lines=\[\] "
     Teleport 2 'Jane Roe' $beside
 
+    Write-Host '==> A map on a table is marked up by whoever stands at it' -ForegroundColor Cyan
+    Teleport 1 'John Doe' (Spot 'Planning table' back 20 8)
+    Teleport 2 'Jane Roe' (Spot 'Planning table' front 20 8)
+    [void](Send 1 'open|Map case')
+    [void](Poll { Send 1 'state' } 'open=\[Map case: City map, Grease pencilx2\]')
+    [void](Send 1 'take|City map')
+    [void](Send 1 'take|Grease pencil')
+    [void](Send 1 'close')
+    [void](Send 1 'face|Planning table|level')
+    # Where he looks reaches the host with his movement, a moment after he turns, and the host lays
+    # the map out where he looks.
+    Start-Sleep -Milliseconds 500
+    [void](Send 1 'layout|City map')
+    Expect 'he lays a map out on the table, and she sees it lying there' { Send 2 'maps' } '^City map@4\d\d,1\d\d,62 leaning=False marks=\[\] counters=\[\]$'
+    [void](Send 1 'lean')
+    [void](Poll { Send 1 'state' } "leaning='City map'")
+    [void](Send 1 'mapdraw|100,200;300,400;500,450')
+    Expect 'he draws on it in grease pencil, and she sees the line' { Send 2 'maps' } 'marks=\[1:line3#B31E17\]'
+    [void](Send 2 'lean')
+    Expect 'she leans over it too, from across the table' { Send 2 'state' } "leaning='City map'"
+    [void](Send 2 'mapmove|3|400|300')
+    Expect 'she stands a counter on it, and he sees it' { Send 1 'maps' } 'counters=\[3@400,300\]'
+    [void](Send 2 'mapword|100|100|Here')
+    Expect 'with nothing to write with, she writes nothing on it' { Send 2 'state' } 'You have nothing to write with\.'
+    Expect 'and her try is on record' { Send 0 'journal|map.write' } "ok=False actor='Jane Roe' .*reason=Denied"
+    [void](Send 2 'mapwipe|1')
+    Expect 'but anyone at the table can wipe grease pencil off' { Send 1 'maps' } 'marks=\[\] counters=\[3@400,300\]'
+    Expect 'and whose hand wiped it is on record' { Send 0 'journal|map.wipe' } "ok=True actor='Jane Roe' .*mark=1"
+    Teleport 2 'Jane Roe' $far
+    Expect 'walking away from the table stands her up' { Send 2 'state' } "leaning='' "
+    [void](Send 1 'standup')
+    [void](Send 1 'open|Map case')
+    [void](Send 1 'put|Grease pencil')
+    Expect 'he puts the grease pencils back, and leaves the map out' { Send 1 'state' } "open=\[Map case: Grease pencilx2\] .*leaning='' "
+    [void](Send 1 'close')
+
     Write-Host '==> Violence is slow, visible and on the record' -ForegroundColor Cyan
     # Out on the open floor past the crate, where she has room to fall. Places are measured from the
     # crate, which never moves: a door turns as it opens, and its back once faced a wall. He stands in
