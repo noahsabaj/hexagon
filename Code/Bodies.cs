@@ -2,6 +2,7 @@
 
 using System.Linq;
 using Sandbox;
+using Sandbox.Physics;
 
 namespace Hexagon;
 
@@ -16,12 +17,17 @@ public readonly record struct Impact( Vector3 Position, Vector3 Direction );
 /// engine's ragdoll (<see cref="ModelPhysics"/>): the host owns it and simulates it, and the engine
 /// sends where its parts are to everyone it is sent to. It falls from the pose of the body it
 /// replaces, so someone shot falls from where they stood, and the shot that put them down pushes it.
-/// A limp body with nothing to take a pose from, after a restart, starts out lying on its back.
+/// A limp body with nothing to take a pose from, after a restart, starts out lying on its back. People
+/// walk through a limp body rather than over it, which is what lets one be dragged or carried by
+/// someone it would otherwise be caught on.
 /// </summary>
 internal static class Bodies
 {
 	/// <summary>How fast a blow pushes the part of a limp body it lands on, in units a second.</summary>
 	public const float Push = 120f;
+
+	/// <summary>The tag a limp body's parts carry, which the capsules people walk with pass through.</summary>
+	public const string Ragdoll = "ragdoll";
 
 	/// <summary>
 	/// Host: the hitboxes a shot is traced against, from the body's own model, on the host alone. A hit
@@ -42,6 +48,7 @@ internal static class Bodies
 	/// </summary>
 	public static SkinnedModelRenderer MakeLimp( GameObject root, string look, SkinnedModelRenderer? from, Impact? impact )
 	{
+		root.Tags.Add( Ragdoll );
 		var renderer = root.AddComponent<SkinnedModelRenderer>();
 		renderer.Model = Looks.ModelOf( look );
 		var physics = root.AddComponent<ModelPhysics>( false );
@@ -83,5 +90,35 @@ internal static class Bodies
 		var rotation = Rotation.From( -90f, yaw, 0f );
 		var middle = model.Bones.GetBone( "pelvis" )?.LocalTransform.Position.z ?? 40f;
 		return new Transform( at + Vector3.Up * 8f - rotation * (Vector3.Up * middle), rotation );
+	}
+
+	/// <summary>Which way a limp body lies, as <see cref="Lying"/> takes it: its head points the other way.</summary>
+	public static float LyingYaw( GameObject body )
+	{
+		if ( body.GetComponent<SkinnedModelRenderer>( includeDisabled: true ) is not { } renderer
+			|| !renderer.TryGetBoneTransform( "head", out var head ) || !renderer.TryGetBoneTransform( "pelvis", out var middle ) )
+			return body.WorldRotation.Yaw();
+		var toward = (head.Position - middle.Position).WithZ( 0f );
+		return toward.Length < 1f ? body.WorldRotation.Yaw() : Rotation.LookAt( -toward ).Yaw();
+	}
+}
+
+/// <summary>Kinds of thing set apart in a scene's physics, by their tags.</summary>
+internal static class Collisions
+{
+	/// <summary>
+	/// Things tagged <paramref name="a"/> and things tagged <paramref name="b"/> pass through each other in
+	/// this scene, on this machine. The rules a world starts with are the project's own, which every scene
+	/// shares, so it is given a copy.
+	/// </summary>
+	public static void Ignore( Scene scene, string a, string b )
+	{
+		var world = scene.PhysicsWorld;
+		if ( world.GetCollisionRule( a, b ) == CollisionRules.Result.Ignore ) return;
+		var rules = new CollisionRules();
+		rules.Deserialize( world.CollisionRules.Serialize().ToJsonString() );
+		rules.Pairs[(a, b)] = CollisionRules.Result.Ignore;
+		rules.Deserialize( rules.Serialize().ToJsonString() );
+		world.CollisionRules = rules;
 	}
 }

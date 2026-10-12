@@ -123,7 +123,10 @@ itself to.
 - **Bodies.** Someone down or dead lies as the engine's ragdoll, and someone down sees from it, on
   the ground. A limp, bound hands, a flinch and hard breathing show on the body and are heard near
   it, never as numbers. A player who leaves while down or bound leaves the character lying, or
-  standing bound, where it was.
+  standing bound, where it was. The dead and the down are dragged by whatever part is taken hold
+  of, slowly and with one hand, or carried over the shoulder at a walk with both; someone standing
+  bound is led by the arm. A truck's bed takes a few bodies, which go wherever the truck goes until
+  someone with its key takes them out.
 - **Restraints and search**, conserving every item.
 - **Staff tools** in game: the console's own commands, journaled under the staff member's name,
   including restoring a character whose death broke the rules.

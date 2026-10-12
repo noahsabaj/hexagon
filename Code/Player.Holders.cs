@@ -147,6 +147,7 @@ public sealed partial class Player
 		var definition = ItemDefinition.Find( stack.Definition );
 		Result outcome;
 		if ( IsIncapable ) outcome = Result.Fail( ErrorCode.Denied, "You cannot do that now." );
+		else if ( !Holds.LeavesAHand( HostHolding ) ) outcome = Result.Fail( ErrorCode.Denied, Holds.HandsFull );
 		else if ( stack.Worn && verbId != VerbIds.ItemWear ) outcome = Result.Fail( ErrorCode.Conflict, Wearing.TakeOffFirst );
 		else if ( verbId == VerbIds.ItemWear && definition?.Wearable is { } wearable ) outcome = Wear( game, stack, wearable );
 		else if ( verbId == VerbIds.ItemDrop ) outcome = Drop( game, stack );

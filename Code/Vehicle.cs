@@ -116,17 +116,7 @@ public sealed class Vehicle : Component, Component.IPressable, IVerbTarget
 	}
 
 	/// <summary>Host: the scene's people are not solid to vehicles as the host simulates it. Their own players still are.</summary>
-	private static void HostIgnorePeople( Scene scene )
-	{
-		var world = scene.PhysicsWorld;
-		if ( world.GetCollisionRule( Tag, "capsule" ) == CollisionRules.Result.Ignore ) return;
-		// A copy: the rules the world starts with are the project's own, which every scene shares.
-		var rules = new CollisionRules();
-		rules.Deserialize( world.CollisionRules.Serialize().ToJsonString() );
-		rules.Pairs[(Tag, "capsule")] = CollisionRules.Result.Ignore;
-		rules.Deserialize( rules.Serialize().ToJsonString() );
-		world.CollisionRules = rules;
-	}
+	private static void HostIgnorePeople( Scene scene ) => Collisions.Ignore( scene, Tag, "capsule" );
 
 	/// <summary>What its boxes make up, in its own space.</summary>
 	private BBox Shape()
@@ -455,7 +445,10 @@ public sealed class Seat : Component, ISitTarget
 
 /// <summary>
 /// The back of a truck, a holder that goes where the truck does, opened by a key cut to the truck's
-/// lock if it has one.
+/// lock if it has one. A few bodies can be laid in it as well, the dead and the down, by whoever has
+/// hold of one and the key. They go wherever the truck goes, out of the world, until someone with the
+/// key takes them out again, onto the ground behind it. Someone down lying in it keeps bleeding, looks
+/// out from its floor, and climbs out the back once they can stand.
 /// </summary>
 [Title( "Hexagon Truck Bed" ), Category( "Hexagon" ), Icon( "inventory_2" )]
 public sealed class Bed : Component, Component.IPressable, IVerbTarget
@@ -463,27 +456,154 @@ public sealed class Bed : Component, Component.IPressable, IVerbTarget
 	[Property] public string Title { get; set; } = "Truck bed";
 	[Property, Range( 1, 10 )] public int Width { get; set; } = 6;
 	[Property, Range( 1, 10 )] public int Height { get; set; } = 4;
+	/// <summary>How many bodies can be laid in it.</summary>
+	[Property, Range( 0, 8 )] public int Room { get; set; } = 2;
 
-	public IReadOnlyList<Verb> Verbs { get; } = new[] { new Verb( VerbIds.BedOpen, "Open" ) };
+	/// <summary>Where the eyes of someone lying in it are, from the bed: low, on its floor.</summary>
+	public static readonly Vector3 Floor = new( 0f, 0f, 28f );
+
+	public IReadOnlyList<Verb> Verbs { get; } = new[]
+	{
+		new Verb( VerbIds.BedOpen, "Open" ),
+		new Verb( VerbIds.BedLay, "Lay them in" ),
+		new Verb( VerbIds.BedUnload, "Take someone out" ),
+	};
 
 	private Vehicle? Vehicle => GameObject.Components.GetInAncestorsOrSelf<Vehicle>();
 
+	/// <summary>The truck bed in the running scene with this id.</summary>
+	internal static Bed? HostFind( Guid id ) =>
+		Game.ActiveScene?.GetAllComponents<Bed>().FirstOrDefault( value => value.GameObject.Id == id );
+
 	bool IPressable.CanPress( IPressable.Event e ) => Player.Local is { IsSeated: false };
 
+	// Use opens it, or, with a body in hand, lays it in.
 	bool IPressable.Press( IPressable.Event e )
 	{
-		Player.Local?.RequestAct( this, VerbIds.BedOpen );
+		if ( Player.Local is { } local ) local.RequestAct( this, Laying( local ) ? VerbIds.BedLay : VerbIds.BedOpen );
 		return true;
 	}
 
-	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e ) =>
-		new IPressable.Tooltip( $"Open the {Title.ToLowerInvariant()}", "inventory_2", Vehicle is { LockPattern.Length: > 0 } ? "It locks with the truck's key." : "What the truck carries." );
+	IPressable.Tooltip? IPressable.GetTooltip( IPressable.Event e )
+	{
+		var locked = Vehicle is { LockPattern.Length: > 0 } ? "It locks with the truck's key." : null;
+		return Player.Local is { } local && Laying( local )
+			? new IPressable.Tooltip( $"Lay them in the {Title.ToLowerInvariant()}", "airline_seat_flat", locked ?? string.Empty )
+			: new IPressable.Tooltip( $"Open the {Title.ToLowerInvariant()}", "inventory_2", locked ?? "What the truck carries." );
+	}
+
+	private static bool Laying( Player local ) => local.Holding is HoldKind.Drag or HoldKind.Carry;
 
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
 		if ( Vehicle is { LockPattern.Length: > 0 } vehicle && !actor.HostHasKey( vehicle.LockPattern ) ) return Result.Fail( ErrorCode.Denied, "It is locked, and you have no key that fits." );
-		actor.HostOpen( this, Holder(), Title );
+		switch ( verb.Id )
+		{
+			case VerbIds.BedLay:
+				return HostLayIn( actor );
+			case VerbIds.BedUnload:
+				return HostTakeOut();
+			default:
+				// Whoever opens it sees who lies in it, as well as what is in it.
+				var lying = HostDown.Count() + HostDead.Count();
+				actor.HostOpen( this, Holder(), lying switch { 0 => Title, 1 => $"{Title}, with someone lying in it", _ => $"{Title}, with {lying} people lying in it" } );
+				return Result.Success();
+		}
+	}
+
+	/// <summary>Host: the down lying in it.</summary>
+	private IEnumerable<CharacterData> HostDown =>
+		HexagonServices.Current?.Roster?.All.Where( value => value.LyingIn == GameObject.Id && !value.IsDead ) ?? Enumerable.Empty<CharacterData>();
+
+	/// <summary>Host: the dead lying in it.</summary>
+	private IEnumerable<HolderData> HostDead =>
+		HexagonServices.Current?.Holders?.OfKind( HolderKinds.Corpse ).Where( value => value.LyingIn == GameObject.Id ) ?? Enumerable.Empty<HolderData>();
+
+	/// <summary>Host: lays the body the actor has hold of in it, out of the world, to go wherever the truck goes.</summary>
+	private Result HostLayIn( Player actor )
+	{
+		if ( HexagonServices.Current is not { Roster: { } roster, Holders: { } holders } ) return Result.Fail( ErrorCode.Internal, "The city is not ready." );
+		var can = Holds.ToLayIn( actor.HostHolding, HostDown.Count() + HostDead.Count(), Room );
+		if ( !can.Ok ) return can;
+		var body = actor.HostHeldBody;
+		actor.HostLetGo( "laid in" );
+		var here = new[] { WorldPosition.x, WorldPosition.y, WorldPosition.z };
+		switch ( body )
+		{
+			case Corpse corpse when holders.Find( corpse.HolderId ) is { } holder:
+				holder.LyingIn = GameObject.Id;
+				holder.Position = here;
+				holders.Save( holder );
+				corpse.GameObject.Destroy();
+				return Result.Success();
+			case Sleeper sleeper when roster.Find( sleeper.CharacterId ) is { IsDown: true, IsDead: false } character:
+				character.LyingIn = GameObject.Id;
+				character.Position = here;
+				roster.Save( character );
+				// The body on the ground is gone: whoever plays it looks out of the bed now.
+				Sleeper.HostRefresh( character );
+				Player.HostRefresh( character );
+				return Result.Success();
+			default:
+				return Result.Fail( ErrorCode.NotFound, "There is nobody there to lay in it." );
+		}
+	}
+
+	/// <summary>Host: takes a body out of it, onto the ground behind the truck: the living first, then the dead.</summary>
+	private Result HostTakeOut()
+	{
+		if ( HexagonServices.Current is not { Roster: { } roster, Holders: { } holders } ) return Result.Fail( ErrorCode.Internal, "The city is not ready." );
+		if ( HostDown.FirstOrDefault() is { } character )
+		{
+			HostPutOut( character, roster );
+			return Result.Success();
+		}
+		if ( HostDead.FirstOrDefault() is not { } holder ) return Result.Fail( ErrorCode.NotFound, Holds.NobodyIn );
+		var at = HostBehind();
+		holder.LyingIn = null;
+		holder.Position = new[] { at.x, at.y, at.z };
+		holder.Yaw = WorldRotation.Yaw();
+		holders.Save( holder );
+		Corpse.Spawn( holder );
 		return Result.Success();
+	}
+
+	/// <summary>Host: someone lying in it is put on the ground behind the truck: lying there if they are down, standing if not.</summary>
+	private void HostPutOut( CharacterData character, CharacterRoster roster )
+	{
+		var at = HostBehind();
+		character.LyingIn = null;
+		character.Position = new[] { at.x, at.y, at.z };
+		roster.Save( character );
+		Player.HostLoaded( character.Id )?.HostTeleport( at );
+		Sleeper.HostLeave( character, new Transform( at, Rotation.FromYaw( WorldRotation.Yaw() ) ) );
+		Player.HostRefresh( character );
+	}
+
+	/// <summary>Host: where a body taken out of it goes: on the ground behind the truck.</summary>
+	internal Vector3 HostBehind()
+	{
+		var vehicle = Vehicle?.GameObject ?? GameObject;
+		var bounds = vehicle.GetBounds();
+		var back = vehicle.WorldRotation.Backward.WithZ( 0f ).Normal;
+		var spot = bounds.Center + back * (MathF.Abs( back.x ) * bounds.Extents.x + MathF.Abs( back.y ) * bounds.Extents.y + 40f);
+		var floor = Scene.Trace.Ray( spot.WithZ( bounds.Maxs.z ), spot.WithZ( bounds.Mins.z - 256f ) )
+			.WithoutTags( "player", "item", "corpse", "sleeper", "ragdoll" )
+			.IgnoreGameObjectHierarchy( vehicle )
+			.Run();
+		return floor.Hit ? floor.HitPosition : spot.WithZ( bounds.Mins.z );
+	}
+
+	/// <summary>Host: time passes for the down lying in it, and whoever can stand again climbs out the back.</summary>
+	protected override void OnFixedUpdate()
+	{
+		if ( !Networking.IsHost || HexagonServices.Current is not { Roster: { } roster, Characters: { } characters } ) return;
+		foreach ( var character in roster.All.Where( value => value.LyingIn == GameObject.Id ).ToArray() )
+		{
+			if ( character.IsDead ) character.LyingIn = null;
+			else if ( !character.IsDown ) HostPutOut( character, roster );
+			else characters.Bleed( character, Time.Delta, WorldPosition );
+		}
 	}
 
 	/// <summary>Host: what it carries.</summary>

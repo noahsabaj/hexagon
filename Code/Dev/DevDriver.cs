@@ -326,6 +326,30 @@ public static class DevCommands
 			tanked.HostSetFuel( double.Parse( args[2], Invariant ) );
 			return "set";
 		}
+		if ( args[0] == "bodies" )
+		{
+			// On the host: where every body is, by name: the dead, those left lying or standing, those lying
+			// in a truck's bed, and who has hold of whom, and how.
+			if ( !Networking.IsHost || HexagonServices.Current is not { Roster: { } roster, Holders: { } holders } ) return "refused: not the host";
+			static string Where( Vector3 at ) => $"{at.x:0},{at.y:0},{at.z:0}";
+			static string InBed( Guid id ) => $"in:{Bed.HostFind( id )?.GameObject.Name ?? "gone"}";
+			string NameOf( Guid? id ) => (id is { } character ? roster.Find( character )?.Name : null) ?? "?";
+			string Who( Component? body ) => body switch
+			{
+				Corpse corpse => $"{NameOf( holders.Find( corpse.HolderId )?.Character )}(dead)",
+				Sleeper sleeper => NameOf( sleeper.CharacterId ),
+				Player pawn => pawn.HostCharacter?.Name ?? "?",
+				_ => "?"
+			};
+			var corpses = Game.ActiveScene.GetAllComponents<Corpse>().ToArray();
+			var dead = holders.OfKind( HolderKinds.Corpse ).Select( value => $"dead:{NameOf( value.Character )}@" + (value.LyingIn is { } bed ? InBed( bed )
+				: corpses.FirstOrDefault( corpse => corpse.HolderId == value.Id ) is { } corpse ? Where( Bodies.GroundPoint( corpse.GameObject ) ) : "nowhere") );
+			var left = Game.ActiveScene.GetAllComponents<Sleeper>().Select( value => $"{(value.IsLimp ? "lying" : "standing")}:{NameOf( value.CharacterId )}@{Where( value.HostGroundPoint )}" );
+			var stowed = roster.All.Where( value => value.LyingIn is not null ).Select( value => $"lying:{value.Name}@{InBed( value.LyingIn!.Value )}" );
+			var holds = Game.ActiveScene.GetAllComponents<Player>().Where( value => value.HostHolding != HoldKind.None )
+				.Select( value => $"hold:{value.HostCharacter?.Name}={value.HostHolding.ToString().ToLowerInvariant()}:{Who( value.HostHeldBody )}" );
+			return string.Join( " ; ", dead.Concat( left ).Concat( stowed ).Concat( holds ) );
+		}
 		if ( args[0] == "mute" )
 		{
 			// Silences this machine for as long as it runs, and saves nothing, as the engine's own mute would:
@@ -436,11 +460,15 @@ public static class DevCommands
 					return "sent camera";
 				case "face":
 					// face|<object> turns this client's character toward the middle of something named, and
-					// face|<object>|level toward it while looking straight ahead.
-					if ( Middle( args[1] ) is not { } middle ) return $"nothing named '{args[1]}'";
+					// face|<x>|<y>|<z> toward a point; either with |level toward it while looking straight ahead.
+					var faced = args.Length > 3 && float.TryParse( args[1], System.Globalization.NumberStyles.Float, Invariant, out var px )
+						&& float.TryParse( args[2], System.Globalization.NumberStyles.Float, Invariant, out var py )
+						&& float.TryParse( args[3], System.Globalization.NumberStyles.Float, Invariant, out var pz )
+							? new Vector3( px, py, pz ) : Middle( args[1] );
+					if ( faced is not { } middle ) return $"nothing named '{args[1]}'";
 					var controller = player.GetComponent<PlayerController>();
 					var facing = Rotation.LookAt( middle - controller.EyePosition ).Angles();
-					controller.EyeAngles = args.Length > 2 && args[2] == "level" ? facing.WithPitch( 0f ) : facing;
+					controller.EyeAngles = args.Contains( "level" ) ? facing.WithPitch( 0f ) : facing;
 					return "sent face";
 				case "tune":
 					var radio = Pick( Carried( player.Inventory ), args[1] );
@@ -502,6 +530,20 @@ public static class DevCommands
 				case "getout":
 					player.LeaveSeat();
 					return "sent getout";
+				case "lay":
+				case "unload":
+					// lay|<bed> lays whoever is in hand in a truck's bed; unload|<bed> takes someone out of it.
+					if ( Game.ActiveScene.GetAllComponents<Bed>().FirstOrDefault( value => value.GameObject.Name == args[1] ) is not { } truckBed ) return "no such bed";
+					player.RequestAct( truckBed, args[0] == "lay" ? VerbIds.BedLay : VerbIds.BedUnload );
+					return $"sent {args[0]}";
+				case "letgo":
+					player.LetGo();
+					return "sent letgo";
+				case "walk":
+					// walk|<forward>|<right>[|run] walks, -1 to 1 each way, as the keys would, until walk|off.
+					player.WalkOverride = args[1] == "off" ? null
+						: (float.Parse( args[1], Invariant ), float.Parse( args[2], Invariant ), args.ElementAtOrDefault( 3 ) == "run");
+					return "walking";
 				case "drive":
 					// drive|<pedal>|<wheel>|<brake> works the controls, -1 to 1, left positive, brake 0 or 1, until drive|off.
 					player.DriveOverride = args[1] == "off" ? null
@@ -531,9 +573,10 @@ public static class DevCommands
 					player.RequestCloseHolder();
 					return "sent close";
 				case "act":
-					// A verb on the nearest other character, on someone left lying where they were, or on a body.
-					Component? subject = args[1].StartsWith( "corpse." )
-						? Game.ActiveScene.GetAllComponents<Corpse>().FirstOrDefault()
+					// A verb on the nearest other character, on someone left lying where they were, or on the
+					// nearest body: act|corpse.search, or act|body.drag|corpse.
+					Component? subject = args[1].StartsWith( "corpse." ) || args.ElementAtOrDefault( 2 ) == "corpse"
+						? Nearest( player, Game.ActiveScene.GetAllComponents<Corpse>() )
 						: Person( player );
 					if ( subject is null ) return "nobody there";
 					player.RequestAct( subject, args[1] );
@@ -668,7 +711,8 @@ public static class DevCommands
 				case "viewshot":
 					// viewshot|<object>|<side>|<distance>|<height>|<looked at>|<height>|<pixels>: what an eye placed as
 					// camera places it sees, rendered by the engine and saved in the game's data as maps/view.jpg.
-					if ( Spot( args ) is not { } from || Middle( args[5] ) is not { } toward ) return "nothing named so";
+					// Either object can be "self", this client's own character.
+					if ( Spot( args ) is not { } from || (args[5] == "self" ? player.WorldPosition : Middle( args[5] )) is not { } toward ) return "nothing named so";
 					var eyeObject = new GameObject( true, "View camera" ) { NetworkMode = NetworkMode.Never };
 					eyeObject.WorldPosition = from;
 					eyeObject.WorldRotation = Rotation.LookAt( toward.WithZ( toward.z + float.Parse( args[6], Invariant ) ) - from );
@@ -728,7 +772,7 @@ public static class DevCommands
 				case "proxies":
 					// What this client was told about everyone else. Names and factions must be empty.
 					return string.Join( " ; ", Game.ActiveScene.GetAllComponents<Player>().Where( value => value.IsProxy )
-						.Select( value => $"down={value.IsDown} restrained={value.IsRestrained} held='{ItemDefinition.Find( value.HeldItemPath )?.Title}' health={value.Health} has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}' rank='{value.RankTitle}' seen='{value.CharacterDescription}' label='{player.LabelFor( value )}' look=[{string.Join( ",", Looks.Pieces( value.Look ) )}] insignia=[{string.Join( ", ", Looks.Insignia( value.Look ) )}] limping={value.IsLimping} breathing={value.IsBreathingHard}" ) );
+						.Select( value => $"down={value.IsDown} restrained={value.IsRestrained} held='{ItemDefinition.Find( value.HeldItemPath )?.Title}' health={value.Health} has={value.HasCharacter} name='{value.CharacterName}' faction='{value.FactionPath}' rank='{value.RankTitle}' seen='{value.CharacterDescription}' label='{player.LabelFor( value )}' look=[{string.Join( ",", Looks.Pieces( value.Look ) )}] insignia=[{string.Join( ", ", Looks.Insignia( value.Look ) )}] limping={value.IsLimping} breathing={value.IsBreathingHard} holding={value.Holding} led={value.LedBy.IsValid()}" ) );
 				case "pawns":
 					// Every pawn this client holds for someone else, including those the network has made
 					// inactive: whether it shows them, and where each was when it was last sent. What is no
@@ -777,6 +821,9 @@ public static class DevCommands
 						$"stamps=[{string.Join( ", ", player.Paper?.Paper.Stamps.Select( value => $"{ItemDefinition.Find( value.Stamp )?.StampMark}@{value.AfterLine}" ) ?? Enumerable.Empty<string>() )}] " +
 						$"leaning='{player.LeaningOver?.Definition?.Title}' working='{player.WorkTitle}' " +
 						$"seated='{player.Seat?.Vehicle?.GameObject.Name}{(player.Seat is { Driver: true } ? ":wheel" : player.Seat is not null ? ":beside" : string.Empty)}' " +
+						// How it has hold of someone, whether someone has it by the arm, the truck bed it lies in, and where it looks out from.
+						$"holding={player.Holding} led={player.LedBy.IsValid()} lyingin='{player.LyingIn?.GameObject.Name}' " +
+						$"eye={(Game.ActiveScene.Camera is { } eyes ? $"{eyes.View.Position.x:0},{eyes.View.Position.y:0},{eyes.View.Position.z:0}" : "none")} " +
 						$"sleepers={Game.ActiveScene.GetAllComponents<Sleeper>().Count( value => value.IsRevealed )} pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";
 				default:
 					return $"unknown command '{args[0]}'";
@@ -839,7 +886,7 @@ public static class DevCommands
 	/// </summary>
 	private static Vector3? Spot( string[] args )
 	{
-		if ( args.Length < 2 || (Named( args[1] ) ?? Drawn( args[1] )?.GameObject) is not { } named ) return null;
+		if ( args.Length < 2 || (args[1] == "self" ? Player.Local?.GameObject : Named( args[1] ) ?? Drawn( args[1] )?.GameObject) is not { } named ) return null;
 		var side = args.ElementAtOrDefault( 2 ) ?? "front";
 		var distance = args.Length > 3 ? float.Parse( args[3], Invariant ) : 30f;
 		var height = args.Length > 4 ? float.Parse( args[4], Invariant ) : 0f;

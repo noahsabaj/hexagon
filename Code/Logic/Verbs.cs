@@ -42,6 +42,13 @@ public static class VerbIds
 	public const string PersonRank = "person.rank";
 	/// <summary>Discharging someone under you from your faction.</summary>
 	public const string PersonDischarge = "person.discharge";
+	/// <summary>Leading someone bound by the arm, at a walk. See <see cref="Holds"/>.</summary>
+	public const string PersonLead = "person.lead";
+
+	/// <summary>Dragging a body on the ground, someone down or dead, by the part taken hold of.</summary>
+	public const string BodyDrag = "body.drag";
+	/// <summary>Carrying a body on the ground over the shoulder, with both hands.</summary>
+	public const string BodyCarry = "body.carry";
 
 	public const string DoorUse = "door.use";
 	public const string DoorLock = "door.lock";
@@ -62,6 +69,10 @@ public static class VerbIds
 	/// <summary>Pouring the fuel in hand into a truck's tank.</summary>
 	public const string VehicleFuel = "vehicle.fuel";
 	public const string BedOpen = "bed.open";
+	/// <summary>Laying the body in hand in a truck's bed, to go where the truck goes.</summary>
+	public const string BedLay = "bed.lay";
+	/// <summary>Taking a body out of a truck's bed, onto the ground behind it.</summary>
+	public const string BedUnload = "bed.unload";
 	public const string CorpseSearch = "corpse.search";
 	/// <summary>Leaning over a map laid out on a table, to mark it up.</summary>
 	public const string MapLean = "map.lean";
@@ -87,10 +98,10 @@ public static class VerbIds
 
 /// <summary>
 /// What can be done to a person, by the state anyone can see them in, whether their player is there or
-/// left them lying. Someone down can be helped up, searched or finished; someone bound searched,
-/// treated, shown a paper or released; anyone else is met, offered something, shown a paper, treated,
-/// enlisted, promoted or discharged by a superior whose rank allows it, or bound by whoever has the
-/// means. Treating takes something in hand that treats; someone down is helped up first.
+/// left them lying. Someone down can be helped up, searched, dragged, carried or finished; someone bound
+/// searched, treated, shown a paper, led by the arm or released; anyone else is met, offered something,
+/// shown a paper, treated, enlisted, promoted or discharged by a superior whose rank allows it, or bound
+/// by whoever has the means. Treating takes something in hand that treats; someone down is helped up first.
 /// </summary>
 public static class PersonVerbs
 {
@@ -98,10 +109,14 @@ public static class PersonVerbs
 	public static IReadOnlyList<Verb> For( bool down, bool restrained, string? finishRequires = null )
 	{
 		if ( down )
-			return new[] { new Verb( VerbIds.PersonRevive, "Help up" ), new Verb( VerbIds.PersonSearch, "Search" ), new Verb( VerbIds.PersonFinish, "Finish", string.IsNullOrEmpty( finishRequires ) ? null : finishRequires ) };
+			return new[]
+			{
+				new Verb( VerbIds.PersonRevive, "Help up" ), new Verb( VerbIds.PersonSearch, "Search" ), BodyVerbs.Drag, BodyVerbs.Carry,
+				new Verb( VerbIds.PersonFinish, "Finish", string.IsNullOrEmpty( finishRequires ) ? null : finishRequires )
+			};
 		var treat = new Verb( VerbIds.PersonTreat, "Treat" );
 		var show = new Verb( VerbIds.PersonShow, "Show a paper" );
-		if ( restrained ) return new[] { new Verb( VerbIds.PersonSearch, "Search" ), treat, show, new Verb( VerbIds.PersonRelease, "Release" ) };
+		if ( restrained ) return new[] { new Verb( VerbIds.PersonSearch, "Search" ), treat, show, new Verb( VerbIds.PersonLead, "Lead by the arm" ), new Verb( VerbIds.PersonRelease, "Release" ) };
 		return new[]
 		{
 			new Verb( VerbIds.PersonIntroduce, "Introduce yourself" ), new Verb( VerbIds.PersonOffer, "Offer something" ), show, treat,
@@ -109,4 +124,11 @@ public static class PersonVerbs
 			new Verb( VerbIds.PersonDischarge, "Discharge", Rank: RankPower.Discharge ), new Verb( VerbIds.PersonRestrain, "Restrain", Capability.Restrain )
 		};
 	}
+}
+
+/// <summary>What is done to a body on the ground, someone down or dead, to move it. See <see cref="Holds"/>.</summary>
+public static class BodyVerbs
+{
+	public static readonly Verb Drag = new( VerbIds.BodyDrag, "Drag" );
+	public static readonly Verb Carry = new( VerbIds.BodyCarry, "Carry over the shoulder" );
 }

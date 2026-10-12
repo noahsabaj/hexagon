@@ -116,6 +116,42 @@ Helped up, they stand where it lies. What anyone near notices is shown by the bo
 a blow lands, and the hard breathing of someone badly hurt or down, which they and anyone close hear.
 The breathing is a game's own sound (`BreathingSound`); Hexagon ships none.
 
+## A body is moved by hand
+
+The dead and the down are dragged, by whatever part is taken hold of, or carried over the shoulder.
+Someone standing bound is led by the arm. Dragging is slow, at the pace of a limp, and takes one hand,
+so the other can still hold a pistol or open a door. Carrying is at a walk, never a run, and takes
+both, so nothing else is held, drawn or done until they are put down, though a shoulder still pushes
+a door open. Leading is at a walk, with one.
+One pair of hands holds one body, and a body someone has hold of is theirs to let go of.
+
+The host holds a limp body to the mover's hands as the engine's own editor holds what it grabs: a
+keyframed body goes where the hands are, jointed to the part taken hold of by a spring, so the body
+follows as physics lets it and catches on what it passes. Everyone it is sent to sees its parts where
+the host has them. Someone led is walked toward the leading hand by their own client, whose keys no
+longer move them, and is pulled there if they fall too far behind. A body left standing bound is
+walked by the host, along the floor and no further than a wall lets it.
+
+Whatever stops the mover lets go: going down, being bound, sitting down, leaning over a map, working,
+leaving, or taking something in hand while carrying. So does the body catching on something the hands
+walked on past, or no longer being as it was taken, helped up or freed. Use, with nothing in front of
+the hands to press, lets go. Each letting go is on the record, with how the body was held, why it was
+let go and how far it came, and where it was left is kept with it.
+
+People walk through limp bodies, on every machine, rather than over them: a body at one's feet or on
+one's shoulder would otherwise push its mover about, or be floor under them. Someone down looks out
+of their body wherever it is taken, and their pawn is brought along after it, so they are sent what
+is near it. Nobody is told anything. Whoever can see the mover sees their hands on the body, placed
+by the engine's hand IK, and sees someone led walk.
+
+A truck's bed takes a few bodies, the dead and the down, laid in it by whoever has hold of one and the
+truck's key. While they lie there they are out of the world, kept as lying in that bed, and they go
+wherever the truck goes until someone with the key takes them out onto the ground behind it, the
+living first. Whoever opens the bed sees that someone lies in it. Someone down in it keeps bleeding,
+looks out from its floor in the dark, and climbs out the back once they can stand. Someone who dies in
+it stays in it, as a body. A restart keeps them there; if the city no longer has the bed, they lie
+where they were laid in it.
+
 ## Leaving does not end a scene
 
 A character's body is a `Sleeper` whenever its pawn does not carry it: limp on the ground while it is
@@ -475,7 +511,8 @@ one of its own: the engine lets a client put its pawn only under an object that 
 object of its own, or one it controls, as with the engine's own chairs. Getting out is to the ground
 beside the seat, or on the other side, behind or in front, wherever there is room, and is on the
 record. Someone put down, killed, bound, moved by staff or leaving the city gets out first, so
-nobody lies inside a truck or is saved sitting in one.
+nobody lies in a seat or is saved sitting in one. A body is laid in a truck's bed instead (see
+"A body is moved by hand").
 
 The host's truck goes through people: a person is moved by their own player, and against their body
 as the host has it, which only follows them, a truck would stop dead. Their own client still has
@@ -700,7 +737,11 @@ city it left wrong.
   harder to hit than they look.
 - A ragdoll is announced with its model, the citizen or a human skin, to every client, before the
   reveal's hold. A client far away can learn which kind of body lies somewhere, though not whose.
-- Bodies cannot be dragged yet; that comes with stealth.
+- A body carried over the shoulder hangs where its spring and its joints let it, which has been
+  looked at in numbers, not in pictures. Hands holding a body are placed on it, but the arm is not
+  posed to match.
+- The back of a truck is a closed box drawn from outside, so someone lying in it sees the world
+  through its walls, darkened, rather than the inside of the box.
 - A truck is Facepunch's two development models, drawn in the engine's tintable white and squeezed
   to a truck's size; the back is a tanker standing in for a bed. Its wheels are part of the model,
   so they neither turn nor spin, and its cab has no inside.

@@ -83,8 +83,8 @@ public sealed class DecisionTests
 		Assert.AreEqual( RankPower.Enlist, PersonVerbs.For( false, false ).Single( verb => verb.Id == VerbIds.PersonEnlist ).Rank, "only a superior is offered it" );
 		Assert.AreEqual( RankPower.Promote, PersonVerbs.For( false, false ).Single( verb => verb.Id == VerbIds.PersonRank ).Rank );
 		Assert.AreEqual( RankPower.Discharge, PersonVerbs.For( false, false ).Single( verb => verb.Id == VerbIds.PersonDischarge ).Rank );
-		CollectionAssert.AreEqual( new[] { VerbIds.PersonSearch, VerbIds.PersonTreat, VerbIds.PersonShow, VerbIds.PersonRelease }, Ids( false, true ) );
-		CollectionAssert.AreEqual( new[] { VerbIds.PersonRevive, VerbIds.PersonSearch, VerbIds.PersonFinish }, Ids( true, true ), "down outweighs bound" );
+		CollectionAssert.AreEqual( new[] { VerbIds.PersonSearch, VerbIds.PersonTreat, VerbIds.PersonShow, VerbIds.PersonLead, VerbIds.PersonRelease }, Ids( false, true ) );
+		CollectionAssert.AreEqual( new[] { VerbIds.PersonRevive, VerbIds.PersonSearch, VerbIds.BodyDrag, VerbIds.BodyCarry, VerbIds.PersonFinish }, Ids( true, true ), "down outweighs bound" );
 
 		Assert.AreEqual( Capability.Restrain, PersonVerbs.For( false, false ).Single( verb => verb.Id == VerbIds.PersonRestrain ).Requires );
 		Assert.IsNull( PersonVerbs.For( true, false, "" ).Single( verb => verb.Id == VerbIds.PersonFinish ).Requires, "a game that asks nothing lets anyone finish" );

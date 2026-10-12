@@ -43,8 +43,9 @@ name before it runs, and every line typed at the console is journaled as the con
 `journal [text] [count] [days]` in the staff panel shows the latest entries containing the text,
 from the last two days unless given more, up to fourteen. Useful searches: a character's name,
 `REFUSED`, `request.forged`, `combat.attack`, `character.death`, `item.move`, `offer.accept`,
-`property.assign`. Each entry says who, what, to whom, where, whether it was allowed, and who was
-close enough to witness it, by the names they had then. Times are UTC. The files are
+`property.assign`, `hold.letgo` (where a body was moved to, how it was held and how far it came).
+Each entry says who, what, to whom, where, whether it was allowed, and who was close enough to
+witness it, by the names they had then. Times are UTC. The files are
 `journal/<date>.jsonl` in the data folder, one JSON object per line and one file per UTC day, and
 can be read while the server runs.
 
@@ -63,7 +64,8 @@ Stop the server with Ctrl+C or by closing it, and start it again with the same d
 what is in hand and worn, inventories, crates, bodies, dropped items, and doors and their owners
 all return. Characters come back where they stood. Players rejoin and pick their character again.
 Someone who was down or bound when it stopped is back where they were, lying or standing bound,
-until their player returns, and can be helped up, freed or searched meanwhile.
+until their player returns, and can be helped up, freed or searched meanwhile. **Not yet checked:**
+that someone lying in the back of a truck, alive or dead, is still lying in it after a restart.
 
 The city saves every 60 seconds (`AutosaveSeconds`) and again as it closes. **Not yet checked:**
 whether Ctrl+C on a dedicated server gives it that last chance. Until it has been seen to, at most

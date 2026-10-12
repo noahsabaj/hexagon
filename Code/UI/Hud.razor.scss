@@ -287,6 +287,21 @@ Hud {
 	}
 }
 
+// Moving someone, or being moved: how, and the way to let go, small at the foot of the screen.
+.holding {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 24px;
+	justify-content: center;
+	pointer-events: none;
+
+	.bar {
+		width: 360px;
+		padding: 10px 14px;
+	}
+}
+
 // At work: a bar above the foot of the screen, filling as the work goes on.
 .working {
 	position: absolute;

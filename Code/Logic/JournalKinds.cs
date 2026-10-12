@@ -86,6 +86,9 @@ public static class JournalKinds
 	/// <summary>A truck struck someone at speed, under whoever was at its wheel.</summary>
 	public const string VehicleStrike = "vehicle.strike";
 
+	/// <summary>Someone let go of a body they were dragging or carrying, or of someone they were leading: how, why, and how far it had come.</summary>
+	public const string HoldLetGo = "hold.letgo";
+
 	/// <summary>Asked for faster than the budget allows.</summary>
 	public const string RequestLimited = "request.limited";
 	/// <summary>Sent in the name of someone else's pawn.</summary>

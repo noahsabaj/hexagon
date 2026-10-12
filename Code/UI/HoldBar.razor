@@ -1,0 +1,30 @@
+@using System
+@using Sandbox
+@using Sandbox.UI
+@namespace Hexagon.UI
+@inherits Panel
+
+@* Moving someone, or being moved: how they are held and the way to let go, or that someone has hold
+   of this character by the arm, which is why its legs are not its own. *@
+<root class="holding">
+	@if ( Player.Local is { } player && Line( player ) is { } line )
+	{
+		<div class="card bar">
+			<h1>@line.Title</h1>
+			<div class="muted">@line.Hint</div>
+		</div>
+	}
+</root>
+
+@code
+{
+	private static (string Title, string Hint)? Line( Player player ) => player.Holding switch
+	{
+		Hexagon.Logic.HoldKind.Drag => ("Dragging them along", "Slowly, with one hand. Use lets go."),
+		Hexagon.Logic.HoldKind.Carry => ("Carrying them over your shoulder", "At a walk, with both hands. Use lets go."),
+		Hexagon.Logic.HoldKind.Lead => ("Leading them by the arm", "At a walk, with one hand. Use lets go."),
+		_ => player.LedBy.IsValid() ? ("Someone has you by the arm", "You go where you are led.") : null
+	};
+
+	protected override int BuildHash() => HashCode.Combine( Player.Local?.Holding, Player.Local?.LedBy );
+}

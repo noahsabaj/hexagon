@@ -180,6 +180,11 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 			// Statics outlive a session in the editor, so a new one starts with a clean log.
 			Chat.Clear();
 		}
+		// On every machine, as each simulates its own: people walk through the limp, which is how they are moved.
+		// The capsule passes through, and so do the controller's traces for the ground and for steps, which go
+		// by the pawn's own tags: otherwise a body carried on the shoulder would be floor under its mover.
+		Collisions.Ignore( Scene, Bodies.Ragdoll, "capsule" );
+		Collisions.Ignore( Scene, Bodies.Ragdoll, "player" );
 		if ( Controller is { } controller )
 		{
 			_speeds = (controller.WalkSpeed, controller.RunSpeed, controller.DuckedSpeed, controller.JumpSpeed);
@@ -207,6 +212,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		ApplyAppearance();
 		if ( IsProxy || !HasCharacter ) return;
 		DriveTick();
+		LetGoTick();
 		// "Use" reaches a target's first verb through IPressable. Everything else it offers is chosen
 		// from a menu, by name: nothing that hands something over or binds someone hangs off a bare key.
 		if ( UiBusy ) return;
@@ -232,6 +238,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 
 	protected override void OnFixedUpdate()
 	{
+		if ( !IsProxy ) WalkTick();
 		if ( !Networking.IsHost ) return;
 		Pulse = (int)(Time.Now * 2f);
 		HostTellObservers();
@@ -241,8 +248,11 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		HostPaperTick();
 		HostLeanTick();
 		HostWorkTick();
-		// Sitting, it goes where its seat goes, and its owner has no say in it.
+		HostHoldTick();
+		// Sitting, it goes where its seat goes, and lying in the back of a truck, where the truck goes:
+		// its owner has no say in either.
 		if ( _seat is not null ) HostSeatTick();
+		else if ( HostLyingIn is { } bed ) HostFollow( bed.WorldPosition );
 		else HostAuditMovement( controller );
 	}
 
@@ -253,9 +263,12 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	/// </summary>
 	private void HostAuditMovement( PlayerController controller )
 	{
-		// The speeds the character was made with. Limping, it is held to a walk once its owner has had time to slow.
+		// The speeds the character was made with. Limping, it is held to a walk once its owner has had time to
+		// slow, and holding someone, to the pace it holds them at.
 		var limping = IsLimping && _sinceLimping > LimpGrace;
-		var limit = (limping ? LimpSpeed : MathF.Max( _speeds.Run, _speeds.Walk )) * SpeedTolerance;
+		var pace = limping ? LimpSpeed : MathF.Max( _speeds.Run, _speeds.Walk );
+		if ( _hold is { } hold && hold.Since > Holds.Grace ) pace = MathF.Min( pace, HoldPace );
+		var limit = pace * SpeedTolerance;
 		// A fall is judged by the gravity the world has, which a scene may set, not by the engine's default.
 		_movement.Gravity = MathF.Abs( Scene.PhysicsWorld.Gravity.z );
 		var claimed = WorldPosition;
@@ -404,9 +417,9 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		// Sitting, Use gets out, and nothing in reach is pressed.
 		controller.EnablePressing = !seated;
 		if ( controller.Body.IsValid() ) controller.Body.MotionEnabled = !IsDown;
-		// Leaning over a map, the hands and eyes are on the map.
+		// Leaning over a map, the hands and eyes are on the map. Led by the arm, the legs go where they are taken.
 		var leaning = LeaningOver.IsValid();
-		controller.UseInputControls = HasCharacter && !IsDown && !leaning;
+		controller.UseInputControls = HasCharacter && !IsDown && !leaning && !Walked;
 		controller.UseLookControls = HasCharacter && !leaning;
 		controller.UseCameraControls = HasCharacter;
 		// The mouse reaches a map through the camera, and only while leaning over one.
@@ -415,11 +428,13 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 			if ( leaning ) camera.AddComponent<WorldInput>();
 			else input!.Destroy();
 		}
-		// A wounded leg walks, slowly, and neither runs nor jumps.
-		controller.WalkSpeed = IsLimping ? MathF.Min( LimpSpeed, _speeds.Walk ) : _speeds.Walk;
-		controller.RunSpeed = IsLimping ? controller.WalkSpeed : _speeds.Run;
-		controller.DuckedSpeed = IsLimping ? MathF.Min( controller.WalkSpeed, _speeds.Ducked ) : _speeds.Ducked;
-		controller.JumpSpeed = IsLimping || seated ? 0f : _speeds.Jump;
+		// A wounded leg walks, slowly, and neither runs nor jumps. Nor does anyone holding someone, who goes
+		// at the pace they hold them at.
+		var pace = HoldPace;
+		controller.WalkSpeed = MathF.Min( IsLimping ? MathF.Min( LimpSpeed, _speeds.Walk ) : _speeds.Walk, pace );
+		controller.RunSpeed = MathF.Min( IsLimping ? controller.WalkSpeed : _speeds.Run, pace );
+		controller.DuckedSpeed = MathF.Min( IsLimping ? MathF.Min( controller.WalkSpeed, _speeds.Ducked ) : _speeds.Ducked, pace );
+		controller.JumpSpeed = IsLimping || seated || Holding != HoldKind.None ? 0f : _speeds.Jump;
 	}
 
 	// After the controller's own view, before anything that holds the camera for a test.
@@ -427,7 +442,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 
 	/// <summary>
 	/// Owner: someone leaning over a map looks straight down at it. Someone down sees from their body's
-	/// eyes, on the ground, and can still look about.
+	/// eyes, on the ground, and can still look about; lying in the back of a truck, from the floor of it.
 	/// </summary>
 	void ICameraModifier.ModifyCamera( CameraComponent camera, ref CameraView view )
 	{
@@ -438,6 +453,13 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 			return;
 		}
 		if ( !IsDown || Controller is not { } controller ) return;
+		if ( LyingIn is { } bed && bed.IsValid() )
+		{
+			view.Position = bed.WorldTransform.PointToWorld( Bed.Floor );
+			view.Rotation = bed.WorldRotation * controller.EyeAngles.ToRotation();
+			view.ZNear = MathF.Min( view.ZNear, 1f );
+			return;
+		}
 		if ( Sleeper.Find( CharacterId ) is not { IsLimp: true, Renderer: { } body } || body.GetAttachment( "eyes" ) is not { } eyes ) return;
 		view.Position = eyes.Position;
 		view.Rotation = controller.EyeAngles.ToRotation();

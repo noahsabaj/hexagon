@@ -187,6 +187,7 @@ public sealed partial class Player
 	/// <summary>Host: the character stops being in the city. The pawn stays, back in the menu.</summary>
 	private void HostUnload()
 	{
+		HostLetGo( "left" );
 		HostLeaveSeat();
 		HostClose();
 		HostStopShown( close: true );
@@ -281,12 +282,21 @@ public sealed partial class Player
 		}
 
 		var subject = actable.JournalSubject ?? $"{target.GetType().Name}:{target.GameObject.Id:N}";
-		var outcome = IsIncapable ? Result.Fail( ErrorCode.Denied, "You cannot do that now." ) : Judge( target, actable, verb );
+		var outcome = IsIncapable ? Result.Fail( ErrorCode.Denied, "You cannot do that now." )
+			: HostHandsFull( verb ) ? Result.Fail( ErrorCode.Denied, Holds.HandsFull )
+			: Judge( target, actable, verb );
 		if ( outcome.Ok ) outcome = perform( actable, verb );
 		HostRecord( JournalKinds.Verb( verb.Id ), subject, outcome.Ok,
 			new[] { ("target", target.GameObject.Name) }.Concat( more ).Append( ("reason", outcome.Code.ToString()) ).ToArray() );
 		if ( !outcome.Ok ) Chat.Tell( caller, outcome.Message );
 	}
+
+	/// <summary>
+	/// Host: whether carrying someone leaves no hand for this. A shoulder still pushes a door open, and the
+	/// body is laid down with the hands that hold it.
+	/// </summary>
+	private bool HostHandsFull( Verb verb ) =>
+		!Holds.LeavesAHand( HostHolding ) && verb.Id is not (VerbIds.DoorUse or VerbIds.BedLay);
 
 	private Result Judge( Component target, IVerbTarget actable, Verb verb )
 	{

@@ -276,6 +276,9 @@ public sealed class CharacterService
 		var loaded = Loaded( character );
 		// Someone dying in a vehicle falls out of it, and lies beside it.
 		if ( loaded?.HostLeaveSeat() is { } outside ) at = outside;
+		// Someone dying in a truck's bed stays lying in it, as a body.
+		var lyingIn = character.LyingIn;
+		character.LyingIn = null;
 		// The body it dies in is the one that falls, before anything is taken from it.
 		var from = BodyOf( character )?.Renderer;
 		loaded?.HostClose();
@@ -298,7 +301,7 @@ public sealed class CharacterService
 			character.Position = new[] { spawn.x, spawn.y, spawn.z };
 		}
 		// The body is saved with the death, as one change: a crash keeps both or neither.
-		if ( _game.DeathDropsBelongings && character.Inventory.Items.Count > 0 ) LeaveBody( character, at, from, impact );
+		if ( _game.DeathDropsBelongings && character.Inventory.Items.Count > 0 ) LeaveBody( character, at, from, impact, lyingIn );
 		if ( permanent )
 		{
 			// Whatever no body took leaves the world on the record, not by vanishing with the character.
@@ -314,25 +317,26 @@ public sealed class CharacterService
 	/// <summary>
 	/// What the character carried stays where it fell, in a holder like any other. The body is the
 	/// size of the inventory and every pile keeps its place, so all of it goes: nothing is left on
-	/// someone who has died.
+	/// someone who has died. One that died lying in a truck's bed lies there still, out of the world.
 	/// </summary>
-	private void LeaveBody( CharacterData character, Vector3 at, SkinnedModelRenderer? from, Impact? impact )
+	private void LeaveBody( CharacterData character, Vector3 at, SkinnedModelRenderer? from, Impact? impact, Guid? lyingIn )
 	{
 		var body = _game.Holders!.GetOrCreate( Guid.NewGuid(), HolderKinds.Corpse, "Body", character.Inventory.Width, character.Inventory.Height );
 		body.Position = new[] { at.x, at.y, at.z };
+		body.LyingIn = lyingIn;
 		body.Character = character.Id;
 		var moved = _game.Transfers!.MoveAll( character, body, Actor.Of( character ) );
 		if ( !moved.Ok ) Log.Warning( $"[death] {character.HolderLabel} kept some of what it carried: {moved.Message}" );
 		// The body still wears what the character wore.
 		body.Look = LookOf( body );
 		_game.SaveTogether( character, body );
-		Corpse.Spawn( body, from, impact );
+		if ( lyingIn is null ) Corpse.Spawn( body, from, impact );
 	}
 
 	/// <summary>
-	/// Staff undo a death that broke the rules. The character gets up where its body lies, or where
-	/// it fell if it left none, with whatever is still on the body. Anything already taken from it is
-	/// for staff to move back.
+	/// Staff undo a death that broke the rules. The character gets up where its body lies, or behind
+	/// the truck whose bed it lies in, or where it fell if it left none, with whatever is still on the
+	/// body. Anything already taken from it is for staff to move back.
 	/// </summary>
 	public Result Restore( CharacterData character, Actor by )
 	{
@@ -340,8 +344,16 @@ public sealed class CharacterService
 		if ( !restored.Ok ) return restored;
 		if ( _game.Holders!.BodyOf( character.Id ) is { } body )
 		{
-			Corpse.HostKeepPosition( body );
-			if ( body.Position is { Length: 3 } lying ) character.Position = lying;
+			if ( body.LyingIn is { } bedId && Bed.HostFind( bedId ) is { } bed )
+			{
+				var behind = bed.HostBehind();
+				character.Position = new[] { behind.x, behind.y, behind.z };
+			}
+			else
+			{
+				Corpse.HostKeepPosition( body );
+				if ( body.Position is { Length: 3 } lying ) character.Position = lying;
+			}
 			var taken = _game.Transfers!.MoveAll( body, character, by );
 			if ( !taken.Ok ) Log.Warning( $"[restore] {character.HolderLabel} could not take back all of its body: {taken.Message}" );
 			_game.SaveTogether( character, body );
