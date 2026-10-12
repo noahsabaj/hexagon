@@ -26,6 +26,10 @@ public sealed class CharacterService
 	/// <summary>The character's player, if it is in the city.</summary>
 	private static Player? Loaded( CharacterData character ) => Player.HostLoaded( character.Id );
 
+	/// <summary>What carries the character in the world now: a body of its own, lying or standing, or else its pawn. Null when nothing does.</summary>
+	private static IEmbodiment? BodyOf( CharacterData character ) =>
+		(IEmbodiment?)Sleeper.Find( character.Id ) ?? Loaded( character );
+
 	/// <summary>Tells the character's player something, if they are here to be told.</summary>
 	public void Tell( CharacterData character, string message )
 	{
@@ -42,31 +46,82 @@ public sealed class CharacterService
 		else Roster.Save( character );
 	}
 
-	/// <summary>Harm, at a place, from someone or from nothing. Harm alone never kills; at no health the character goes down.</summary>
-	public void Damage( CharacterData character, int amount, CharacterData? by, string cause, Vector3 at )
+	/// <summary>
+	/// Harm, at a place on the body, from someone or from nothing. A weapon wounds an arm or a leg, and
+	/// a wounded arm drops what it held. A weapon made to kill, to the head, kills. Otherwise harm never
+	/// kills: at no health the character goes down, and its body falls limp from where it stood.
+	/// </summary>
+	public void Damage( CharacterData character, Blow blow, CharacterData? by, string cause, Vector3 at, Impact? impact = null )
 	{
-		var harm = Vitals.Damage( character, amount );
-		if ( harm == Harm.None ) return;
-		// Whoever goes down lets go of what was in hand, and stays down, where they fell, after a restart.
-		if ( harm == Harm.Downed ) character.Equipped = null;
-		Save( character );
-		if ( harm == Harm.Downed )
+		var struck = Vitals.Strike( character, blow );
+		if ( struck.Harm == Harm.None ) return;
+		if ( struck.Harm == Harm.Killed )
 		{
-			Loaded( character )?.HostClose();
-			Player.HostRecordAt( JournalKinds.CharacterDowned, Actor.Of( character ), at, by?.HolderLabel, data: new[] { ("cause", cause) } );
-			Tell( character, "You are down. Someone may help you up, or not." );
+			Die( character, at, cause, by, blow.Place, impact );
+			return;
 		}
+		var loaded = Loaded( character );
+		if ( struck.Wound is { } wound )
+		{
+			Player.HostRecordAt( JournalKinds.CharacterWounded, Actor.Of( character ), at, by?.HolderLabel, data: new[] { ("place", wound), ("cause", cause) } );
+			Tell( character, $"You are hit in the {wound}." );
+			// What a wounded arm held falls to the ground, where anyone may pick it up.
+			if ( Places.KindOf( wound ) == Places.Arm ) loaded?.HostDropHeld();
+		}
+		// Whoever goes down lets go of what was in hand, and stays down, where they fell, after a restart.
+		if ( struck.Harm == Harm.Downed ) character.Equipped = null;
+		Save( character );
+		var body = BodyOf( character );
+		if ( struck.Harm == Harm.Downed )
+		{
+			loaded?.HostClose();
+			Player.HostRecordAt( JournalKinds.CharacterDowned, Actor.Of( character ), at, by?.HolderLabel, data: new[] { ("cause", cause), ("place", blow.Place) } );
+			Tell( character, "You are down. Someone may help you up, or not." );
+			var from = body?.Renderer;
+			Sleeper.HostFall( character, from, new Transform( body?.HostPosition ?? at, Rotation.FromYaw( from?.WorldRotation.Yaw() ?? 0f ) ), impact );
+		}
+		else if ( impact is { } blowAt && (body as Component)?.GetComponent<BodyCues>() is { } cues )
+			cues.Flinch( blowAt.Position, blowAt.Direction, Math.Clamp( blow.Amount / 40f, 0.2f, 1f ) );
 		Changed( character );
 	}
 
+	/// <summary>Helped up, the character stands where its body lies, wounds and all.</summary>
 	public Result Revive( CharacterData character )
 	{
+		var standsAt = Sleeper.Find( character.Id ) is { IsLimp: true } body ? body.HostGroundPoint : (Vector3?)null;
 		var revived = Vitals.Revive( character );
 		if ( !revived.Ok ) return revived;
-		Roster.Save( character );
+		if ( standsAt is { } at )
+		{
+			if ( Loaded( character ) is { } player ) player.HostTeleport( at );
+			else character.Position = new[] { at.x, at.y, at.z };
+		}
+		Save( character );
 		Changed( character );
 		Tell( character, "You are back on your feet, barely." );
 		return revived;
+	}
+
+	/// <summary>
+	/// Someone treats a character with something they carry, which is used up: on themselves, or on
+	/// someone else from their hand. It closes one wound of the kinds it treats, the oldest first, and
+	/// gives back the health it heals. On someone it can do nothing for, it is not used up.
+	/// </summary>
+	public Result Treat( CharacterData patient, CharacterData medic, ItemStack item, ItemDefinition definition )
+	{
+		var treated = Vitals.Treat( patient, definition.Treats, definition.Heals );
+		if ( !treated.Ok ) return treated.ToResult();
+		var used = _game.Transfers!.Destroy( Sinks.Consumed, medic, item.Id, Actor.Of( medic ), count: 1 );
+		if ( !used.Ok ) return used;
+		// The bandage used up and the wound it closed are one change: a crash keeps both or neither.
+		_game.SaveTogether( medic, patient );
+		var (wound, healed) = treated.Value;
+		Player.HostRecordAt( JournalKinds.CharacterTreated, Actor.Of( medic ), BodyOf( patient )?.HostPosition, patient.HolderLabel,
+			data: new[] { ("item", definition.ResourceName), ("wound", wound ?? "none"), ("healed", healed.ToString()) } );
+		Changed( medic );
+		if ( patient != medic ) Changed( patient );
+		if ( wound is not null ) Tell( patient, $"Your {wound} is treated." );
+		return Result.Success();
 	}
 
 	/// <summary>Binds the character's hands with something the binder carries, which is used up: a restraint is cut off, not untied.</summary>
@@ -126,14 +181,18 @@ public sealed class CharacterService
 		Looks.Of( body.Character is { } id && Roster.Find( id ) is { } character ? character.Body : new List<string>(), body.Inventory );
 
 	/// <summary>
-	/// The character dies where it is. What it carried stays where it fell, and the rest is the game's
-	/// policy: for good, kept as dead so staff can restore it, or whole again at a spawn point.
+	/// The character dies where it is. What it carried stays where it fell, on its body, and the rest is
+	/// the game's policy: for good, kept as dead so staff can restore it, or whole again at a spawn point.
 	/// </summary>
-	public void Die( CharacterData character, Vector3 at, string cause, CharacterData? by )
+	public void Die( CharacterData character, Vector3 at, string cause, CharacterData? by, string? place = null, Impact? impact = null )
 	{
 		var loaded = Loaded( character );
+		// The body it dies in is the one that falls, before anything is taken from it.
+		var from = BodyOf( character )?.Renderer;
 		loaded?.HostClose();
-		Player.HostRecordAt( JournalKinds.CharacterDeath, Actor.Of( character ), at, by?.HolderLabel, data: new[] { ("cause", cause), ("policy", _game.Death.ToString()) } );
+		var data = new List<(string, string)> { ("cause", cause), ("policy", _game.Death.ToString()) };
+		if ( place is not null ) data.Add( ("place", place) );
+		Player.HostRecordAt( JournalKinds.CharacterDeath, Actor.Of( character ), at, by?.HolderLabel, data: data.ToArray() );
 		var permanent = _game.Death == DeathPolicy.Permanent;
 		var actor = Actor.Of( character );
 		if ( permanent )
@@ -150,7 +209,7 @@ public sealed class CharacterService
 			character.Position = new[] { spawn.x, spawn.y, spawn.z };
 		}
 		// The body is saved with the death, as one change: a crash keeps both or neither.
-		if ( _game.DeathDropsBelongings && character.Inventory.Items.Count > 0 ) LeaveBody( character, at );
+		if ( _game.DeathDropsBelongings && character.Inventory.Items.Count > 0 ) LeaveBody( character, at, from, impact );
 		if ( permanent )
 		{
 			// Whatever no body took leaves the world on the record, not by vanishing with the character.
@@ -168,7 +227,7 @@ public sealed class CharacterService
 	/// size of the inventory and every pile keeps its place, so all of it goes: nothing is left on
 	/// someone who has died.
 	/// </summary>
-	private void LeaveBody( CharacterData character, Vector3 at )
+	private void LeaveBody( CharacterData character, Vector3 at, SkinnedModelRenderer? from, Impact? impact )
 	{
 		var body = _game.Holders!.GetOrCreate( Guid.NewGuid(), HolderKinds.Corpse, "Body", character.Inventory.Width, character.Inventory.Height );
 		body.Position = new[] { at.x, at.y, at.z };
@@ -178,7 +237,7 @@ public sealed class CharacterService
 		// The body still wears what the character wore.
 		body.Look = LookOf( body );
 		_game.SaveTogether( character, body );
-		Corpse.Spawn( body );
+		Corpse.Spawn( body, from, impact );
 	}
 
 	/// <summary>
@@ -192,6 +251,7 @@ public sealed class CharacterService
 		if ( !restored.Ok ) return restored;
 		if ( _game.Holders!.BodyOf( character.Id ) is { } body )
 		{
+			Corpse.HostKeepPosition( body );
 			if ( body.Position is { Length: 3 } lying ) character.Position = lying;
 			var taken = _game.Transfers!.MoveAll( body, character, by );
 			if ( !taken.Ok ) Log.Warning( $"[restore] {character.HolderLabel} could not take back all of its body: {taken.Message}" );

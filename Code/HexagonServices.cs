@@ -63,6 +63,11 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 	/// <summary>Hair and facial hair a new character may be made with. It is part of the body, not clothing: nobody takes it off.</summary>
 	[Property, Group( "Characters" )] public List<Clothing> Hair { get; set; } = new();
 
+	/// <summary>The hard breathing of someone badly hurt or down, heard by them and by anyone close. Hexagon ships none; a game gives its own.</summary>
+	[Property, Group( "Bodies" )] public SoundEvent? BreathingSound { get; set; }
+	/// <summary>How fast someone with a wounded leg walks, which is as fast as they go.</summary>
+	[Property, Group( "Bodies" ), Range( 20, 110 )] public float LimpSpeed { get; set; } = 60f;
+
 	/// <summary>The limits on lives that the roster applies.</summary>
 	public LifeRules Lives => new( Math.Max( 1, LivingCharacters ), TimeSpan.FromHours( Math.Max( 0f, NewLifeHours ) ) );
 
@@ -149,7 +154,7 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 			else Corpse.Spawn( body );
 		// Whoever was down or bound when it stopped is still lying, or standing, where they were.
 		foreach ( var character in Roster!.All.Where( value => value.IsDown || value.IsRestrained ).ToArray() )
-			Sleeper.HostLeave( character, character.Position is { Length: 3 } at ? new Vector3( at[0], at[1], at[2] ) : FindSpawn().Position );
+			Sleeper.HostLeave( character, character.Position is { Length: 3 } at ? new Transform( new Vector3( at[0], at[1], at[2] ) ) : FindSpawn() );
 	}
 
 	/// <summary>Host: writes what changes without being saved at once: where everyone stands, and how long the down have been down.</summary>
@@ -159,7 +164,14 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 		// Walked rather than looked up: a closing scene empties its index before it destroys anything,
 		// and this manager is destroyed before the pawns, which are added after it.
 		foreach ( var player in Scene.Components.GetAll<Player>( FindMode.EverythingInSelfAndDescendants ) ) player.HostSave();
-		foreach ( var character in Roster.All.Where( value => value.IsDown ).ToArray() ) Roster.Save( character );
+		// The down are kept where their bodies lie, which a push may have moved since.
+		foreach ( var character in Roster.All.Where( value => value.IsDown ).ToArray() )
+		{
+			Sleeper.Find( character.Id )?.HostKeepPosition( character );
+			Roster.Save( character );
+		}
+		foreach ( var body in Holders!.OfKind( HolderKinds.Corpse ).ToArray() )
+			if ( Corpse.HostKeepPosition( body ) ) Holders.Save( body );
 	}
 
 	void Component.INetworkListener.OnActive( Connection connection )

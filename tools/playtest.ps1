@@ -502,13 +502,46 @@ try {
     [void](Send 'open|Crate')
     Expect 'a crate behind a wall cannot be reached, however near' { Send 'state' } 'open=\[: \].*You cannot reach it from here'
     Teleport 'John Doe' $door
+    Wait-Landed
 
     Section 'Harm, and being down'
-    [void](Send 'console|hexagon_hurt "John Doe" 40')
-    Expect 'harm lowered health' { Send 'state' } 'health=60 down=False'
+    # Staff hurt him where a weapon would: a wound to a leg stays until it is treated, and he limps on it.
+    [void](Send 'console|hexagon_hurt "John Doe" 40 "left leg"')
+    $state = Poll { Send 'state' } 'health=60 '
+    Expect 'harm lowered health' $state 'health=60 down=False'
+    Expect 'and the wound to his leg stays: he walks on it, slowly, and cannot run' $state 'wounds=\[left leg\] limping=True breathing=False speed=60 '
+    Expect 'he is told where he was hit' $state 'You are hit in the left leg\.'
     Snapshot 'hurt' 0.6
     [void](Send 'use|2')
-    Expect 'a bandage treated it and was used up' { Send 'state' } 'Bandage@3,0.*health=90 .*binds a wound'
+    Expect 'a bandage treated the wound, healed a little, and was used up' { Send 'state' } 'Bandage@3,0.*health=90 .*wounds=\[\] limping=False breathing=False speed=320 .*Your left leg is treated\. / \*\* John Doe binds a wound'
+    # A wound to an arm drops what is in hand, and the hand takes nothing until the wound is treated.
+    [void](Send 'console|hexagon_give "John Doe" zip_tie')
+    [void](Poll { Send 'state' } 'Zip tie@')
+    [void](Send 'equip|4')
+    [void](Poll { Send 'state' } "held='Zip tie'")
+    [void](Send 'console|hexagon_hurt "John Doe" 10 "right arm"')
+    $state = Poll { Send 'state' } 'wounds=\[right arm\]'
+    Expect 'a wound to his arm dropped what he held' $state "items=\[Rationx4@4,3, Water@2,0, Bandage@3,0, Tokenx40@4,0\] .*health=80 down=False restrained=False held='' .*wounds=\[right arm\] .*ground=\[Zip tie\]"
+    [void](Send 'equip|0')
+    Expect 'and that hand takes nothing' { Send 'state' } "held='' .*Your arm will not hold anything until the wound is treated\."
+    [void](Send 'pickup|Zip tie')
+    [void](Send 'console|hexagon_give "John Doe" bandage')
+    [void](Poll { Send 'state' } 'Bandagex2@3,0.*Zip tie@')
+    [void](Send 'use|2')
+    Expect 'treated, the arm is whole again' { Send 'state' } 'Bandage@3,0.*health=100 .*wounds=\[\] .*Your right arm is treated\.'
+    [void](Send 'equip|0')
+    Expect 'and holds what it is given' { Send 'state' } "held='Ration'"
+    # Bound, his hands are behind his back, where anyone sees them. A test has one client, so he binds himself.
+    Expect 'bound with the tie he picked up' (Send 'bind|John Doe') '^bound$'
+    [void](Poll { Send 'state' } 'restrained=True')
+    [void](Send 'thirdperson|1')
+    Snapshot 'bound' 2
+    [void](Send 'camera|Crate|left|20|70|self|40')
+    Snapshot 'bound-front' 1
+    [void](Send 'camera')
+    [void](Send 'thirdperson|0')
+    [void](Send 'console|hexagon_release "John Doe"')
+    Expect 'released, what was in his hand is put away' { Send 'state' } "restrained=False held='' "
     [void](Send 'console|hexagon_hurt "John Doe" 500')
     [void](Send 'door|Door 1|use')
     [void](Send 'leave')
@@ -517,9 +550,19 @@ try {
     Expect 'at no health the character is down, not dead' $state 'has=True .*health=0 down=True'
     Expect 'someone who is down cannot leave the city' $state 'cannot leave the city like this'
     Expect 'or act on the world' (Send 'journal|verb.door.use') 'ok=False'
+    $lying = Send 'sleepers'
+    Expect 'his body lies limp where he fell' $lying '^-?\d+,-?\d+,down,limp$'
+    # A body takes a moment to fall; he sees from it all the way down.
+    Expect 'and he sees from it, on the ground' { Send 'state' } 'speed=\d+ view=-?(\d|[12]\d) '
     Snapshot 'down' 0.6
+    [void](Send 'camera|Crate|left|20|70|self|0')
+    Snapshot 'down-body' 1
+    [void](Send 'camera')
     [void](Send 'console|hexagon_revive "John Doe"')
-    Expect 'helped up, barely' { Send 'state' } 'health=25 down=False'
+    $state = Poll { Send 'state' } 'health=25 down=False .*view=6\d '
+    Expect 'helped up, barely, still breathing hard, and out of his own eyes again' $state 'health=25 down=False .*breathing=True speed=320 view=6\d .*sleepers=0 '
+    Expect 'he stands where his body lay' "near=$(Near $state ([int[]] (($lying -split ',')[0..1] + 0))) $state" '^near=True'
+    Teleport 'John Doe' $door
 
     Section 'Owning a door is title; its lock takes its key'
     [void](Send 'console|hexagon_door "Door 2" assign "John Doe"')
@@ -666,7 +709,10 @@ try {
     Expect 'the title staff took back is still nobody''s' $state 'owned=\[\]'
     Expect 'whoever was down when the city closed is still lying there' $state 'sleepers=1 '
     $sleepers = Send 'sleepers'
-    Expect 'where he was when it closed, which only the closing save knew' "$(Near $sleepers $byLocker) $sleepers" '^True .*,down$'
+    Expect 'where he was when it closed, which only the closing save knew, lying limp' "$(Near $sleepers $byLocker) $sleepers" '^True .*,down,limp$'
+    [void](Send 'camera|Locker|front|60|60|person|0')
+    Snapshot 'lying' 1
+    [void](Send 'camera')
     # The swinging door nudges the pawn, so this is a neighbourhood, not a point.
     Expect 'the character returned to where it stood' "near=$(Near $state $door) $state" '^near=True'
     [void](Send 'open|Crate')
@@ -677,6 +723,9 @@ try {
     [void](Send 'act|person.finish')
     Expect 'someone left lying can be finished, and leaves a body' { Send 'state' } 'bodies=1 .*sleepers=0 '
     Expect 'the body wears what he wore' (Send 'state') 'bodylooks=\[human01,hair_shortscruffy_brown,flannel_shirt,gasmask,black_leather_jacket,jeans_black,black_boots\] '
+    [void](Send 'camera|Locker|front|60|60|body|0')
+    Snapshot 'dead' 1
+    [void](Send 'camera')
     [void](Send 'act|corpse.search')
     $state = Poll { Send 'state' } 'open=\[Body: '
     Expect 'what he carried is on the body' $state "open=\[Body: Keycard#$cityCut, Pistol, Pistol roundx30, Zip tiex2\]"
@@ -716,9 +765,9 @@ try {
 
     Section 'The journal'
     $journal = Send 'journal'
-    Expect 'every item came from a named source: staff, the scene as built, or what a character arrived in' $journal '(?<!\S)item\.issue=23(?!\S)'
-    Expect 'what was used up, or went with a retired or deleted character, went through a sink' $journal '(?<!\S)item\.destroy=14(?!\S)'
-    Expect 'every hand-over is on record, bodies, restores and stripping included' $journal '(?<!\S)item\.move=38(?!\S)'
+    Expect 'every item came from a named source: staff, the scene as built, or what a character arrived in' $journal '(?<!\S)item\.issue=25(?!\S)'
+    Expect 'what was used up, or went with a retired or deleted character, went through a sink' $journal '(?<!\S)item\.destroy=16(?!\S)'
+    Expect 'every hand-over is on record, bodies, restores, stripping and what a wounded arm let fall included' $journal '(?<!\S)item\.move=40(?!\S)'
     Expect 'putting on and taking off is on record' $journal '(?<!\S)verb\.item\.wear=8(?!\S)'
     Expect 'and the refused clash' $journal '(?<!\S)verb\.item\.wear!=1(?!\S)'
     Expect 'something worn is not dropped' $journal '(?<!\S)verb\.item\.drop!=1(?!\S)'
@@ -733,7 +782,8 @@ try {
     Expect 'the death, the retirement and the restore' $journal '(?<!\S)character\.death=1(?!\S).*(?<!\S)character\.retire=1(?!\S).*(?<!\S)operator\.restore=1(?!\S)'
     Expect 'someone left lying is acted on like anyone else, on the record' $journal '(?<!\S)verb\.person\.finish=1(?!\S)'
     Expect 'the dead and the waiting were turned away at the gate' $journal '(?<!\S)city\.enter!=2(?!\S)'
-    Expect 'speech is on record' $journal '(?<!\S)chat\.say=1(?!\S).*(?<!\S)chat\.me=3(?!\S).*(?<!\S)chat\.ooc=1(?!\S)'
+    Expect 'speech is on record' $journal '(?<!\S)chat\.say=1(?!\S).*(?<!\S)chat\.me=4(?!\S).*(?<!\S)chat\.ooc=1(?!\S)'
+    Expect 'every wound, and every one treated' $journal '(?<!\S)character\.wounded=2(?!\S).*(?<!\S)character\.treated=2(?!\S)'
     Expect 'and the rearranging of piles' $journal '(?<!\S)item\.split=1(?!\S).*(?<!\S)item\.merge=1(?!\S)'
     Expect 'this client was told no other name' (Send 'proxies') '^[^A-Za-z]*$'
 

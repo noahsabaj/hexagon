@@ -15,6 +15,10 @@ public static class JournalKinds
 	public const string CharacterDelete = "character.delete";
 	public const string CharacterRetire = "character.retire";
 	public const string CharacterDowned = "character.downed";
+	/// <summary>A blow left a wound, with where and from what.</summary>
+	public const string CharacterWounded = "character.wounded";
+	/// <summary>A wound closed, or health given back, by whoever treated it, on the character treated.</summary>
+	public const string CharacterTreated = "character.treated";
 	public const string CharacterDeath = "character.death";
 
 	public const string CityEnter = "city.enter";

@@ -20,6 +20,8 @@ public static class VerbIds
 	public const string PersonSearch = "person.search";
 	public const string PersonRevive = "person.revive";
 	public const string PersonFinish = "person.finish";
+	/// <summary>Treating someone's wounds with what is in hand.</summary>
+	public const string PersonTreat = "person.treat";
 
 	public const string DoorUse = "door.use";
 	public const string DoorLock = "door.lock";
@@ -40,8 +42,9 @@ public static class VerbIds
 
 /// <summary>
 /// What can be done to a person, by the state anyone can see them in, whether their player is there or
-/// left them lying. Someone down can be helped up, searched or finished; someone bound searched or
-/// released; anyone else is met, offered something, or bound by whoever has the means.
+/// left them lying. Someone down can be helped up, searched or finished; someone bound searched,
+/// treated or released; anyone else is met, offered something, treated, or bound by whoever has the
+/// means. Treating takes something in hand that treats; someone down is helped up first.
 /// </summary>
 public static class PersonVerbs
 {
@@ -50,7 +53,8 @@ public static class PersonVerbs
 	{
 		if ( down )
 			return new[] { new Verb( VerbIds.PersonRevive, "Help up" ), new Verb( VerbIds.PersonSearch, "Search" ), new Verb( VerbIds.PersonFinish, "Finish", string.IsNullOrEmpty( finishRequires ) ? null : finishRequires ) };
-		if ( restrained ) return new[] { new Verb( VerbIds.PersonSearch, "Search" ), new Verb( VerbIds.PersonRelease, "Release" ) };
-		return new[] { new Verb( VerbIds.PersonIntroduce, "Introduce yourself" ), new Verb( VerbIds.PersonOffer, "Offer something" ), new Verb( VerbIds.PersonRestrain, "Restrain", Capability.Restrain ) };
+		var treat = new Verb( VerbIds.PersonTreat, "Treat" );
+		if ( restrained ) return new[] { new Verb( VerbIds.PersonSearch, "Search" ), treat, new Verb( VerbIds.PersonRelease, "Release" ) };
+		return new[] { new Verb( VerbIds.PersonIntroduce, "Introduce yourself" ), new Verb( VerbIds.PersonOffer, "Offer something" ), treat, new Verb( VerbIds.PersonRestrain, "Restrain", Capability.Restrain ) };
 	}
 }

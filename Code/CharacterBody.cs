@@ -25,6 +25,14 @@ public interface IEmbodiment
 	Vector3 HostPosition { get; }
 	/// <summary>Host: the character this body carries now, or null.</summary>
 	CharacterData? HostCharacter { get; }
+	/// <summary>The body as it is drawn.</summary>
+	SkinnedModelRenderer? Renderer { get; }
+	/// <summary>Lying limp, posed by the engine's physics rather than its animation.</summary>
+	bool IsLimp { get; }
+	/// <summary>Walking on a wounded leg, as anyone can see.</summary>
+	bool IsLimping { get; }
+	/// <summary>Breathing hard, badly hurt or down, as anyone close can hear.</summary>
+	bool IsBreathingHard { get; }
 }
 
 /// <summary>
@@ -87,6 +95,7 @@ public sealed class CharacterBody : Component, Component.IPressable, Component.I
 				actor.HostOpen( this, character, "Belongings", onlyWhile: () => this.IsValid() && HostCharacter == character && (character.IsDown || character.IsRestrained) );
 				characters.Tell( character, "Someone is going through your belongings." );
 				return Result.Success();
+			case VerbIds.PersonTreat: return actor.HostTreat( character );
 			case VerbIds.PersonRestrain: return characters.Restrain( character, other );
 			case VerbIds.PersonRelease: return characters.Release( character );
 			// What is offered is chosen from the inventory, and sent with RequestOffer.
@@ -99,18 +108,31 @@ public sealed class CharacterBody : Component, Component.IPressable, Component.I
 		}
 	}
 
-	/// <summary>Host: harm, from a weapon, a fist, or anything else the engine deals damage with.</summary>
+	/// <summary>
+	/// Host: harm, from a weapon, a fist, or anything else the engine deals damage with. Where it lands
+	/// is read from the hitbox it struck, or the part of a limp body, unless the harm says itself.
+	/// </summary>
 	void IDamageable.OnDamage( in DamageInfo damage )
 	{
 		if ( !Networking.IsHost || HostCharacter is not { } character || HexagonServices.Current?.Characters is not { } characters ) return;
 		var by = damage.Attacker?.GetComponent<Player>()?.HostCharacter;
-		var cause = damage is CharacterHarm harm ? harm.Cause : damage.Weapon?.Name ?? "harm";
-		characters.Damage( character, (int)MathF.Ceiling( damage.Damage ), by, cause, Embodiment!.HostPosition );
+		var harm = damage as CharacterHarm;
+		var place = harm?.Place ?? (damage.Hitbox is { } hitbox ? Places.OfTags( hitbox.Tags.TryGetAll() ) : Places.Body);
+		var blow = new Blow( (int)MathF.Ceiling( damage.Damage ), place, harm?.Wounding ?? false, harm?.Lethal ?? false );
+		var cause = harm?.Cause ?? damage.Weapon?.Name ?? "harm";
+		var impact = damage.Origin == damage.Position ? (Impact?)null : new Impact( damage.Position, damage.Position - damage.Origin );
+		characters.Damage( character, blow, by, cause, Embodiment!.HostPosition, impact );
 	}
 }
 
-/// <summary>Damage that says in words what did it, for the journal.</summary>
+/// <summary>Damage that says in words what did it, for the journal, and where on the body it landed.</summary>
 public sealed class CharacterHarm : DamageInfo
 {
 	public string Cause { get; set; } = "harm";
+	/// <summary>Where on the body it landed (see <see cref="Places"/>), or null to read it from the hitbox struck.</summary>
+	public string? Place { get; set; }
+	/// <summary>Dealt with a weapon, which wounds an arm or a leg; a fist only bruises.</summary>
+	public bool Wounding { get; set; }
+	/// <summary>Dealt with a weapon made to kill: to the head, it does.</summary>
+	public bool Lethal { get; set; }
 }

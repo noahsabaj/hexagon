@@ -10,9 +10,10 @@ It is not a port of NutScript or Helix. Those leave a server's hardest problems 
 cheap death, metagaming, duplicated items, disputes and staff abuse. Hexagon holds itself to four
 laws.
 
-- **Mortality.** Death is final. A wound puts a character down; dying takes someone finishing them
-  in front of witnesses, or bleeding out where a game says so. An account lives one life at a time,
-  and the next enters the city a day after the last one ended.
+- **Mortality.** Death is final. Harm puts a character down; dying takes someone finishing them in
+  front of witnesses, a shot to the head from a weapon made to kill, or bleeding out where a game
+  says so. An account lives one life at a time, and the next enters the city a day after the last
+  one ended.
 - **Perception.** A client receives only what its character could perceive. Names and factions
   reach their owner alone; speech reaches only those in range; people farther away than a character
   can see are not sent at all.
@@ -43,9 +44,9 @@ itself to.
   changes nothing about its members. They are recruited, or appointed by staff, and are handed a
   uniform to put on like anything else.
 - **Items**, as `.item` assets in a grid inventory. An item can grant capabilities (a zip tie
-  restrains), be a key cut to a lock, be used up (food, a bandage), be held in view of everyone, or
-  be a weapon that uses ammunition. Identical items pile up in one slot, and every one of them is
-  accounted for. Money is an item too.
+  restrains), be a key cut to a lock, be used up (food, or a bandage that treats a wound), be held
+  in view of everyone, or be a weapon that uses ammunition, made to kill or not. Identical items
+  pile up in one slot, and every one of them is accounted for. Money is an item too.
 - **Radio.** A radio is tuned on the radio. `/r` reaches radios tuned the same, as a voice without
   a face, and anyone beside the speaker as ordinary speech.
 - **Clothes** are items, worn on the body rather than carried in the grid, and put on and taken off
@@ -69,10 +70,15 @@ itself to.
   owned.
 - **Handing over.** Giving someone something, or the title to a door, is an offer they accept or
   refuse. It lapses if they part or wait too long.
-- **Violence with consequences.** Harm puts a character down, never out. Helping up, searching and
-  finishing are deliberate, witnessed acts. Death is permanent and the body keeps what was carried,
-  unless a game turns respawning on. A player who leaves while down or bound leaves the character
-  lying, or standing bound, where it was.
+- **Violence with consequences.** The host judges where a shot lands, on the body's own hitboxes. A
+  weapon's wound to an arm or a leg stays until it is treated: a wounded leg limps, and a wounded arm
+  drops what it held and holds nothing. Harm puts a character down, never out, unless a weapon made
+  to kill finds the head. Helping up, treating, searching and finishing are deliberate, witnessed
+  acts. Death is permanent and the body keeps what was carried, unless a game turns respawning on.
+- **Bodies.** Someone down or dead lies as the engine's ragdoll, and someone down sees from it, on
+  the ground. A limp, bound hands, a flinch and hard breathing show on the body and are heard near
+  it, never as numbers. A player who leaves while down or bound leaves the character lying, or
+  standing bound, where it was.
 - **Restraints and search**, conserving every item.
 - **Staff tools** in game: the console's own commands, journaled under the staff member's name,
   including restoring a character whose death broke the rules.
@@ -83,7 +89,7 @@ itself to.
   In the city it shows only prompts and chat; a prompt draws the key as the player has it bound.
   Items are dragged between cells, piles and holders, and out of the window to drop them. Being hurt shows through the engine's
   post-processing instead of a number: the edges of sight darken and the colour drains, and being
-  down narrows, dims and blurs the view without hiding it.
+  down narrows, dims and blurs the view from the ground without hiding it.
 
 ## Setting up from a clean checkout
 
@@ -118,7 +124,7 @@ pwsh tools/verify.ps1
 
 | Part | Where | How it is checked |
 | --- | --- | --- |
-| Rules with no engine in them: names, lives, inventory grid, transfers, keys, journal, capabilities, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
+| Rules with no engine in them: names, lives, wounds, inventory grid, transfers, keys, journal, capabilities, chat parsing, rate limit, storage | `Code/Logic` | Unit tests in `Tests`, compiled from the same files |
 | Services and components: the city's services, characters, player, sleeper, door, container, chat, operator commands | `Code` | Compiled against the installed engine, warnings as errors |
 | Default HUD | `Code/UI` | Same compile, then looked at in the play test |
 | A whole game on top | a game project | `tools/playtest.ps1` plays it in the real editor; `tools/playtest-server.ps1` plays it as two clients on a dedicated server |
@@ -201,8 +207,8 @@ Typed in the host's console as `hexagon_<command>`, or by staff in game (Tab) wi
 | `give "<character name>" <item> [count] [pattern]` | Issue items, from the `operator` source. A key is cut to the pattern given |
 | `take "<character name>" <item> [count]` | Take them out of the world, through the `operator` sink. No count takes all |
 | `move "<from>" "<to>" <item> [count]` | Move them from one character to another, as any transfer |
-| `teleport "<character name>" <x> <y> <z>`, and in game `bring` / `goto "<character name>"` | Move a character who is in the city |
-| `hurt "<character name>" <amount>` / `revive "<character name>"` | Harm a character in the city, or help one up, here or not |
+| `teleport "<character name>" <x> <y> <z>`, and in game `bring` / `goto "<character name>"` | Move a character who is in the city. Someone down is moved in the body they lie in |
+| `hurt "<character name>" <amount> ["<place>"]` / `revive "<character name>"` | Harm a character in the city, or help one up, here or not. With a place (`head`, `body`, `left arm`, `right arm`, `left leg`, `right leg`), it lands there as a weapon's would, without killing outright: a wound to an arm or a leg stays until it is treated |
 | `release "<character name>"` | Free a character's bound hands, here or not |
 | `restore "<character name>"` | Undo a death that broke the rules. The character gets up where its body lies, with whatever is still on it. Refused while the account has all the living characters it may |
 | `faction "<character name>" <faction\|none>` | Appoint a character to a faction, or take it out of one. Nothing else about the character changes |

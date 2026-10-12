@@ -18,19 +18,26 @@ public enum DeathPolicy
 	Permanent
 }
 
-// Violence, from the side of whoever does it. What harm does to a character, going down, being helped
-// up or finished, and the body left holding what it carried, is the CharacterService's. What death
-// means is the game's choice, set on HexagonServices, and unless a game says otherwise it is final.
+// Violence, from the side of whoever does it. The host judges every blow: where the attacker stands
+// and how high their eyes are is its own belief, and only the aim is theirs. A shot is traced against
+// the hitboxes of the bodies in its way, which say where on the body it lands. What harm does to a
+// character, wounds, going down, being helped up or finished, and the body left holding what it
+// carried, is the CharacterService's. What death means is the game's choice, set on HexagonServices,
+// and unless a game says otherwise it is final.
 public sealed partial class Player
 {
 	public const int UnarmedDamage = 8;
 	public const float UnarmedRange = 70f;
 	public const float UnarmedCooldown = 0.8f;
 
-	// Anyone can see these: someone lying on the ground, bound hands, a weapon in hand.
+	// Anyone can see these: someone lying on the ground, bound hands, a weapon in hand, a limp.
 	[Sync( SyncFlags.FromHost )] public bool IsDown { get; set; }
 	[Sync( SyncFlags.FromHost )] public bool IsRestrained { get; set; }
 	[Sync( SyncFlags.FromHost )] public string HeldItemPath { get; set; } = string.Empty;
+	/// <summary>Walking on a wounded leg: slowly, and never running.</summary>
+	[Sync( SyncFlags.FromHost )] public bool IsLimping { get; set; }
+	/// <summary>Breathing hard, badly hurt, as anyone close can hear. Someone down breathes from their body on the ground.</summary>
+	[Sync( SyncFlags.FromHost )] public bool IsBreathingHard { get; set; }
 
 	/// <summary>Owner-side. How hurt someone else is cannot be read off them.</summary>
 	public int Health { get; private set; }
@@ -48,6 +55,10 @@ public sealed partial class Player
 		IsDown = _character?.IsDown ?? false;
 		IsRestrained = _character?.IsRestrained ?? false;
 		HeldItemPath = HostHeld?.Definition ?? string.Empty;
+		var limping = _character is not null && Wounds.Limps( _character );
+		if ( limping && !IsLimping ) _sinceLimping = 0;
+		IsLimping = limping;
+		IsBreathingHard = _character is { IsDown: false } && Vitals.BreathesHard( _character );
 		// The body and what is worn on it: it changes only when someone puts something on or takes it off.
 		var look = _character is null ? string.Empty : Looks.Of( _character );
 		if ( Look != look ) Look = look;
@@ -96,19 +107,40 @@ public sealed partial class Player
 			SendPrivateState();
 		}
 
-		// Where the attacker stands is the host's belief. Where they aim is their claim, as it must be.
-		var from = HostPosition + Vector3.Up * 60f;
+		// Where the attacker stands is the host's belief, and so is how high their eyes are, standing or
+		// ducking. Where they aim is their claim, as it must be.
+		var from = HostPosition + Vector3.Up * HostEyeHeight;
 		var direction = aim.IsNearZeroLength ? Vector3.Forward : aim.Normal;
-		var trace = Scene.Trace.Ray( from, from + direction * (weapon?.Range ?? UnarmedRange) ).IgnoreGameObjectHierarchy( GameObject ).Run();
+		var trace = Scene.Trace.Ray( from, from + direction * (weapon?.Range ?? UnarmedRange) )
+			.UseHitboxes()
+			// A body's capsule is only for walking into: a shot finds the body itself.
+			.WithoutTags( "capsule" )
+			.IgnoreGameObjectHierarchy( GameObject )
+			.Run();
 		// Whatever was hit takes the harm as the engine deals it, so a person standing or left lying,
 		// and anything else that can be hurt, is struck the same way.
 		var target = trace.Hit ? trace.GameObject?.GetComponentInParent<Component.IDamageable>() : null;
 		var struck = (target as CharacterBody)?.HostCharacter?.HolderLabel;
 		var damage = weapon?.Damage ?? UnarmedDamage;
+		// Where on a body: the hitbox struck, or the part of a limp body, which is named for its bone.
+		var place = trace.Hitbox is { } hitbox ? Places.OfTags( hitbox.Tags.TryGetAll() )
+			: trace.GameObject is { } part ? Places.OfBone( part.Name ) : Places.Body;
 		// A miss is an attack all the same: it is on record, with nothing hit.
-		HostRecord( JournalKinds.CombatAttack, struck, data: new[] { ("weapon", weapon?.ResourceName ?? "unarmed"), ("damage", damage.ToString()), ("hit", struck is not null ? "person" : target is not null ? "thing" : "nothing") } );
-		target?.OnDamage( new CharacterHarm { Attacker = GameObject, Damage = damage, Origin = from, Position = trace.HitPosition, Cause = weapon?.Title ?? "fists" } );
+		var hit = struck is not null ? "person" : target is not null ? "thing" : "nothing";
+		HostRecord( JournalKinds.CombatAttack, struck, data: struck is null
+			? new[] { ("weapon", weapon?.ResourceName ?? "unarmed"), ("damage", damage.ToString()), ("hit", hit) }
+			: new[] { ("weapon", weapon?.ResourceName ?? "unarmed"), ("damage", damage.ToString()), ("hit", hit), ("place", place) } );
+		// Anything loose that it strikes is pushed, a limp body as much as a crate.
+		if ( trace.Body is { MotionEnabled: true } loose ) loose.ApplyImpulseAt( trace.HitPosition, direction * loose.Mass * Bodies.Push );
+		target?.OnDamage( new CharacterHarm
+		{
+			Attacker = GameObject, Damage = damage, Origin = from, Position = trace.HitPosition, Hitbox = trace.Hitbox,
+			Cause = weapon?.Title ?? "fists", Place = place, Wounding = weapon is not null, Lethal = weapon?.Lethal ?? false
+		} );
 	}
+
+	/// <summary>Host: how high the character's eyes are above where it stands, standing or ducking.</summary>
+	private float HostEyeHeight => Controller is { } controller ? controller.CurrentHeight - controller.EyeDistanceFromTop : EyeHeight;
 
 	/// <summary>
 	/// Host: this pawn's character has just died. For good, its player goes back to the menu and only the

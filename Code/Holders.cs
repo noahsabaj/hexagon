@@ -96,10 +96,11 @@ public sealed class Container : Component, Component.IPressable, IVerbTarget
 }
 
 /// <summary>
-/// What a character carried, left where it fell. It is a holder like a crate, put into the world at
-/// run time like a dropped item, and it goes once it has been emptied, or once staff restore the
-/// character, who gets up here with whatever is still on it. It is sent only to clients near enough
-/// to see it, and what it looks like only as <see cref="Reveal"/> allows.
+/// What a character carried, left where it fell, on its body lying limp (see <see cref="Bodies"/>). It
+/// is a holder like a crate, put into the world at run time like a dropped item, and it goes once it
+/// has been emptied, or once staff restore the character, who gets up here with whatever is still on
+/// it. It is sent only to clients near enough to see it, and what it looks like only as
+/// <see cref="Reveal"/> allows.
 /// </summary>
 [Title( "Hexagon Corpse" ), Category( "Hexagon" ), Icon( "airline_seat_flat" )]
 public sealed class Corpse : Component, Component.IPressable, Component.INetworkVisible, IVerbTarget
@@ -132,36 +133,45 @@ public sealed class Corpse : Component, Component.IPressable, Component.INetwork
 
 	protected override void OnUpdate()
 	{
-		if ( GetComponentInChildren<SkinnedModelRenderer>( true ) is not { } renderer ) return;
+		// Turned off wherever it is not revealed, so it is looked for whether or not it is on.
+		if ( GetComponent<SkinnedModelRenderer>( includeDisabled: true ) is not { } renderer ) return;
 		renderer.Enabled = IsRevealed;
 		if ( !IsRevealed || _dressedIn == Look ) return;
 		_dressedIn = Look;
 		Looks.Apply( renderer, Look );
 	}
 
-	public static Corpse? Spawn( HolderData holder )
+	/// <summary>
+	/// Host: puts the body into the world, falling from <paramref name="from"/>, the body that carried
+	/// the character as it died, or lying where it was left after a restart.
+	/// </summary>
+	public static Corpse? Spawn( HolderData holder, SkinnedModelRenderer? from = null, Impact? impact = null )
 	{
 		if ( holder.Position is not { Length: 3 } at ) return null;
 		var body = new GameObject( true, "Body" );
-		body.WorldPosition = new Vector3( at[0], at[1], at[2] + 8f );
 		body.Tags.Add( "corpse" );
-		// It lies as the downed lie: the same figure, in the same clothes, on its back.
-		var figure = new GameObject( body, true, "Figure" );
-		figure.LocalRotation = Rotation.From( -90, 0, 0 );
-		var renderer = figure.AddComponent<SkinnedModelRenderer>();
-		renderer.Model = Model.Load( Looks.DefaultBody );
-		renderer.Enabled = false;
-		var collider = body.AddComponent<BoxCollider>();
-		collider.Scale = new Vector3( 76, 28, 20 );
-		collider.Center = new Vector3( -36, 0, 2 );
-		collider.Static = true;
+		var look = HexagonServices.Current?.Characters?.LookOf( holder ) ?? holder.Look ?? string.Empty;
+		body.WorldTransform = from.IsValid() ? from.WorldTransform : Bodies.Lying( Looks.ModelOf( look ), new Vector3( at[0], at[1], at[2] ), 0f );
+		Bodies.MakeLimp( body, look, from, impact ).Enabled = false;
 		var corpse = body.AddComponent<Corpse>();
 		corpse.HolderId = holder.Id;
 		body.NetworkSpawn( Reveal.Options );
-		var look = HexagonServices.Current?.Characters?.LookOf( holder ) ?? holder.Look ?? string.Empty;
 		corpse.Tell( look );
 		using ( Rpc.FilterInclude( Reveal.Witnesses( body.WorldPosition ) ) ) corpse.TellWitnesses( look );
 		return corpse;
+	}
+
+	/// <summary>
+	/// Host: keeps where the body lies with its holder, so a restart, or staff restoring the character,
+	/// finds it there. True when it had moved.
+	/// </summary>
+	public static bool HostKeepPosition( HolderData holder )
+	{
+		if ( Game.ActiveScene?.GetAllComponents<Corpse>().FirstOrDefault( value => value.HolderId == holder.Id ) is not { } corpse ) return false;
+		var at = Bodies.GroundPoint( corpse.GameObject );
+		if ( holder.Position is { Length: 3 } was && new Vector3( was[0], was[1], was[2] ).Distance( at ) < 4f ) return false;
+		holder.Position = new[] { at.x, at.y, at.z };
+		return true;
 	}
 
 	private void Tell( string look ) => _toldLook = look;

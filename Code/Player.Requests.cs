@@ -120,8 +120,6 @@ public sealed partial class Player
 			return;
 		}
 
-		// Whoever was left lying, or bound, where they were picks up from there.
-		Sleeper.HostRemove( character.Id );
 		// From now on it has lived, and leaves the city only by dying or retiring.
 		if ( character.FirstEntered is null )
 		{
@@ -132,9 +130,13 @@ public sealed partial class Player
 		CharacterDescription = character.Description;
 		CharacterId = character.Id;
 		HasCharacter = true;
-		var position = character.Position is { Length: 3 } saved
+		// Whoever was left bound where they were picks up from there, in this pawn. Someone left lying
+		// stays lying, in the body on the ground, and looks out of it from where it lies.
+		var lying = Sleeper.Find( character.Id ) is { IsLimp: true } body ? body.HostGroundPoint : (Vector3?)null;
+		Sleeper.HostRefresh( character );
+		var position = lying ?? (character.Position is { Length: 3 } saved
 			? new Vector3( saved[0], saved[1], saved[2] )
-			: game.FindSpawn().Position;
+			: game.FindSpawn().Position);
 		HostTeleport( position );
 		SendPrivateState();
 		HostRecord( JournalKinds.CityEnter );
@@ -186,13 +188,16 @@ public sealed partial class Player
 	{
 		HostClose();
 		HostDropOffer( "left" );
-		// Someone down or bound does not get up because their player went: they stay where they are.
-		if ( _character is { } character && HexagonServices.Current?.Roster?.Contains( character ) == true ) Sleeper.HostLeave( character, HostPosition );
+		var character = _character;
+		var at = new Transform( HostPosition, Rotation.FromYaw( Controller?.Renderer?.WorldRotation.Yaw() ?? 0f ) );
 		_character = null;
 		HasCharacter = false;
 		CharacterId = Guid.Empty;
 		CharacterDescription = string.Empty;
 		HostSyncVitals();
+		// Someone down or bound does not get up because their player went: they stay where they are,
+		// lying in the body they already lie in, or standing bound where they stood.
+		if ( character is not null && HexagonServices.Current?.Roster?.Contains( character ) == true ) Sleeper.HostLeave( character, at );
 	}
 
 	[Rpc.Host]
