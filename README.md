@@ -92,6 +92,14 @@ itself to.
   leaves its mark on it, which nobody can read: someone with the right tool, such as a loupe, can
   tell only whether the things in a pile were made alike. A press can print a serial on each thing
   it makes, which anyone can read. Every making is on the record, with what made it.
+- **Trains.** Goods come into the city and leave it by train, at set times of day: a train runs in
+  along its track, stands at its station for a while and runs out. Its wagons are opened only there,
+  with the key its lock is cut to. It brings what its asset lists, with a manifest of it under its
+  railway's stamp, and takes away whatever is still aboard, loaded or never unloaded. A train missed
+  while the server was down never comes; staff can send one, send it away, or hold it.
+- **Sites.** A place worked for what it yields, such as a scrap yard, is worked like a machine, with
+  the right tool in hand, and gives a little each time. What is taken grows back slowly, up to what
+  the site holds at most.
 - **Violence with consequences.** The host judges where a shot lands, on the body's own hitboxes. A
   weapon's wound to an arm or a leg stays until it is treated: a wounded leg limps, and a wounded arm
   drops what it held and holds nothing. Harm puts a character down, never out, unless a weapon made
@@ -105,7 +113,8 @@ itself to.
 - **Staff tools** in game: the console's own commands, journaled under the staff member's name,
   including restoring a character whose death broke the rules.
 - **Persistence.** Characters, what they know and wear, their health and state, what is written on
-  papers and drawn on maps, holders, doors and the last serial each press printed survive a restart. So does the journal. A change to two documents, such as a hand-over,
+  papers and drawn on maps, holders, doors, the last serial each press printed, a train standing at
+  its station and what each site has left survive a restart. So does the journal. A change to two documents, such as a hand-over,
   is saved as one.
 - **A default HUD**: character menu, chat, inventory, the open holder, verbs, offers, the tools of a
   map leant over, how far along some work is, staff panel.
@@ -256,6 +265,7 @@ Typed in the host's console as `hexagon_<command>`, or by staff in game (Tab) wi
 | `restore "<character name>"` | Undo a death that broke the rules. The character gets up where its body lies, with whatever is still on it. Refused while the account has all the living characters it may |
 | `faction "<character name>" <faction\|none> ["<rank>"]` | Appoint a character to a faction, at its head unless a rank is named, or take it out of one. Nothing else about the character changes |
 | `door ["<door>"] <open\|close\|lock\|unlock\|release\|assign "<character name>">` | Work a door whatever key it asks for, give its title to a character, or take the title back. The keys are not part of the title. In game an unnamed door is the one beside you; `door` alone lists them |
+| `train "<train>" <send\|away\|hold\|resume>` | Send a train in now, send one standing at its station away, or hold it away from its times until resumed. `train` alone lists them, with where each is and when it comes next |
 | `who` | Who is playing whom, and where, and who was left down or bound. The one place a name is shown to someone never told it |
 | `journal [text] [count] [days]` | The latest entries containing the text, from the last two days unless told otherwise |
 

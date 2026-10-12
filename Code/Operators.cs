@@ -22,7 +22,8 @@ public static class Operators
 	public const string Help = "give \"<name>\" <item> [count] [pattern] | " +
 		"take \"<name>\" <item> [count] | move \"<from>\" \"<to>\" <item> [count] | " +
 		"teleport \"<name>\" <x> <y> <z> | bring \"<name>\" | goto \"<name>\" | hurt \"<name>\" <amount> [\"<place>\"] | revive \"<name>\" | release \"<name>\" | " +
-		"restore \"<name>\" | faction \"<name>\" <faction|none> [\"<rank>\"] | door [\"<door>\"] <open|close|lock|unlock|release|assign \"<name>\"> | door | who | journal [text] [count] [days]";
+		"restore \"<name>\" | faction \"<name>\" <faction|none> [\"<rank>\"] | door [\"<door>\"] <open|close|lock|unlock|release|assign \"<name>\"> | door | " +
+		"train \"<train>\" <send|away|hold|resume> | train | who | journal [text] [count] [days]";
 
 	[ConCmd( "hexagon_give" )] public static void Give( string characterName, string item, int count = 0, string pattern = "" ) => FromConsole( "give", characterName, item, Count( count ), pattern );
 	[ConCmd( "hexagon_take" )] public static void Take( string characterName, string item, int count = 0 ) => FromConsole( "take", characterName, item, Count( count ) );
@@ -34,6 +35,7 @@ public static class Operators
 	[ConCmd( "hexagon_restore" )] public static void Restore( string characterName ) => FromConsole( "restore", characterName );
 	[ConCmd( "hexagon_faction" )] public static void SetFaction( string characterName, string faction, string rank = "" ) => FromConsole( "faction", characterName, faction, rank );
 	[ConCmd( "hexagon_door" )] public static void OperateDoor( string door, string action, string owner = "" ) => FromConsole( "door", door, action, owner );
+	[ConCmd( "hexagon_train" )] public static void OperateTrain( string train = "", string action = "" ) => FromConsole( "train", train, action );
 	[ConCmd( "hexagon_who" )] public static void Who() => FromConsole( "who" );
 	[ConCmd( "hexagon_journal" )] public static void Journal( string text = "", int count = 0, int days = 0 ) => FromConsole( "journal", text, Count( count ), Count( days ) );
 
@@ -237,6 +239,26 @@ public static class Operators
 				journal.Record( JournalKinds.OperatorDoor, by, $"Door:{door.GameObject.Id:N}", data: ("action", action) );
 				return new[] { $"{door.GameObject.Name}: {action}." };
 			}
+			case "train":
+			{
+				var trains = game.Scene.GetAllComponents<Train>().ToArray();
+				// Alone, it lists them, with where each is and when it comes next.
+				if ( words.Length == 1 ) return trains.Length == 0 ? new[] { "There are no trains." } : trains.Select( value => value.HostDescribe() ).ToArray();
+				if ( trains.FirstOrDefault( value => value.GameObject.Name.Equals( Word( 1 ), StringComparison.OrdinalIgnoreCase ) ) is not { } train )
+					return new[] { $"Usage: train \"<train>\" <{string.Join( "|", TrainActions )}>. No train is named '{Word( 1 )}'; train alone lists them." };
+				var action = Word( 2 ).ToLowerInvariant();
+				var done = action switch
+				{
+					"send" => train.HostSend(),
+					"away" => train.HostSendAway(),
+					"hold" or "resume" => Result.Success(),
+					_ => Result.Fail( ErrorCode.Invalid, $"Usage: train \"<train>\" <{string.Join( "|", TrainActions )}>." )
+				};
+				if ( !done.Ok ) return new[] { done.Message };
+				if ( action is "hold" or "resume" ) train.HostHold( action == "hold" );
+				journal.Record( JournalKinds.OperatorTrain, by, $"Train:{train.GameObject.Id:N}", data: ("action", action) );
+				return new[] { train.HostDescribe() };
+			}
 			case "who":
 			{
 				// The one place a real name is shown to someone who was never told it. It is staff only, and on the record.
@@ -279,6 +301,7 @@ public static class Operators
 	}
 
 	private static readonly string[] DoorActions = { "open", "close", "lock", "unlock", "release", "assign" };
+	private static readonly string[] TrainActions = { "send", "away", "hold", "resume" };
 
 	private static FactionDefinition? Faction( string name ) =>
 		FactionDefinition.All.FirstOrDefault( value => value.ResourceName.Equals( name, StringComparison.OrdinalIgnoreCase ) );

@@ -375,6 +375,8 @@ try {
     Section 'Characters'
     Start-Play
     Expect 'a new city has no characters' (Send 'state') 'has=False .*characters=\[\]'
+    # A train that came at its time of day in the middle of a run would bring goods nothing here expects.
+    [void](Send 'console|hexagon_train "Supply train" hold')
     Snapshot 'characters'
     [void](Send 'panel|newcharacter')
     Snapshot 'new-character' 1

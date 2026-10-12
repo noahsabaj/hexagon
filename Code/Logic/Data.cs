@@ -182,6 +182,25 @@ public sealed class WorldData
 {
 	public Dictionary<Guid, DoorData> Doors { get; set; } = new();
 	public Dictionary<Guid, MachineData> Machines { get; set; } = new();
+	public Dictionary<Guid, TrainData> Trains { get; set; } = new();
+	public Dictionary<Guid, SiteData> Sites { get; set; } = new();
+}
+
+/// <summary>What a train remembers: whether staff are holding it, and when it leaves the station it stands at.</summary>
+public sealed class TrainData
+{
+	/// <summary>Held by staff: it does not come at its times until it is let go, though staff can still send it.</summary>
+	public bool IsHeld { get; set; }
+	/// <summary>When it leaves the station, in UTC, while it stands there; null while it is away or on the move.</summary>
+	public DateTime? DepartsAt { get; set; }
+}
+
+/// <summary>What a site holds, as of when it was last looked at. See <see cref="Sites"/>.</summary>
+public sealed class SiteData
+{
+	public double Held { get; set; }
+	/// <summary>When it last held <see cref="Held"/>, in UTC; it has grown back since.</summary>
+	public DateTime Since { get; set; }
 }
 
 /// <summary>What a machine remembers between one piece of work and the next.</summary>

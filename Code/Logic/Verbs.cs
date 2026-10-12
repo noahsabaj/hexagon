@@ -51,6 +51,10 @@ public static class VerbIds
 	public const string MachineWork = "machine.work";
 	/// <summary>Opening a machine, to load it or take out what it made.</summary>
 	public const string MachineOpen = "machine.open";
+	/// <summary>Opening a train's wagon while it stands at the station, to unload it or load it.</summary>
+	public const string WagonOpen = "wagon.open";
+	/// <summary>Working a site, such as a mine or a scrap yard, for what it yields. See <see cref="Sites"/>.</summary>
+	public const string SiteWork = "site.work";
 	public const string CorpseSearch = "corpse.search";
 	/// <summary>Leaning over a map laid out on a table, to mark it up.</summary>
 	public const string MapLean = "map.lean";

@@ -264,9 +264,10 @@ be deleted while anything is in it. A container can have a lock, and a scene's a
 through a named sink, each journaled. Things enter from `operator`, staff giving them on the record,
 `scene`, a container a scene's author stocked, which is filled the first time it is opened and never
 refills, `arrival`, the clothes a new character chose to arrive in and the papers it arrives with, or
-`made`, what a press or a tool made. They leave through `consumed`, `operator`, `made`, what making
-something used up, `character.deleted`, `character.retired`, or `character.died` when a death
-leaves no body. A new character arrives with only its clothes and its papers. There are
+`made`, what a press or a tool made, `delivery`, what a train brought, or `site`, what was worked
+out of a site. They leave through `consumed`, `operator`, `made`, what making something used up,
+`departed`, what a train took away, `character.deleted`, `character.retired`, or
+`character.died` when a death leaves no body. A new character arrives with only its clothes and its papers. There are
 no wages, vendors or starting kits: they made money from nothing and so made it worthless. Money is
 an item like any other, money only because people take it.
 
@@ -275,7 +276,7 @@ records a count, so the supply of anything is the journal's issues minus its des
 holds the supply of pistol rounds to it. A whole pile that lands in a slot of its own keeps its id;
 part of a pile is a new pile. Splitting and merging move nothing between holders and are journaled
 anyway, because "where did the other ten go" is a question a dispute asks. All of a transfer happens
-or none of it does. Deliveries come later.
+or none of it does.
 
 ## Locks take keys, and a faction grants nothing
 
@@ -395,6 +396,33 @@ a matter of keeping a register of its serials, which the game does not keep for 
 press stands locked to the city's keycard and strikes tokens from blanks the locker holds; a little
 way off, a forger's crude press does the same for anyone, beside a crate holding blanks, a die and
 a loupe.
+
+## Goods come and go by train, and sites grow back
+
+What the city does not make comes in by train, and what leaves it goes out the same way. A train is
+a scene object running along a track, the engine's `Spline`: at each of its times of day it runs in,
+stands at its station for a while, and runs out, and between times it is nowhere. Times are the
+host's clock. A train missed while the server was down never comes, and missed trains never stack
+up, so a city left empty does not fill with goods. A train standing at its station when the server
+stops is still there when it starts, until its wait is up.
+
+It brings what its asset lists, through the `delivery` source, into its first wagon, with a manifest
+of it under the railway's stamp, and takes away whatever is aboard when it goes, through the
+`departed` sink: what players loaded, and whatever nobody unloaded. Nothing is paid for what leaves;
+it is gone, on the record. Its wagons are opened only while it stands at its station, and only with
+a key cut to its lock, so a delivery is guarded the way anything is, by a key and by people, and the
+manifest says what should have been there. There is no vendor: what goes out is what someone put on
+the train. Staff can send a train in now, send one away, or hold it away from its times.
+
+A site, such as a scrap yard, is worked like a machine: holding Use, with the right tool in hand, for
+as long as the work takes. Each piece of work yields a little through the `site` source, and what is
+taken grows back slowly, up to what the site holds at most, so one person cannot strip it for good
+and a crowd does not get more for crowding. What a site has left is saved, and grows back over
+whatever time the server was down.
+
+HL2RP's supply train comes at six in the morning and six in the evening with rations, water and
+token blanks, its wagons locked to the city's keycard, and a scrap yard beside the line is worked
+with a crowbar from a toolbox there. A cutter beside it turns scrap into blanks for a press.
 
 ## The HUD shows what a character would know
 
@@ -612,6 +640,9 @@ city it left wrong.
   so it does not darken with the room.
 - Presses and dies have no models of their own: HL2RP's presses are crates, and a die is a word in
   the inventory. Working shows no pose.
+- A train is boxes running along a line nobody can see: the track is not drawn, and HL2RP's
+  station stands on open ground outside the city rather than at a platform. A moving train passes
+  through whoever stands in its way.
 - Sight is a distance, not a line: a client is sent everyone within `SightRange` of its character,
   through walls. Doors and containers are scene objects, sent to every client.
 - The engine tells every client who is connected, by Steam name, and which connection owns each pawn
@@ -625,8 +656,9 @@ city it left wrong.
   s&box and stay local.
 - The play tests run both clients as one Steam account, so account-level rules are tested by one
   account, and the two-client test allows that account two lives at once.
-- The vision's deliveries and player offices are not built. Until they are, things enter the world
-  only from staff, from stocked containers, with new characters, and made from those.
+- Trucks inside the city, driven by players, and player offices are not built yet. Until they
+  are, things enter the world only from staff, from stocked containers, with new characters, by
+  train, from sites, and made from those.
 
 HL2RP keeps what is about its setting: the scanner, civic records as a view of the journal,
 forcefields and ration dispensers.

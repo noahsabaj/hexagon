@@ -387,6 +387,8 @@ try {
 
     # tools/test.ps1 starts the editor play test when this line appears.
     Section 'Two characters, one city'
+    # A train that came at its time of day in the middle of a run would bring goods nothing here expects.
+    [void](Send 0 'console|hexagon_train "Supply train" hold')
     [void](Send 1 "create|John Doe|$description|citizen|flat_cap,shirt_and_waistcoat,trousers,boots")
     [void](Send 2 "create|Jane Roe|A woman in a grey coat, watching the street.|human02|hair_bobcut,flannel_shirt,cardigan,jeans,boots")
     [void](Send 1 'enter|John Doe')
@@ -858,6 +860,59 @@ try {
     [void](Send 1 'compare|Token')
     Expect 'under a loupe he tells the four kinds apart, but not whose each is' { Send 1 'state' } 'They were made 4 ways: 50 one way; 10 another; 1 a third; 5 a fourth\.'
     Expect 'the locked press and the empty one were refused on the record' (Send 0 'journal') '(?<!\S)verb\.machine\.work!=2(?!\S)'
+
+    Section 'A train brings goods in, and takes away what is loaded'
+    Expect 'held by staff, the train is away' (Send 1 'trains') 'Supply train:phase=Away '
+    [void](Send 0 'console|hexagon_train "Supply train" send')
+    Expect 'sent, it rolls in to its station and stands there' (Poll { Send 1 'trains' } 'phase=Waiting at=400,-1050' 30) 'Supply train:phase=Waiting at=400,-1050'
+    Expect 'its arrival is on record, with what it brought' (Send 0 'journal|train.arrive') 'data=\[train=Supply train brings=Ration x16, Water x16, Token blank x40\]'
+    Teleport 1 'John Doe' (Spot 'Supply wagon' left 20)
+    Teleport 2 'Jane Roe' (Spot 'Supply wagon' right 20)
+    [void](Send 2 'open|Supply wagon')
+    Expect 'its wagons are locked to whoever has no key' { Send 2 'state' } 'It is locked, and you have no key that fits\.'
+    [void](Send 1 'open|Supply wagon')
+    Expect 'with the city''s key he opens it: what it brought, and a manifest of it' { Send 1 'state' } 'open=\[Supply wagon: (Rationx4, ){4}(Waterx4, ){4}Token blankx40, Manifest\] '
+    [void](Send 1 'take|Manifest')
+    [void](Send 1 'take|Ration')
+    [void](Send 1 'close')
+    [void](Poll { Send 1 'state' } 'items=\[[^\]]*Manifest@[^\]]*Rationx4@')
+    [void](Send 1 'read|Manifest')
+    Expect 'the manifest says what came, under the railway''s stamp' { Send 1 'state' } "paper='Manifest' .*lines=\[Supply train, \d+ \w+, \d\d:\d\d / Ration x16 / Water x16 / Token blank x40\] fields=\[\] stamps=\[Combine Overwatch Logistics@4\] "
+    Teleport 1 'John Doe' (Spot 'Outbound wagon' left 20)
+    [void](Send 1 'open|Outbound wagon')
+    [void](Send 1 'put|Ration')
+    Expect 'he loads a ration pile on the outbound wagon' { Send 1 'state' } 'open=\[Outbound wagon: Rationx4\] '
+    [void](Send 0 'console|hexagon_train "Supply train" away')
+    Expect 'sent away, it shuts him out and rolls on' { Send 1 'state' } "open=\[: \] "
+    Expect 'taking what was loaded, and what nobody unloaded, out of the world' (Poll { Send 0 'journal|train.depart' } 'took=' 10) 'data=\[train=Supply train took=Ration x16, Water x16, Token blank x40\]'
+    Expect 'each of it on the record' (Send 0 'journal|item.destroy') 'data=\[sink=departed '
+    Expect 'what he unloaded stays with him' (Send 1 'state') 'Manifest@'
+    Expect 'it is gone from the line' (Poll { Send 1 'trains' } 'phase=Away' 30) 'Supply train:phase=Away '
+
+    Section 'A site yields slowly to whoever works it'
+    Teleport 2 'Jane Roe' (Spot 'Toolbox' front 20)
+    [void](Send 2 'open|Toolbox')
+    [void](Poll { Send 2 'state' } 'open=\[Toolbox: Crowbar\] ')
+    [void](Send 2 'take|Crowbar')
+    [void](Send 2 'close')
+    Teleport 2 'Jane Roe' (Spot 'Scrap yard' front 20)
+    [void](Send 2 'work|Scrap yard')
+    Expect 'a scrap yard yields nothing to bare hands' { Send 2 'state' } 'You need the right tool in hand to work it\.'
+    [void](Send 2 'equip|Crowbar')
+    [void](Poll { Send 2 'state' } "held='Crowbar'")
+    [void](Send 2 'work|Scrap yard')
+    Expect 'with a crowbar in hand she salvages scrap' (Poll { Send 2 'state' } 'Done: Scrap metal x5\.' 15) "working='' .*Done: Scrap metal x5\."
+    Expect 'which came from the site, on the record' (Send 0 'journal|item.issue') "actor='Jane Roe' .*data=\[source=site .*count=5[\] ]"
+    [void](Send 2 'work|Scrap yard')
+    [void](Poll { Send 2 'state' } 'Scrap metalx10@' 15)
+    [void](Send 2 'work|Scrap yard')
+    Expect 'until there is nothing left, which grows back in time' { Send 2 'state' } 'There is nothing left to take here\. It grows back in time\.'
+    [void](Send 2 'open|Scrap cutter')
+    [void](Send 2 'put|Scrap metal')
+    [void](Poll { Send 2 'state' } 'open=\[Scrap cutter: Scrap metalx10\] ')
+    [void](Send 2 'close')
+    [void](Send 2 'work|Scrap cutter')
+    Expect 'a cutter turns scrap into blanks for a press' (Poll { Send 2 'state' } 'Done: Token blank x5\.' 15) 'Done: Token blank x5\.'
     Teleport 1 'John Doe' $stood
     Wait-Landed 1
 
