@@ -230,6 +230,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		if ( _open is not null && !HostOpenIsValid() ) HostClose();
 		HostOfferTick();
 		HostPaperTick();
+		HostLeanTick();
 		HostAuditMovement( controller );
 	}
 
@@ -385,9 +386,17 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		if ( controller.ColliderObject.IsValid() ) controller.ColliderObject.Enabled = IsProxy ? standing : !IsDown;
 		if ( IsProxy ) return;
 		if ( controller.Body.IsValid() ) controller.Body.MotionEnabled = !IsDown;
-		controller.UseInputControls = HasCharacter && !IsDown;
-		controller.UseLookControls = HasCharacter;
+		// Leaning over a map, the hands and eyes are on the map.
+		var leaning = LeaningOver.IsValid();
+		controller.UseInputControls = HasCharacter && !IsDown && !leaning;
+		controller.UseLookControls = HasCharacter && !leaning;
 		controller.UseCameraControls = HasCharacter;
+		// The mouse reaches a map through the camera, and only while leaning over one.
+		if ( Scene.Camera is { } camera && camera.GetComponent<WorldInput>() is var input && leaning != input.IsValid() )
+		{
+			if ( leaning ) camera.AddComponent<WorldInput>();
+			else input!.Destroy();
+		}
 		// A wounded leg walks, slowly, and neither runs nor jumps.
 		controller.WalkSpeed = IsLimping ? MathF.Min( LimpSpeed, _speeds.Walk ) : _speeds.Walk;
 		controller.RunSpeed = IsLimping ? controller.WalkSpeed : _speeds.Run;
@@ -398,10 +407,19 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	// After the controller's own view, before anything that holds the camera for a test.
 	int ICameraModifier.CameraOrder => 10;
 
-	/// <summary>Owner: someone down sees from their body's eyes, on the ground, and can still look about.</summary>
+	/// <summary>
+	/// Owner: someone leaning over a map looks straight down at it. Someone down sees from their body's
+	/// eyes, on the ground, and can still look about.
+	/// </summary>
 	void ICameraModifier.ModifyCamera( CameraComponent camera, ref CameraView view )
 	{
-		if ( IsProxy || !IsDown || camera != Scene.Camera || Controller is not { } controller ) return;
+		if ( IsProxy || camera != Scene.Camera ) return;
+		if ( !IsDown && LeaningOver is { } map && map.IsValid() )
+		{
+			UI.MapBoard.Frame( map, ref view );
+			return;
+		}
+		if ( !IsDown || Controller is not { } controller ) return;
 		if ( Sleeper.Find( CharacterId ) is not { IsLimp: true, Renderer: { } body } || body.GetAttachment( "eyes" ) is not { } eyes ) return;
 		view.Position = eyes.Position;
 		view.Rotation = controller.EyeAngles.ToRotation();

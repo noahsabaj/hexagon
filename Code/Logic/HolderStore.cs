@@ -20,6 +20,8 @@ public sealed class HolderData : IHolder
 	public InventoryData Inventory { get; set; } = new();
 	/// <summary>Where it lies, for holders that are not part of the authored scene.</summary>
 	public float[]? Position { get; set; }
+	/// <summary>Which way it lies, in degrees about the vertical: a map laid out faces whoever laid it out.</summary>
+	public float Yaw { get; set; }
 	/// <summary>For a body: what the character looked like. See the engine side's Looks.</summary>
 	public string? Look { get; set; }
 	/// <summary>For a body: whose it was, so a character staff restore gets up here with what is still on it.</summary>

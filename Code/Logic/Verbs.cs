@@ -30,6 +30,8 @@ public static class VerbIds
 
 	public const string ContainerOpen = "container.open";
 	public const string CorpseSearch = "corpse.search";
+	/// <summary>Leaning over a map laid out on a table, to mark it up.</summary>
+	public const string MapLean = "map.lean";
 
 	/// <summary>Picking up an item lying in the world.</summary>
 	public const string ItemTake = "item.take";
@@ -40,6 +42,8 @@ public static class VerbIds
 	public const string ItemTune = "item.tune";
 	/// <summary>Putting on something carried, or taking off something worn.</summary>
 	public const string ItemWear = "item.wear";
+	/// <summary>Laying a map out flat on the table in front of you.</summary>
+	public const string ItemLayOut = "item.layout";
 }
 
 /// <summary>

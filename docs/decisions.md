@@ -327,6 +327,29 @@ them read it while it stays in the holder's hand, until they part, either is dow
 holder's hands. Handing it over is an offer like anything else. HL2RP gives every arrival an
 identification card stamped by the Civil Authority, whose stamp is in the Civil Protection locker.
 
+## A map is laid out, leant over and marked in grease pencil
+
+A planning map is an item whose asset names the picture printed on it, how big it is laid out, and
+the counters that come with it, one of each colour. Its holder lays it out on a table, or anything
+flat, in front of them, where it lies like anything put down: it can be picked up, carried, handed
+over and stolen, and what is on it goes with it. Laid out, it is the engine's `WorldPanel`, painting
+the picture, the marks and the counters, and leaning over it turns the view straight down at it. The
+mouse works on the map itself, through the engine's `WorldInput`, so there is no window to draw in.
+
+Marking a map takes something to write with, as paper does, an item that grants `paper.write`, and it
+marks in that item's colour: HL2RP's grease pencil red, a pen blue. Whatever drew it, what goes on is
+grease pencil: lines and short words, up to 48 at once, which anyone leaning over the map can wipe
+off, leaving nothing behind. The counters
+are moved by hand, onto the map and back into their box beside it. Like a paper, a map says only
+what is on it, and the journal records whose hand made, wiped or moved each thing, refusals too.
+
+What is on a map is not sent with an inventory, as with a sheet. Laid out, it is shown to whoever can
+see it, each mark once it is finished; only the hand drawing a line sees it as it goes. Someone
+leaning stands up when they walk away from it, are down or bound, or it is picked up. HL2RP's city
+map is a picture of its own streets, taken once from straight above through the engine's
+orthographic camera (the test driver's `mapshot`), and its planning table stands beside a case
+holding the map and grease pencils.
+
 ## The HUD shows what a character would know
 
 In the city the HUD shows prompts and chat. Health is not a number, because nobody knows their health
@@ -485,6 +508,14 @@ merging, `tools/test.ps1` runs verify and both play tests as one, in three to fo
 - The stationery box was first put where the map's floor is raised, sunk into it, and the spot in
   front of it found no ground. Something put in a scene by hand is put where a trace down finds the
   floor.
+- The planning table was first put across the edge of the raised floor, as the stationery box had
+  been, so nothing could be laid out on it. For something that big a trace down at one spot is not
+  enough: the floor under all of it is traced first.
+- A word painted on a panel came out as nothing. A font's size is in the panel's own units, which
+  the painter scales to pixels, and given in pixels, the text outgrew the box it was painted in and
+  the painter dropped it.
+- Lit, a world panel lying under a roof took about four times the light of the table top beside it,
+  in the sun's colour. A map is unlit.
 - Saving a scene from the editor rewrites all of it: it drops the scene's title and description and
   adds settings of its own. A play test's scene is edited as text, with the editor's copy closed.
 - The engine gives a dedicated server ten seconds to log on to Steam. When Steam was slower, the
@@ -511,7 +542,10 @@ merging, `tools/test.ps1` runs verify and both play tests as one, in three to fo
 - There is no handwriting among the engine's fonts, so ink is the HUD's font, leaning.
 - A paper is read in a window, not in the hand: nobody sees from across a room that someone is
   reading, and a sheet held up for someone shows no model.
-- A map is not a paper yet. The planning-table map, drawn on and marked, is its own step.
+- Leaning over a map has no pose: the body stands as it was while its view looks down at the map.
+- Others see a line or a word on a map only once it is finished, not as it is drawn.
+- A map's counters are discs painted on it, not things standing on the table, and the map is unlit,
+  so it does not darken with the room.
 - Sight is a distance, not a line: a client is sent everyone within `SightRange` of its character,
   through walls. Doors and containers are scene objects, sent to every client.
 - The engine tells every client who is connected, by Steam name, and which connection owns each pawn

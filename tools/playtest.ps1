@@ -50,7 +50,8 @@ $script:nonce = 0
 # the host for nothing.
 $requests = 'create', 'enter', 'leave', 'delete', 'retire', 'say', 'introduce', 'door', 'open', 'take', 'put', 'close',
     'pickup', 'drop', 'use', 'equip', 'move', 'split', 'merge', 'tune', 'act', 'attack', 'offer', 'offerdoor', 'answer', 'staff',
-    'wear', 'strip', 'item', 'read', 'write', 'fill', 'stamp', 'show', 'closepaper'
+    'wear', 'strip', 'item', 'read', 'write', 'fill', 'stamp', 'show', 'closepaper',
+    'layout', 'lean', 'standup', 'mapdraw', 'mapword', 'mapwipe', 'mapmove', 'mapmouse'
 $script:allowance = 10.0
 $script:counted = [DateTime]::UtcNow
 $script:lastProblem = 'none'
@@ -636,6 +637,75 @@ try {
     [void](Send 'close')
     Teleport 'John Doe' $door
 
+    Section 'Maps: laid out on a table, marked in grease pencil, counters moved by hand'
+    $byTable = Spot 'Planning table' back 20 8
+    Teleport 'John Doe' $byTable
+    [void](Send 'open|Map case')
+    Expect 'a case by the planning table holds a city map and grease pencils' { Send 'state' } 'open=\[Map case: City map, Grease pencilx2\]'
+    [void](Send 'take|City map')
+    [void](Send 'close')
+    [void](Send 'face|Planning table|level')
+    [void](Send 'layout|City map')
+    Expect 'he lays the map out on the table in front of him' { Send 'maps' } '^City map@4\d\d,1\d\d,62 leaning=False marks=\[\] counters=\[\]$'
+    Expect 'and carries it no longer' "$((Send 'state') -notmatch 'City map@') x" '^True'
+    [void](Send 'lean')
+    Expect 'he leans over it' { Send 'state' } "leaning='City map'"
+    [void](Send 'mapdraw|100,200;300,400;500,450')
+    Expect 'with nothing to write with, nothing goes on the map' { Send 'journal|map.draw' } "ok=False actor='John Doe' .*reason=Denied"
+    Expect 'and it stays clean' (Send 'maps') 'marks=\[\]'
+    [void](Send 'standup')
+    Expect 'he stands up from it' { Send 'state' } "leaning='' "
+    [void](Send 'open|Map case')
+    [void](Send 'take|Grease pencil')
+    [void](Send 'close')
+    [void](Send 'lean')
+    [void](Poll { Send 'state' } "leaning='City map'")
+    [void](Send 'mapdraw|100,200;300,400;500,450')
+    Expect 'with a grease pencil he draws a line across it, in red' { Send 'maps' } 'marks=\[1:line3#B31E17\]'
+    [void](Send 'mapword|520|470|Rally here')
+    Expect 'and writes a word where it ends' { Send 'maps' } "marks=\[1:line3#B31E17, 2:'Rally here'#B31E17\]"
+    [void](Send 'mapmove|0|800|150')
+    [void](Send 'mapmove|2|200|700')
+    Expect 'the counters that came with it are stood on it by hand' { Send 'maps' } 'counters=\[0@800,150, 2@200,700\]'
+    [void](Send 'mapmove|2|box')
+    Expect 'and one goes back in its box' { Send 'maps' } 'counters=\[0@800,150\]$'
+    [void](Send 'mapwipe|1')
+    Expect 'the line wipes off, and only the line' { Send 'maps' } "marks=\[2:'Rally here'#B31E17\]"
+    [void](Send 'mapwipe|1')
+    Expect 'what is gone cannot be wiped off again' { Send 'journal|map.wipe' } 'ok=False .*mark=1 reason=NotFound'
+    # The engine's world input hands the paper the mouse of whoever leans over it; the driver hands it
+    # the same presses, drags and releases, at places on the map.
+    [void](Send 'maptool|draw')
+    foreach ($step in 'press|200|300', 'drag|400|320', 'drag|600|500', 'release|700|520') { [void](Send "mapmouse|$step") }
+    Expect 'dragged across the map, the hand draws a line through where it went' { Send 'maps' } "marks=\[2:'Rally here'#B31E17, 3:line4#B31E17\]"
+    # The second of six counters, in its box along the map's near edge.
+    foreach ($step in 'press|286|1083', 'drag|300|600', 'release|300|250') { [void](Send "mapmouse|$step") }
+    Expect 'a counter is taken out of its box by hand and stood on the map' { Send 'maps' } 'counters=\[0@800,150, 1@300,250\]'
+    [void](Send 'maptool|wipe')
+    foreach ($step in 'press|525|470', 'release|525|470') { [void](Send "mapmouse|$step") }
+    Expect 'a word is wiped off by hand' { Send 'maps' } 'marks=\[3:line4#B31E17\]'
+    [void](Send 'maptool|write|Depot')
+    foreach ($step in 'press|150|150', 'release|150|150') { [void](Send "mapmouse|$step") }
+    Expect 'and with a word ready, a click writes it where the hand is' { Send 'maps' } "marks=\[3:line4#B31E17, 4:'Depot'#B31E17\]"
+    Snapshot 'map' 0.5
+    [void](Send 'standup')
+    [void](Poll { Send 'state' } "leaning='' ")
+    [void](Send 'pickup|City map')
+    Expect 'picked up, the map is carried again' { Send 'state' } 'City map@'
+    Expect 'and nothing of it is left on the table' { Send 'maps' } '^$'
+    [void](Send 'layout|City map')
+    Expect 'laid out again, what was on it went with it' { Send 'maps' } "^City map@4\d\d,1\d\d,62 leaning=False marks=\[3:line4#B31E17, 4:'Depot'#B31E17\] counters=\[0@800,150, 1@300,250\]$"
+    [void](Send 'camera|Planning table|back|50|70|Planning table|10')
+    Snapshot 'map-table' 1
+    [void](Send 'camera')
+    Expect 'the map does not say whose hand marked it; the journal does' (Send 'journal|map.write') "ok=True actor='John Doe' .*text=Depot"
+    Expect 'and whose hand moved a counter' (Send 'journal|map.move') "ok=True actor='John Doe' .*counter=1 at=300,250"
+    [void](Send 'open|Map case')
+    [void](Send 'put|Grease pencil')
+    Expect 'he puts the grease pencils back, and leaves the map out' { Send 'state' } 'open=\[Map case: Grease pencilx2\]'
+    [void](Send 'close')
+    Teleport 'John Doe' $door
+
     Section 'Staff work in game, on the record'
     $steamId = Send 'steamid'
     [void](Send 'staff|who')
@@ -757,6 +827,7 @@ try {
     $state = Poll { Send 'state' } 'sleepers=1 '
     Expect 'what he carried survived the restart, keys cut as they were' $state "items=\[Identification card@0,0, Rationx4@4,3, Water@3,0, Tokenx40@5,0, Key#$flatCut@2,0, Paper@2,1, Radio~101\.5@0,1\] wearing=\[Shirt and waistcoat, Trousers, Black boots, Flat cap\] "
     Expect 'the title staff took back is still nobody''s' $state 'owned=\[\]'
+    Expect 'the map left out on the table survived the restart, with what was on it' { Send 'maps' } "^City map@4\d\d,1\d\d,62 leaning=False marks=\[3:line4#B31E17, 4:'Depot'#B31E17\] counters=\[0@800,150, 1@300,250\]$"
     Expect 'whoever was down when the city closed is still lying there' $state 'sleepers=1 '
     $sleepers = Send 'sleepers'
     Expect 'where he was when it closed, which only the closing save knew, lying limp' "$(Near $sleepers $byLocker) $sleepers" '^True .*,down,limp$'
@@ -818,9 +889,9 @@ try {
 
     Section 'The journal'
     $journal = Send 'journal'
-    Expect 'every item came from a named source: staff, the scene as built, or what a character arrived in' $journal '(?<!\S)item\.issue=31(?!\S)'
+    Expect 'every item came from a named source: staff, the scene as built, or what a character arrived in' $journal '(?<!\S)item\.issue=33(?!\S)'
     Expect 'what was used up, or went with a retired or deleted character, went through a sink' $journal '(?<!\S)item\.destroy=19(?!\S)'
-    Expect 'every hand-over is on record, bodies, restores, stripping and what a wounded arm let fall included' $journal '(?<!\S)item\.move=48(?!\S)'
+    Expect 'every hand-over is on record, bodies, restores, stripping and what a wounded arm let fall included' $journal '(?<!\S)item\.move=54(?!\S)'
     Expect 'putting on and taking off is on record' $journal '(?<!\S)verb\.item\.wear=8(?!\S)'
     Expect 'and the refused clash' $journal '(?<!\S)verb\.item\.wear!=1(?!\S)'
     Expect 'something worn is not dropped' $journal '(?<!\S)verb\.item\.drop!=1(?!\S)'
@@ -842,6 +913,11 @@ try {
     Expect 'the blank written without a pen and the one written twice, refused' $journal '(?<!\S)paper\.fill!=2(?!\S)'
     Expect 'and the line with nothing in it' $journal '(?<!\S)paper\.write!=1(?!\S)'
     Expect 'and the stamp' $journal '(?<!\S)paper\.stamp=1(?!\S)'
+    Expect 'a map laid out twice, and leant over twice' $journal '(?<!\S)verb\.item\.layout=2(?!\S).*(?<!\S)verb\.map\.lean=2(?!\S)'
+    Expect 'every line drawn on it, and the one refused for want of a pencil' $journal '(?<!\S)map\.draw!=1(?!\S).*(?<!\S)map\.draw=2(?!\S)'
+    Expect 'every word written on it' $journal '(?<!\S)map\.write=2(?!\S)'
+    Expect 'every counter moved' $journal '(?<!\S)map\.move=4(?!\S)'
+    Expect 'and everything wiped off, and the wipe of what was already gone' $journal '(?<!\S)map\.wipe=2(?!\S).*(?<!\S)map\.wipe!=1(?!\S)'
     Expect 'this client was told no other name' (Send 'proxies') '^[^A-Za-z]*$'
 
     Complete-Session

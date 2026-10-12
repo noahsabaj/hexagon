@@ -189,6 +189,7 @@ public sealed partial class Player
 	{
 		HostClose();
 		HostStopShown( close: true );
+		HostStopLeaning( tell: true );
 		HostDropOffer( "left" );
 		var character = _character;
 		var at = new Transform( HostPosition, Rotation.FromYaw( Controller?.Renderer?.WorldRotation.Yaw() ?? 0f ) );

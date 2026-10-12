@@ -55,6 +55,10 @@
 		{
 			<PaperWindow />
 		}
+		@if ( player.LeaningOver is not null )
+		{
+			<LeanBar />
+		}
 	}
 </root>
 
@@ -96,7 +100,7 @@
 	{
 		var local = Player.Local;
 		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || OfferingTo is not null || ShowingTo is not null || local?.OpenInventory is not null
-			|| local?.MenuTarget is not null || local?.Paper is not null || local is not { HasCharacter: true };
+			|| local?.MenuTarget is not null || local?.Paper is not null || local?.LeaningOver is not null || local is not { HasCharacter: true };
 		if ( local is not { HasCharacter: true } )
 		{
 			ChatOpen = false;
@@ -105,8 +109,8 @@
 			ShowingTo = null;
 			return;
 		}
-		// A menu, a list of things to offer or show, or a sheet being read has the keys until it is closed; each closes itself.
-		if ( local.MenuTarget is not null || OfferingTo is not null || ShowingTo is not null || local.Paper is not null ) return;
+		// A menu, a list of things to offer or show, a sheet being read or a map leant over has the keys until it is closed; each closes itself.
+		if ( local.MenuTarget is not null || OfferingTo is not null || ShowingTo is not null || local.Paper is not null || local.LeaningOver is not null ) return;
 
 		if ( !ChatOpen && Input.Pressed( "Chat" ) )
 		{
@@ -127,6 +131,6 @@
 	protected override int BuildHash() => HashCode.Combine(
 		HashCode.Combine( Player.Local, Player.Local?.HasCharacter, Player.Local?.OfferText, Player.Local?.MenuTarget, Player.Local?.IsStaff ),
 		HashCode.Combine( Player.Local?.OpenInventory is null, Player.Local?.Inventory is null, Player.UiBusy ),
-		HashCode.Combine( ChatOpen, InventoryOpen, StaffOpen, OfferingTo, ShowingTo, Player.Local?.Paper is null ),
+		HashCode.Combine( ChatOpen, InventoryOpen, StaffOpen, OfferingTo, ShowingTo, Player.Local?.Paper is null, Player.Local?.LeaningOver ),
 		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.HoveredTooltip is null ) );
 }

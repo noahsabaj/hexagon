@@ -360,10 +360,12 @@ public static class DevCommands
 					}
 					return "sent camera";
 				case "face":
-					// face|<object> turns this client's character toward the middle of something named.
+					// face|<object> turns this client's character toward the middle of something named, and
+					// face|<object>|level toward it while looking straight ahead.
 					if ( Middle( args[1] ) is not { } middle ) return $"nothing named '{args[1]}'";
 					var controller = player.GetComponent<PlayerController>();
-					controller.EyeAngles = Rotation.LookAt( middle - controller.EyePosition ).Angles();
+					var facing = Rotation.LookAt( middle - controller.EyePosition ).Angles();
+					controller.EyeAngles = args.Length > 2 && args[2] == "level" ? facing.WithPitch( 0f ) : facing;
 					return "sent face";
 				case "tune":
 					var radio = Pick( Carried( player.Inventory ), args[1] );
@@ -471,6 +473,85 @@ public static class DevCommands
 				case "closepaper":
 					player.ClosePaper();
 					return "sent closepaper";
+				case "layout":
+					// layout|<item> lays a map carried out flat on what is in front of this client's character.
+					var unrolled = Pick( Carried( player.Inventory ), args[1] );
+					if ( unrolled is null ) return "no such item";
+					player.RequestItemAct( unrolled.Id, VerbIds.ItemLayOut );
+					return "sent layout";
+				case "lean":
+					// lean leans over the nearest map laid out, and standup stands up from it.
+					if ( Nearest( player, LaidOut( player ) ) is not { } table ) return "no map laid out";
+					player.RequestAct( table, VerbIds.MapLean );
+					return "sent lean";
+				case "standup":
+					player.StandUp();
+					return "sent standup";
+				case "mapdraw":
+					// mapdraw|<x,y;x,y...> draws a line on the map leant over, or on the nearest map if none is,
+					// mapword|<x>|<y>|<word> writes a word on it, mapwipe|<mark> wipes one off by its number,
+					// and mapmove|<counter>|<x>|<y> or mapmove|<counter>|box moves a counter. Places are in
+					// thousandths of the map, from its top left corner.
+					if ( (player.LeaningOver ?? Nearest( player, LaidOut( player ) )) is not { } drawnOn ) return "no map laid out";
+					player.RequestMapDraw( drawnOn, args[1] );
+					return "sent mapdraw";
+				case "mapword":
+					if ( (player.LeaningOver ?? Nearest( player, LaidOut( player ) )) is not { } writtenOn ) return "no map laid out";
+					player.RequestMapWrite( writtenOn, int.Parse( args[1] ), int.Parse( args[2] ), args[3] );
+					return "sent mapword";
+				case "mapwipe":
+					if ( (player.LeaningOver ?? Nearest( player, LaidOut( player ) )) is not { } wiped ) return "no map laid out";
+					player.RequestMapWipe( wiped, int.Parse( args[1] ) );
+					return "sent mapwipe";
+				case "mapmove":
+					if ( (player.LeaningOver ?? Nearest( player, LaidOut( player ) )) is not { } moved ) return "no map laid out";
+					var boxed = args[2] == "box";
+					player.RequestMapMove( moved, int.Parse( args[1] ), boxed ? 0 : int.Parse( args[2] ), boxed ? 0 : int.Parse( args[3] ), !boxed );
+					return "sent mapmove";
+				case "maptool":
+					// maptool|draw, maptool|wipe or maptool|write|<word>: what the hand does, as the bar under a map chooses it.
+					UI.MapTools.Tool = args[1] switch { "write" => UI.MapTool.Write, "wipe" => UI.MapTool.Wipe, _ => UI.MapTool.Draw };
+					UI.MapTools.Word = args[1] == "write" ? args[2] : string.Empty;
+					return "sent maptool";
+				case "mapmouse":
+					// mapmouse|press|<x>|<y>, then drag and release: the mouse on the map leant over, as the
+					// engine's world input hands it to the paper, at a place in thousandths of the map.
+					if ( player.LeaningOver?.GetComponentInChildren<UI.MapBoard>()?.Sheet is not { } paper ) return "not leaning over a map";
+					var under = paper.FromMap( int.Parse( args[2] ), int.Parse( args[3] ) );
+					if ( args[1] == "press" ) paper.Press( under );
+					else if ( args[1] == "drag" ) paper.Drag( under );
+					else paper.Release( under );
+					return $"sent mapmouse {args[1]}";
+				case "maps":
+					// Every map this client sees laid out, where it lies, and what it sees on each: lines by their
+					// points, words, and the counters standing on it.
+					return string.Join( " ; ", LaidOut( player ).Select( value =>
+						$"{value.Definition?.Title}@{value.WorldPosition.x:0},{value.WorldPosition.y:0},{value.WorldPosition.z:0} leaning={player.LeaningOver == value} " +
+						$"marks=[{string.Join( ", ", value.Map?.Marks.Select( mark => mark.Text.Length > 0 ? $"{mark.Id}:'{mark.Text}'{mark.Ink}" : $"{mark.Id}:line{mark.Points.Count / 2}{mark.Ink}" ) ?? Enumerable.Empty<string>() )}] " +
+						$"counters=[{string.Join( ", ", value.Map?.Counters.OrderBy( counter => counter.Number ).Select( counter => $"{counter.Number}@{counter.X},{counter.Y}" ) ?? Enumerable.Empty<string>() )}]" ) );
+				case "mapshot":
+					// mapshot|<x>|<y>|<across>|<pixels>: the city from straight above, through the engine's
+					// orthographic camera, as a game's printed map is made. Centred on x,y, <across> units from
+					// left to right and two thirds of that from top to bottom, with the world's left (+y) at the
+					// top, as a top view shows it. People and what lies about are left out. Saved in the game's
+					// data as maps/plan.jpg, whose full path it reports.
+					var across = float.Parse( args[3] );
+					var pixels = int.Parse( args[4] );
+					var above = new GameObject( true, "Map camera" ) { NetworkMode = NetworkMode.Never };
+					above.WorldPosition = new Vector3( float.Parse( args[1] ), float.Parse( args[2] ), 4000f );
+					above.WorldRotation = Rotation.LookAt( Vector3.Down, Vector3.Left );
+					var overhead = above.AddComponent<CameraComponent>();
+					overhead.IsMainCamera = false;
+					overhead.Orthographic = true;
+					overhead.OrthographicHeight = across * 2f / 3f;
+					overhead.ZFar = 8000f;
+					foreach ( var passing in new[] { "player", "item", "corpse", "sleeper" } ) overhead.RenderExcludeTags.Add( passing );
+					var plan = new Bitmap( pixels, pixels * 2 / 3 );
+					overhead.RenderToBitmap( plan, false );
+					above.Destroy();
+					FileSystem.Data.CreateDirectory( "maps" );
+					FileSystem.Data.WriteAllBytes( "maps/plan.jpg", plan.ToJpg( 90 ) );
+					return $"saved {FileSystem.Data.GetFullPath( "maps/plan.jpg" )}";
 				case "offer":
 					// offer|<item>|<count> offers some of a pile to the nearest other character.
 					var gift = Pick( Carried( player.Inventory ), args[1] );
@@ -545,6 +626,7 @@ public static class DevCommands
 						$"lines=[{string.Join( " / ", player.Paper?.Paper.Lines ?? new List<string>() )}] " +
 						$"fields=[{string.Join( ", ", player.Paper?.Paper.Fields.Select( pair => $"{pair.Key}={pair.Value}" ) ?? Enumerable.Empty<string>() )}] " +
 						$"stamps=[{string.Join( ", ", player.Paper?.Paper.Stamps.Select( value => $"{ItemDefinition.Find( value.Stamp )?.StampMark}@{value.AfterLine}" ) ?? Enumerable.Empty<string>() )}] " +
+						$"leaning='{player.LeaningOver?.Definition?.Title}' " +
 						$"sleepers={Game.ActiveScene.GetAllComponents<Sleeper>().Count( value => value.IsRevealed )} pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";
 				default:
 					return $"unknown command '{args[0]}'";
@@ -555,6 +637,10 @@ public static class DevCommands
 			return $"threw: {exception.Message}";
 		}
 	}
+
+	/// <summary>The maps this client sees laid out.</summary>
+	private static IEnumerable<WorldItem> LaidOut( Player player ) =>
+		Game.ActiveScene.GetAllComponents<WorldItem>().Where( value => value.IsRevealed && value.Definition is { IsMap: true } );
 
 	/// <summary>Everyone else this client can see standing in the city. Someone down is the body on the ground.</summary>
 	private static IEnumerable<Player> Others( Player player ) =>
