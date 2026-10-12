@@ -165,6 +165,91 @@ public sealed class CharacterService
 		return told;
 	}
 
+	/// <summary>A character's faction, that faction's ranks as the rules weigh them, and where the character stands among them: -1 for nowhere.</summary>
+	public static (FactionDefinition? Faction, IReadOnlyList<RankRule> Ranks, int Standing) StandingOf( CharacterData character )
+	{
+		if ( FactionDefinition.Find( character.Faction ) is not { } faction ) return (null, Array.Empty<RankRule>(), -1);
+		var ranks = faction.Rules;
+		return (faction, ranks, Logic.Ranks.Standing( ranks, character.Rank ));
+	}
+
+	/// <summary>
+	/// A recruit takes up a recruiter's offer and joins the recruiter's faction at its lowest rank. Only
+	/// the record changes: papers and a uniform are the recruiter's to fill in and hand over.
+	/// </summary>
+	public Result Enlist( CharacterData recruit, CharacterData recruiter, FactionDefinition faction )
+	{
+		var (theirs, ranks, standing) = StandingOf( recruiter );
+		if ( theirs != faction ) return Result.Fail( ErrorCode.Denied, "They no longer belong to it." );
+		var can = Logic.Ranks.ToEnlist( ranks, standing, recruit.Faction.Length > 0 );
+		if ( !can.Ok ) return can;
+		recruit.Faction = faction.ResourcePath;
+		recruit.Rank = ranks[0].Title;
+		Save( recruit );
+		Changed( recruit );
+		Player.HostRecordAt( JournalKinds.FactionJoin, Actor.Of( recruiter ), BodyOf( recruit )?.HostPosition, recruit.HolderLabel,
+			data: new[] { ("faction", faction.ResourceName), ("rank", recruit.Rank) } );
+		Tell( recruit, $"You join {faction.Title} as {Ranks.Article( recruit.Rank )}." );
+		Tell( recruiter, $"They join {faction.Title} as {Ranks.Article( recruit.Rank )}." );
+		return Result.Success();
+	}
+
+	/// <summary>A superior gives a member below them another rank, higher or lower. The insignia that shows it is theirs to hand over.</summary>
+	public Result SetRank( CharacterData member, CharacterData superior, string title )
+	{
+		var (faction, ranks, standing) = StandingOf( superior );
+		var (theirs, _, place) = StandingOf( member );
+		var to = Logic.Ranks.IndexOf( ranks, title );
+		var can = Logic.Ranks.ToSetRank( ranks, standing, faction is not null && theirs == faction, place, to );
+		if ( !can.Ok ) return can;
+		var from = member.Rank;
+		member.Rank = ranks[to].Title;
+		Save( member );
+		Changed( member );
+		Player.HostRecordAt( JournalKinds.FactionRank, Actor.Of( superior ), BodyOf( member )?.HostPosition, member.HolderLabel,
+			data: new[] { ("faction", faction!.ResourceName), ("from", from), ("to", member.Rank) } );
+		Tell( member, $"You are {(to > place ? "promoted" : "demoted")} to {member.Rank}." );
+		var insignia = faction.Rank( member.Rank )?.Insignia;
+		Tell( superior, $"You make them {Ranks.Article( member.Rank )}." + (insignia is null ? string.Empty : $" {Ranks.Article( member.Rank, capital: true )} wears the {insignia.Title.ToLowerInvariant()}.") );
+		return Result.Success();
+	}
+
+	/// <summary>A superior discharges a member below them. What they were issued stays with them, for the faction to ask back.</summary>
+	public Result Discharge( CharacterData member, CharacterData superior )
+	{
+		var (faction, ranks, standing) = StandingOf( superior );
+		var (theirs, _, place) = StandingOf( member );
+		var can = Logic.Ranks.ToDischarge( ranks, standing, faction is not null && theirs == faction, place );
+		if ( !can.Ok ) return can;
+		var rank = member.Rank;
+		member.Faction = string.Empty;
+		member.Rank = string.Empty;
+		Save( member );
+		Changed( member );
+		Player.HostRecordAt( JournalKinds.FactionDischarge, Actor.Of( superior ), BodyOf( member )?.HostPosition, member.HolderLabel,
+			data: new[] { ("faction", faction!.ResourceName), ("rank", rank) } );
+		Tell( member, $"You are discharged from {faction.Title}." );
+		Tell( superior, "You discharge them." );
+		return Result.Success();
+	}
+
+	/// <summary>A member walks out of their faction of their own accord. Nothing they were issued leaves them by it.</summary>
+	public Result Leave( CharacterData member )
+	{
+		if ( member.Faction.Length == 0 ) return Result.Fail( ErrorCode.Conflict, "You belong to no faction." );
+		// A faction the game no longer has can still be walked out of.
+		var faction = FactionDefinition.Find( member.Faction );
+		var (name, rank) = (faction?.ResourceName ?? member.Faction, member.Rank);
+		member.Faction = string.Empty;
+		member.Rank = string.Empty;
+		Save( member );
+		Changed( member );
+		Player.HostRecordAt( JournalKinds.FactionLeave, Actor.Of( member ), BodyOf( member )?.HostPosition, member.HolderLabel,
+			data: new[] { ("faction", name), ("rank", rank) } );
+		Tell( member, $"You walk out of {faction?.Title ?? "your faction"}." );
+		return Result.Success();
+	}
+
 	/// <summary>Time passes for someone who is down. Bleeding out is the game's policy.</summary>
 	public void Bleed( CharacterData character, float seconds, Vector3 at )
 	{

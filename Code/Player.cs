@@ -54,6 +54,8 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	public string CharacterName { get; private set; } = string.Empty;
 	public string FactionPath { get; private set; } = string.Empty;
 	public FactionDefinition? Faction => FactionDefinition.Find( FactionPath );
+	/// <summary>Its rank in its faction, by title, or empty.</summary>
+	public string RankTitle { get; private set; } = string.Empty;
 	/// <summary>The names this character has been told, by face.</summary>
 	public IReadOnlyDictionary<Guid, string> Known { get; private set; } = new Dictionary<Guid, string>();
 
@@ -561,7 +563,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		{
 			var summaries = game.Roster!.OwnedBy( SteamIdOf( caller ) )
 				.Select( value => new CharacterSummary( value.Id, value.Name,
-					FactionDefinition.Find( value.Faction )?.Title ?? (value.Faction.Length == 0 ? "Unaffiliated" : value.Faction),
+					(FactionDefinition.Find( value.Faction )?.Title ?? (value.Faction.Length == 0 ? "Unaffiliated" : value.Faction)) + (value.Rank.Length > 0 ? $", {value.Rank}" : string.Empty),
 					value.FirstEntered is not null, value.DiedAt, value.ArrivesAt ) )
 				.ToArray();
 			using ( Rpc.FilterInclude( caller ) ) ReceiveCharacters( JsonSerializer.Serialize( summaries ) );
@@ -577,7 +579,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		var doors = Scene.GetAllComponents<Door>().Where( value => value.HostOwner == _character.Id )
 			.Select( value => new OwnedDoor( value.GameObject.Id, value.GameObject.Name ) ).ToArray();
 		using ( Rpc.FilterInclude( owner ) )
-			ReceivePrivateState( _character.Name, _character.Faction, JsonSerializer.Serialize( Seen.Inventory( _character.Inventory ) ),
+			ReceivePrivateState( _character.Name, _character.Faction, _character.Rank, JsonSerializer.Serialize( Seen.Inventory( _character.Inventory ) ),
 				JsonSerializer.Serialize( _character.Known ), _character.Health, JsonSerializer.Serialize( doors ), string.Join( ';', _character.Wounds ) );
 	}
 
@@ -588,6 +590,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		// The list is only ever sent to a player in the menu, so whatever character they had is gone.
 		CharacterName = string.Empty;
 		FactionPath = string.Empty;
+		RankTitle = string.Empty;
 		Known = new Dictionary<Guid, string>();
 		Inventory = null;
 		OwnedDoors = Array.Empty<OwnedDoor>();
@@ -597,13 +600,14 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	}
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
-	private void ReceivePrivateState( string name, string factionPath, string inventoryJson, string knownJson, int health, string doorsJson, string wounds )
+	private void ReceivePrivateState( string name, string factionPath, string rank, string inventoryJson, string knownJson, int health, string doorsJson, string wounds )
 	{
 		Health = health;
 		Wounded = wounds.Split( ';', StringSplitOptions.RemoveEmptyEntries );
 		Known = JsonSerializer.Deserialize<Dictionary<Guid, string>>( knownJson ) ?? new Dictionary<Guid, string>();
 		CharacterName = name;
 		FactionPath = factionPath;
+		RankTitle = rank;
 		Inventory = JsonSerializer.Deserialize<InventoryData>( inventoryJson );
 		OwnedDoors = JsonSerializer.Deserialize<OwnedDoor[]>( doorsJson ) ?? Array.Empty<OwnedDoor>();
 		PrivateVersion++;

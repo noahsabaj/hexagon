@@ -7,11 +7,21 @@
 # The server does not read a redirected console, so commands are left as files in its data folder
 # (see DevCommands.PollInbox) and replies are read from its output. Both ends run with +hexagon_dev 1.
 # Steam must be running. Both clients are the same Steam account, so they share one character list.
+#
+# A run stops at the first check that fails. Starting the server and the clients takes about a minute
+# and a half, so a run with -Keep leaves them running, and the next run with -Keep starts on them in a
+# fresh city, in seconds, unless the code or an asset has changed since; -Close closes them.
 [CmdletBinding()]
 param(
     [string] $GameRoot,
     [string] $SboxRoot = 'C:\Program Files (x86)\Steam\steamapps\common\sbox',
-    [int] $TimeoutSeconds = 900
+    [int] $TimeoutSeconds = 900,
+    # Ends the run once the section whose name starts with this has been played.
+    [string] $Until,
+    # Leaves the server and both clients running when the run ends, and starts on ones a run with -Keep left.
+    [switch] $Keep,
+    # Closes the server and clients a run with -Keep left, and does nothing else.
+    [switch] $Close
 )
 
 Set-StrictMode -Version Latest
@@ -19,15 +29,80 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $GameRoot) { $GameRoot = Join-Path (Split-Path -Parent $root) 'hl2rp-hexagon' }
-$manifest = (Get-ChildItem -LiteralPath (Resolve-Path -LiteralPath $GameRoot).Path -Filter '*.sbproj' | Select-Object -First 1).FullName
+$GameRoot = (Resolve-Path -LiteralPath $GameRoot).Path
+$manifest = (Get-ChildItem -LiteralPath $GameRoot -Filter '*.sbproj' | Select-Object -First 1).FullName
 $dataRoot = "playtest-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
-$log = Join-Path ([System.IO.Path]::GetTempPath()) "$dataRoot-server.log"
 $description = 'A tired resident of the city.'
 $script:failures = 0
 $script:sent = 0
+$script:untilPlayed = $false
+$script:inbox = $null
+$script:log = $null
+$script:logFrom = 0
+$untilReached = 'The -Until section has been played.'
+$stoppedAtFailure = 'A check failed, so the run stops there.'
+# What a run with -Keep left running, for the next run to start on.
+$keptFile = Join-Path ([System.IO.Path]::GetTempPath()) 'hexagon-playtest-kept.json'
+
+if ($Until) {
+    $sections = Select-String -LiteralPath $PSCommandPath -Pattern "^\s*Section '(.+)'\s*$" | ForEach-Object { $_.Matches[0].Groups[1].Value -replace "''", "'" }
+    if (-not ($sections | Where-Object { $_ -like "$Until*" })) { throw "No section's name starts with '$Until'. The sections are: $($sections -join '; ')." }
+}
+
+# A failed run keeps its data, journal included, and the server's log: they are the evidence of what
+# the host decided.
+function Remove-RunFiles([string] $Data, [bool] $Passed, [string[]] $Logs = @()) {
+    $folders = @(Get-ChildItem -LiteralPath (Join-Path $SboxRoot 'data') -Recurse -Directory -Filter "$Data*" -ErrorAction SilentlyContinue | ForEach-Object FullName)
+    $files = @($Logs | Where-Object { $_ } | ForEach-Object { $_, "$_.err" } | Where-Object { Test-Path -LiteralPath $_ })
+    if ($Passed) { foreach ($item in $folders + $files) { Remove-Item -LiteralPath $item -Recurse -Force } }
+    else { foreach ($item in $folders + $files) { Write-Host "Kept $item" -ForegroundColor DarkGray } }
+}
+
+# Closes what a run with -Keep left: the processes it started, if they are still those, and what the
+# last run on them wrote, unless it failed.
+function Close-Kept($Record) {
+    $processes = @(@(@($Record.Clients) + @($Record.Server) | Where-Object { $_ }) | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue } | Where-Object { $_.ProcessName -in 'sbox', 'sbox-server' })
+    foreach ($process in $processes) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+    # A client killed takes a while to be gone.
+    $until = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $until -and @($processes | Where-Object { -not $_.HasExited }).Count -gt 0) { Start-Sleep -Milliseconds 250 }
+    Remove-Item -LiteralPath $keptFile -ErrorAction SilentlyContinue
+    Remove-RunFiles $Record.Data $Record.Passed @($Record.Log)
+}
+
+# The code and assets a server and its clients loaded. When any of them has changed, kept ones are
+# started again.
+function Get-Fingerprint {
+    $places = @((Join-Path $root 'Code'), (Join-Path $GameRoot 'Assets'), (Join-Path $GameRoot 'Code'), (Join-Path $GameRoot 'ProjectSettings')) | Where-Object { Test-Path -LiteralPath $_ }
+    $files = @(Get-ChildItem -LiteralPath $places -Recurse -File | Where-Object { $_.FullName -notmatch '\\(obj|bin)\\|\.csproj$' }) + @(Get-Item -LiteralPath $manifest)
+    "$($files.Count):$(($files | ForEach-Object { $_.LastWriteTimeUtc.Ticks } | Measure-Object -Maximum).Maximum)"
+}
+
+$record = if (Test-Path -LiteralPath $keptFile) { Get-Content -LiteralPath $keptFile -Raw | ConvertFrom-Json } else { $null }
+if ($Close) {
+    if ($record) { Close-Kept $record; Write-Host 'Closed the server and clients a run with -Keep left.' -ForegroundColor Green }
+    return
+}
+
+& (Join-Path $PSScriptRoot 'compile-assets.ps1') -GameRoot $GameRoot -SboxRoot $SboxRoot
+$fingerprint = Get-Fingerprint
+$reuse = $null
+if ($record) {
+    $kept = Get-Process -Id $record.Server -ErrorAction SilentlyContinue
+    $why = if (-not $Keep) { $null }
+        elseif (-not $kept -or $kept.ProcessName -ne 'sbox-server') { 'its server has exited' }
+        elseif ($record.Manifest -ne $manifest) { 'it plays another game' }
+        elseif ($record.Fingerprint -ne $fingerprint) { 'the code or an asset has changed since' }
+    if ($Keep -and -not $why) { $reuse = $record }
+    else {
+        if ($why) { Write-Host "==> Closing the server and clients the last run kept: $why" -ForegroundColor Cyan }
+        Close-Kept $record
+    }
+}
 
 # An open editor is no obstacle, so the editor play test can run at the same time (tools/test.ps1).
-if (Get-Process -Name 'sbox', 'sbox-server' -ErrorAction SilentlyContinue) { throw 'Close s&box and any dedicated server first.' }
+# A client killed lingers a while after it has exited, and is no obstacle.
+if (-not $reuse -and @(Get-Process -Name 'sbox', 'sbox-server' -ErrorAction SilentlyContinue | Where-Object { -not $_.HasExited }).Count -gt 0) { throw 'Close s&box and any dedicated server first.' }
 
 # RenderDoc, when it is on the PATH, is loaded into each game client, and with it every native
 # library the engine loads while starting is slow: a client took two to four minutes to reach its
@@ -37,12 +112,43 @@ $pathWithoutRenderDoc = ($env:Path -split ';' | Where-Object { $_ -and -not (Tes
 # The editor, while it plays a scene, listens for local players on the engine's default port, so the
 # server and its clients meet on another. A port the system hands out is free, and outside the ranges
 # Windows keeps for itself.
-$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
-$listener.Start()
-$localPort = $listener.LocalEndpoint.Port
-$listener.Stop()
+if ($reuse) { $localPort = [int] $reuse.Port }
+else {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $localPort = $listener.LocalEndpoint.Port
+    $listener.Stop()
+}
 
-function Read-Log { if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log) } else { @() } }
+# What the server has written since this run began, read as it comes, both streams: errors are
+# written to the other, and are what the last check most needs to see. A server kept from an earlier
+# run wrote that run's lines too, and they are skipped.
+$script:logLines = [System.Collections.Generic.List[string]]::new()
+$script:logs = @()
+$script:readers = @()
+$script:partial = @()
+function Open-Log([string] $Path, [switch] $FromEnd) {
+    foreach ($reader in $script:readers) { $reader.Dispose() }
+    $script:log = $Path
+    $script:logs += $Path
+    $script:readers = @(foreach ($file in $Path, "$Path.err") {
+        $stream = [System.IO.FileStream]::new($file, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
+        if ($FromEnd) { [void]$stream.Seek(0, [System.IO.SeekOrigin]::End) }
+        [System.IO.StreamReader]::new($stream)
+    })
+    $script:partial = @('', '')
+}
+function Update-Log {
+    for ($index = 0; $index -lt $script:readers.Count; $index++) {
+        $text = $script:readers[$index].ReadToEnd()
+        if (-not $text) { continue }
+        # A line is taken once it has ended: the server may be part way through writing it.
+        $lines = ($script:partial[$index] + $text) -split "`r?`n"
+        $script:partial[$index] = $lines[-1]
+        for ($line = 0; $line -lt $lines.Count - 1; $line++) { $script:logLines.Add($lines[$line]) }
+    }
+}
+function Read-Log { Update-Log; $script:logLines }
 
 # The engine gives a dedicated server ten seconds to log on to Steam. When Steam is slower, the server
 # says so once and never listens, so no client can join it.
@@ -50,9 +156,9 @@ function Test-Unheard { [bool] @(Read-Log | Select-Object -Skip $script:logFrom 
 
 function Wait-Until([string] $What, [scriptblock] $Condition) {
     while ([DateTime]::UtcNow -lt $script:deadline) {
-        if ($server.HasExited) { throw "The server exited with code $($server.ExitCode) while waiting for $What." }
+        if ($script:server.HasExited) { throw "The server exited with code $($script:server.ExitCode) while waiting for $What." }
         if (& $Condition) { return }
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Milliseconds 250
     }
     throw "Timed out waiting for $What."
 }
@@ -60,15 +166,21 @@ function Wait-Until([string] $What, [scriptblock] $Condition) {
 # Sends one command to a client (0 is the server itself) and returns its reply.
 function Send([int] $Client, [string] $Command) {
     $script:sent++
-    # The tag makes each reply findable, and the driver ignores arguments it does not use.
+    # The tag makes each reply findable, and the driver ignores arguments it does not use. A kept
+    # server goes on counting from where the last run left off, so no tag is used twice in its output.
     $tagged = "$Command|#$($script:sent)"
-    Set-Content -LiteralPath (Join-Path $script:inbox ('{0:d5}.txt' -f $script:sent)) -Value "$Client|$tagged"
+    Update-Log
+    $from = $script:logLines.Count
+    Set-Content -LiteralPath (Join-Path $script:inbox ('{0:d6}.txt' -f $script:sent)) -Value "$Client|$tagged"
     $marker = "[dev] $Client $tagged => "
     $until = [DateTime]::UtcNow.AddSeconds(15)
     while ([DateTime]::UtcNow -lt $until) {
-        $line = Read-Log | Where-Object { $_.Contains($marker) } | Select-Object -Last 1
-        if ($line) { return $line.Substring($line.IndexOf($marker) + $marker.Length) }
-        Start-Sleep -Milliseconds 100
+        Update-Log
+        for ($index = $script:logLines.Count - 1; $index -ge $from; $index--) {
+            $line = $script:logLines[$index]
+            if ($line.Contains($marker)) { return $line.Substring($line.IndexOf($marker) + $marker.Length) }
+        }
+        Start-Sleep -Milliseconds 20
     }
     return 'no reply'
 }
@@ -81,7 +193,7 @@ function Poll([scriptblock] $Ask, [string] $Pattern, [int] $Seconds = 10) {
     while ($true) {
         $reply = & $Ask
         if ($reply -match $Pattern -or [DateTime]::UtcNow -ge $until) { return $reply }
-        Start-Sleep -Milliseconds 250
+        Start-Sleep -Milliseconds 100
     }
 }
 
@@ -108,7 +220,7 @@ function Teleport([int] $Client, [string] $Name, [int[]] $At) {
     $until = [DateTime]::UtcNow.AddSeconds(10)
     do {
         if (Near (Send $Client 'state') $At 32) { return }
-        Start-Sleep -Milliseconds 250
+        Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $until)
 }
 
@@ -142,7 +254,8 @@ function Shoot([string] $Name, [string] $Bone) {
 }
 
 # Checks a reply. Given the question instead, in braces, it asks until the answer is the one wanted.
-# That something did not happen is checked once, after something sent later has arrived.
+# That something did not happen is checked once, after something sent later has arrived. The first
+# check that fails ends the run: what follows it was played on a city it left wrong.
 function Expect([string] $What, $State, [string] $Pattern, [switch] $Not) {
     if ($State -is [scriptblock]) { $State = if ($Not) { & $State } else { Poll $State $Pattern } }
     if (($State -match $Pattern) -ne [bool] $Not) { Write-Host "  ok   $What" -ForegroundColor Green }
@@ -150,64 +263,130 @@ function Expect([string] $What, $State, [string] $Pattern, [switch] $Not) {
         $script:failures++
         Write-Host "  FAIL $What" -ForegroundColor Red
         Write-Host "       $(if ($Not) { 'did not want' } else { 'wanted' }) /$Pattern/ in: $State" -ForegroundColor DarkGray
+        throw $stoppedAtFailure
     }
 }
 
-# Starts a dedicated server on a data folder and waits until it is taking commands.
+# Whether the server wrote anything a game should not have, which only a run that played to its end, or
+# to its -Until section, can say.
+function Test-Problems {
+    $problems = @(Read-Log | Where-Object { $_ -match 'Exception|\[store\]|\[journal\]|\[scene\]|\[death\]|\[restore\]|Whitelist violation|Hexagon does not' -and $_ -notmatch 'Exception when loading' })
+    Expect 'the server logged no game warnings or errors' "$($problems.Count) problem lines: $($problems -join ' | ')" '^0 problem'
+}
+
+# Begins the next section, or ends the run once the -Until section has been played.
+function Section([string] $Name) {
+    if ($script:untilPlayed) { Test-Problems; throw $untilReached }
+    if ($Until -and $Name -like "$Until*") { $script:untilPlayed = $true }
+    Write-Host "==> $Name" -ForegroundColor Cyan
+}
+
+# Starts a dedicated server on a data folder and waits until it is taking commands. Its output goes
+# to files rather than to this script, so a server kept for the next run outlives it.
 function Start-Server([string] $DataFolder) {
-    # What an earlier server on this log said is not this one's.
-    $script:logFrom = @(Read-Log).Count
-    $start = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $SboxRoot 'sbox-server.exe'))
-    $start.WorkingDirectory = $SboxRoot
-    $start.Arguments = "+game `"$manifest`" +net_allow_local 1 +net_local_port $localPort +hexagon_data_root $DataFolder +hexagon_dev 1"
-    $start.RedirectStandardOutput = $true
-    # Errors are written to the other stream, and are what the last check most needs to see.
-    $start.RedirectStandardError = $true
-    $start.UseShellExecute = $false
-    $script:server = [System.Diagnostics.Process]::Start($start)
-    foreach ($stream in 'OutputDataReceived', 'ErrorDataReceived') {
-        $null = Register-ObjectEvent -InputObject $script:server -EventName $stream -MessageData $log -Action {
-            if ($null -ne $EventArgs.Data) { Add-Content -LiteralPath $Event.MessageData -Value $EventArgs.Data }
-        }
-    }
-    $script:server.BeginOutputReadLine()
-    $script:server.BeginErrorReadLine()
+    Update-Log
+    $script:logFrom = $script:logLines.Count
+    $script:starts++
+    $path = Join-Path ([System.IO.Path]::GetTempPath()) "$DataFolder-server$($script:starts).log"
+    $script:server = Start-Process -FilePath (Join-Path $SboxRoot 'sbox-server.exe') -WorkingDirectory $SboxRoot -WindowStyle Hidden -PassThru `
+        -ArgumentList "+game `"$manifest`" +net_allow_local 1 +net_local_port $localPort +hexagon_data_root $DataFolder +hexagon_dev 1" `
+        -RedirectStandardOutput $path -RedirectStandardError "$path.err"
+    Open-Log $path
+    Wait-Inbox $DataFolder 'the server'
+}
+
+# Waits until the server announces where it reads commands for a data folder.
+function Wait-Inbox([string] $DataFolder, [string] $What) {
     $announced = "\[dev\] inbox at .*$([regex]::Escape($DataFolder))[\\/]"
-    Wait-Until 'the server' { @(Read-Log | Select-Object -Skip $script:logFrom) -match $announced }
+    Wait-Until $What { @(Read-Log | Select-Object -Skip $script:logFrom) -match $announced }
     $script:inbox = (@(Read-Log | Select-Object -Skip $script:logFrom) -match $announced | Select-Object -Last 1) -replace '^.*inbox at ', ''
 }
 
-Write-Host "==> Starting the dedicated server (data folder '$dataRoot')" -ForegroundColor Cyan
+# Each client is told its number and tells the server once it has joined, so they start together,
+# either may join first, and the second process is client 2. A minimized window never presents and
+# every frame waited for it, so a client ran at a few frames a second; -nowindow gives it a window
+# that is never shown, and it runs at full speed.
+function Start-Client([int] $Number) {
+    Start-Process -FilePath (Join-Path $SboxRoot 'sbox.exe') -WorkingDirectory $SboxRoot -PassThru -WindowStyle Hidden `
+        -Environment @{ Path = $pathWithoutRenderDoc } -ArgumentList "+net_local_port $localPort +connect local +hexagon_dev 1 +hexagon_dev_client $Number -nowindow"
+}
+
+# Waits until a client has its pawn, or the server turns out never to have listened. A client sometimes
+# drops its first connection and never tries again, so one that has exited, or has not joined in two
+# and a half minutes, is started again.
+function Wait-Client([int] $Number) {
+    foreach ($try in 1..3) {
+        $given = [DateTime]::UtcNow.AddSeconds(150)
+        while ([DateTime]::UtcNow -lt $given) {
+            if ([DateTime]::UtcNow -ge $script:deadline) { throw "Timed out waiting for client $Number to have a pawn." }
+            if ($script:server.HasExited) { throw "The server exited with code $($script:server.ExitCode) while waiting for client $Number." }
+            if ((Test-Unheard) -or (Send $Number 'who') -match 'local=True') { return }
+            if (-not $clients[$Number - 1] -or $clients[$Number - 1].HasExited) { break }
+            Start-Sleep -Milliseconds 250
+        }
+        if ($try -eq 3) { break }
+        Write-Host "  -    client $Number has not joined; starting it again" -ForegroundColor Yellow
+        if ($clients[$Number - 1] -and -not $clients[$Number - 1].HasExited) { Stop-Process -Id $clients[$Number - 1].Id -Force }
+        $clients[$Number - 1] = Start-Client $Number
+    }
+    throw "Client $Number did not join, started three times."
+}
+
+# Waits until each client has its pawn, and the server has both.
+function Wait-Joined {
+    foreach ($number in 1, 2) { Wait-Client $number }
+    Wait-Until 'both clients to have pawns' { ([regex]::Matches((Send 0 'who'), 'Player: ')).Count -ge 2 }
+}
+
 $script:deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
 $script:server = $null
-$clients = @()
+$script:starts = 0
+$clients = @($null, $null)
 try {
-    # A server Steam did not hear from in time is started again, with its clients.
-    foreach ($attempt in 1..3) {
-        Start-Server $dataRoot
-        Expect 'a dedicated server has no player of its own' (Send 0 'who') 'local=False .*host=True .*pawns=\[\]'
-        # Both clients are one Steam account, so this city lets that account live two lives at once.
-        Expect 'a game may allow an account more than one life' (Send 0 'policy|living|2') 'death=Permanent living=2 hours=24'
-
-        Write-Host '==> Starting two clients' -ForegroundColor Cyan
-        # Each client is told its number and tells the server once it has joined, so they start
-        # together, either may join first, and the second process is client 2. A minimized window never
-        # presents and every frame waited for it, so a client ran at a few frames a second; -nowindow
-        # gives it a window that is never shown, and it runs at full speed.
-        foreach ($number in 1, 2) {
-            $clients += Start-Process -FilePath (Join-Path $SboxRoot 'sbox.exe') -WorkingDirectory $SboxRoot -PassThru -WindowStyle Hidden `
-                -Environment @{ Path = $pathWithoutRenderDoc } -ArgumentList "+net_local_port $localPort +connect local +hexagon_dev 1 +hexagon_dev_client $number -nowindow"
+    if ($reuse) {
+        Write-Host "==> Starting on the server and clients the last run kept, in a fresh city (data folder '$dataRoot')" -ForegroundColor Cyan
+        $script:server = Get-Process -Id $reuse.Server
+        Open-Log $reuse.Log -FromEnd
+        $script:logFrom = 0
+        $script:inbox = $reuse.Inbox
+        $script:sent = [int] $reuse.Sent
+        foreach ($index in 0, 1) {
+            $id = @($reuse.Clients)[$index]
+            $process = if ($id) { Get-Process -Id $id -ErrorAction SilentlyContinue }
+            if ($process -and $process.ProcessName -eq 'sbox') { $clients[$index] = $process }
         }
-        foreach ($number in 1, 2) { Wait-Until "client $number to have a pawn" { (Test-Unheard) -or (Send $number 'who') -match 'local=True' } }
-        if (-not (Test-Unheard)) { break }
-        if ($attempt -eq 3) { throw 'Steam did not hear from the server in time, three times running.' }
-        Write-Host '==> Steam did not hear from the server in time, so it never listened; starting it and the clients again' -ForegroundColor Yellow
-        foreach ($process in @($clients) + @($script:server)) { if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force; [void]$process.WaitForExit(10000) } }
-        $clients = @()
+        Expect 'the kept server starts the city over' (Send 0 "fresh|$dataRoot") '^fresh$'
+        Wait-Inbox $dataRoot 'the fresh city'
+        # The city it left is no longer written to. What a passed run left is not needed; a failed run's is kept.
+        if ($reuse.Passed) { Remove-RunFiles $reuse.Data $true }
+        foreach ($number in 1, 2) { if (-not $clients[$number - 1]) { $clients[$number - 1] = Start-Client $number } }
+        Wait-Joined
+        Expect 'a game may allow an account more than one life' (Send 0 'policy|living|2') 'death=Permanent living=2 hours=24'
+    }
+    else {
+        Write-Host "==> Starting the dedicated server (data folder '$dataRoot')" -ForegroundColor Cyan
+        # A server Steam did not hear from in time is started again, with its clients.
+        foreach ($attempt in 1..3) {
+            Start-Server $dataRoot
+            Expect 'a dedicated server has no player of its own' (Send 0 'who') 'local=False .*host=True .*pawns=\[\]'
+            # Both clients are one Steam account, so this city lets that account live two lives at once.
+            Expect 'a game may allow an account more than one life' (Send 0 'policy|living|2') 'death=Permanent living=2 hours=24'
+
+            Write-Host '==> Starting two clients' -ForegroundColor Cyan
+            $clients[0] = Start-Client 1
+            $clients[1] = Start-Client 2
+            foreach ($number in 1, 2) { Wait-Client $number }
+            if (-not (Test-Unheard)) { break }
+            if ($attempt -eq 3) { throw 'Steam did not hear from the server in time, three times running.' }
+            Write-Host '==> Steam did not hear from the server in time, so it never listened; starting it and the clients again' -ForegroundColor Yellow
+            foreach ($process in @($clients) + @($script:server)) { if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force; [void]$process.WaitForExit(10000) } }
+            $clients[0] = $null
+            $clients[1] = $null
+        }
     }
 
     # tools/test.ps1 starts the editor play test when this line appears.
-    Write-Host '==> Two characters, one city' -ForegroundColor Cyan
+    Section 'Two characters, one city'
     [void](Send 1 "create|John Doe|$description|citizen|flat_cap,shirt_and_waistcoat,trousers,boots")
     [void](Send 2 "create|Jane Roe|A woman in a grey coat, watching the street.|human02|hair_bobcut,flannel_shirt,cardigan,jeans,boots")
     [void](Send 1 'enter|John Doe')
@@ -226,7 +405,7 @@ try {
     Teleport 1 'John Doe' $door
     Teleport 2 'Jane Roe' $beside
 
-    Write-Host '==> Perception' -ForegroundColor Cyan
+    Section 'Perception'
     Expect 'the other player is visible, with the description an onlooker would see' { Send 1 'proxies' } "has=True .*seen='A woman in a grey coat"
     $seen = Send 1 'proxies'
     Expect 'her name and faction were never sent' $seen "name='' faction=''"
@@ -234,7 +413,7 @@ try {
     Expect 'what she wears, on the body she has, is there for anyone to see' $seen 'look=\[human02,hair_bobcut,flannel_shirt,cardigan_dark,jeans,black_boots\]'
     Expect 'each client knows its own name, and that she belongs to no faction' (Send 2 'state') "name='Jane Roe' faction='' "
 
-    Write-Host '==> Speech reaches who is in range, and nobody else' -ForegroundColor Cyan
+    Section 'Speech reaches who is in range, and nobody else'
     [void](Send 1 'say|Morning')
     $heard = Poll { Send 2 'state' } 'says "Morning"'
     Expect 'speech reached a listener 60 units away, from a stranger' $heard '\[A tired resident of the city\.\] says "Morning"'
@@ -261,7 +440,7 @@ try {
     Expect 'a yell did not carry 1260 units' $heard 'can anyone hear me' -Not
     Expect 'out-of-character chat reached everyone' $heard '\[OOC\] [^:/]+: back in five'
 
-    Write-Host '==> A claimed position buys nothing' -ForegroundColor Cyan
+    Section 'A claimed position buys nothing'
     # goto is what a cheat does: the client simply declares itself somewhere else.
     [void](Send 2 'goto|250|-150|60')
     [void](Send 1 'say|Nobody is near me')
@@ -272,7 +451,7 @@ try {
     Expect 'the host sent her back' { $state = Send 2 'state'; "$(Near $state $far) $state" } '^True '
     Expect 'and put the claim on record' { Send 0 'journal' } 'movement\.implausible!=[1-9]'
 
-    Write-Host '==> Out of sight is out of the network' -ForegroundColor Cyan
+    Section 'Out of sight is out of the network'
     # Her client sends her movement itself, and the host passes on what one client sends another
     # unread, so only her client can keep it from those who cannot see her. Sight is narrowed so she
     # can be out of it without leaving the scene's floor; she is 1260 units from him.
@@ -288,13 +467,13 @@ try {
     Expect 'back in his sight, she is sent to him again, where she now is' { $pawns = Send 1 'pawns'; "$(Near $pawns $sightAway) $pawns" } '^True .*present=True'
     Teleport 2 'Jane Roe' $far
 
-    Write-Host '==> The world is shared' -ForegroundColor Cyan
+    Section 'The world is shared'
     [void](Send 1 'door|Door 1|use')
     Expect 'a door one player opened is open for the other' { Send 2 'state' } 'Door 1:open=True'
     [void](Send 2 'door|Door 1|use')
     Expect 'and out of reach for a player far away' { Send 2 'state' } 'Door 1:open=True.*too far away'
 
-    Write-Host '==> Radio reaches those tuned in, and nobody else' -ForegroundColor Cyan
+    Section 'Radio reaches those tuned in, and nobody else'
     foreach ($name in 'John Doe', 'Jane Roe') { [void](Send 0 "console|hexagon_give `"$name`" radio") }
     foreach ($client in 1, 2) { [void](Poll { Send $client 'state' } 'items=\[Identification card@0,0, Radio') }
     [void](Send 1 'tune|Radio|101.5')
@@ -326,7 +505,7 @@ try {
     Expect 'once she is in sight' (Send 0 "sight|$sight") "sight=$sight"
     Expect 'he is sent what lies there' { Send 1 'state' } 'ground=\[Radio\] '
 
-    Write-Host '==> Handing over takes two' -ForegroundColor Cyan
+    Section 'Handing over takes two'
     Teleport 2 'Jane Roe' $beside
     foreach ($gift in 'pistol', 'pistol_round 6', 'zip_tie', 'token 50') { [void](Send 0 "console|hexagon_give `"John Doe`" $gift") }
     [void](Send 0 'console|hexagon_give "Jane Roe" water')
@@ -357,7 +536,7 @@ try {
     Expect 'and no longer his' { Send 1 'state' } 'owned=\[\]'
     Expect 'the hand-over is on record, from him to her' { Send 0 'journal|door.assign' } "actor='John Doe' .*data=\[owner=Jane Roe from=John Doe\]"
 
-    Write-Host '==> A paper is held up to read, not handed over' -ForegroundColor Cyan
+    Section 'A paper is held up to read, not handed over'
     [void](Send 2 'show|Identification card')
     $state = Poll { Send 1 'state' } "paper='Identification card'"
     Expect 'she holds up her card and he reads it, held by the stranger he takes her for' $state "paper='Identification card' shownby='\[A woman in a grey coat[^']*' lines=\[\] fields=\[Name=Jane Roe\] stamps=\[Combine Civil Authority@0\] "
@@ -368,7 +547,7 @@ try {
     Expect 'once they part, he can no longer read it' { Send 1 'state' } "paper='' shownby='' lines=\[\] "
     Teleport 2 'Jane Roe' $beside
 
-    Write-Host '==> A map on a table is marked up by whoever stands at it' -ForegroundColor Cyan
+    Section 'A map on a table is marked up by whoever stands at it'
     Teleport 1 'John Doe' (Spot 'Planning table' back 20 8)
     Teleport 2 'Jane Roe' (Spot 'Planning table' front 20 8)
     [void](Send 1 'open|Map case')
@@ -404,7 +583,64 @@ try {
     Expect 'he puts the grease pencils back, and leaves the map out' { Send 1 'state' } "open=\[Map case: Grease pencilx2\] .*leaning='' "
     [void](Send 1 'close')
 
-    Write-Host '==> Violence is slow, visible and on the record' -ForegroundColor Cyan
+    Section 'A faction takes in whoever accepts a place, and a superior gives each rank'
+    Teleport 1 'John Doe' $door
+    Teleport 2 'Jane Roe' $beside
+    Expect 'belonging to nothing, he can enlist nobody' (Send 1 'verbs') '^person\.introduce,(?!.*person\.(enlist|rank|discharge))'
+    [void](Send 0 'console|hexagon_faction "John Doe" civil_protection')
+    Expect 'staff appoint him head of Civil Protection' { Send 1 'state' } "faction='Civil Protection' rank='Divisional Leader' "
+    Expect 'whose rank lets him enlist, promote and discharge' (Send 1 'verbs') 'person\.enlist,person\.rank,person\.discharge'
+    Expect 'and nothing about him shows it' (Send 2 'proxies') "faction='' rank='' .*insignia=\[\]"
+    [void](Send 1 'act|person.enlist')
+    Expect 'she is offered a place, by the name she was given' { Send 2 'state' } "offer='John Doe offers you a place in Civil Protection, as a Recruit\.'"
+    Expect 'and belongs to nothing yet' (Send 2 'state') "faction='' rank='' "
+    [void](Send 2 'answer|1')
+    Expect 'once she accepts, she belongs, at its lowest rank' { Send 2 'state' } "faction='Civil Protection' rank='Recruit' .*You join Civil Protection as a Recruit\."
+    Expect 'he is told' { Send 1 'state' } 'They join Civil Protection as a Recruit\.'
+    Expect 'a recruit can enlist, promote and discharge nobody' (Send 2 'verbs') 'person\.(enlist|rank|discharge)' -Not
+    foreach ($band in 'recruit', 'unit') { [void](Send 0 "console|hexagon_give `"John Doe`" cp_armband_$band") }
+    [void](Poll { Send 1 'state' } "Unit's armband@")
+    [void](Send 1 "offer|Recruit's armband|1")
+    [void](Poll { Send 2 'state' } "offer='John Doe offers you [^']*Recruit's armband")
+    [void](Send 2 'answer|1')
+    [void](Poll { Send 2 'state' } "Recruit's armband@")
+    [void](Send 2 "wear|Recruit's armband")
+    Expect 'she puts on the armband he handed her, and he sees it on her' { Send 1 'proxies' } "insignia=\[Recruit's armband\]"
+    Expect 'but not her faction or rank, which were never sent' (Send 1 'proxies') "faction='' rank='' "
+    [void](Send 1 'rank|Unit')
+    Expect 'he promotes her' { Send 2 'state' } "rank='Unit' .*You are promoted to Unit\."
+    Expect 'and is told what a unit wears' { Send 1 'state' } "You make them a Unit\. A Unit wears the unit's armband\."
+    Expect 'her armband still says recruit: it says what she wears, not what she is' (Send 1 'proxies') "insignia=\[Recruit's armband\]"
+    [void](Send 2 'rank|Recruit')
+    Expect 'a unit cannot demote anyone' { Send 2 'state' } 'Your rank does not let you do that\.'
+    Expect 'and her try is on record' { Send 0 'journal|verb.person.rank' } "ok=False actor='Jane Roe' .*reason=Denied"
+    [void](Send 1 'rank|Divisional Leader')
+    Expect 'nobody raises anyone to their own rank' { Send 1 'state' } 'You cannot give that rank\.'
+    [void](Send 1 "offer|Unit's armband|1")
+    [void](Poll { Send 2 'state' } "offer='John Doe offers you [^']*Unit's armband")
+    [void](Send 2 'answer|1')
+    [void](Poll { Send 2 'state' } "Unit's armband@")
+    [void](Send 2 "wear|Recruit's armband")
+    [void](Send 2 "wear|Unit's armband")
+    Expect 'once she swaps armbands, she is seen as a unit' { Send 1 'proxies' } "insignia=\[Unit's armband\]"
+    [void](Send 1 'act|person.discharge')
+    Expect 'he discharges her' { Send 2 'state' } "faction='' rank='' .*You are discharged from Civil Protection\."
+    Expect 'which takes nothing off her' (Send 1 'proxies') "insignia=\[Unit's armband\]"
+    [void](Send 1 'act|person.enlist')
+    [void](Poll { Send 2 'state' } "offer='John Doe offers you a place in Civil Protection")
+    [void](Send 2 'answer|1')
+    [void](Poll { Send 2 'state' } "rank='Recruit' ")
+    [void](Send 2 'walkout')
+    Expect 'enlisted again, she walks out on her own' { Send 2 'state' } "faction='' rank='' .*You walk out of Civil Protection\."
+    $journal = Send 0 'journal'
+    Expect 'every enlistment, promotion, discharge and walking out is on record' $journal '(?<!\S)faction\.join=2(?!\S).*(?<!\S)faction\.rank=1(?!\S).*(?<!\S)faction\.discharge=1(?!\S).*(?<!\S)faction\.leave=1(?!\S)'
+    Expect 'with who did it, and from what rank to what' (Send 0 'journal|faction.rank') "ok=True actor='John Doe' .*data=\[faction=civil_protection from=Recruit to=Unit\]"
+    # What she wore and what he kept are left on the floor, so neither carries them on.
+    [void](Send 2 "wear|Unit's armband")
+    foreach ($band in "Recruit's armband", "Unit's armband") { [void](Send 2 "drop|$band") }
+    [void](Poll { Send 2 'state' } 'items=\[Identification card@0,0, Water@1,0, Tokenx30@2,0\] ')
+
+    Section 'Violence is slow, visible and on the record'
     # Out on the open floor past the crate, where she has room to fall. Places are measured from the
     # crate, which never moves: a door turns as it opens, and its back once faced a wall. He stands in
     # front of her, the way her body faces, so nothing of her is in the way of the part he shoots at.
@@ -452,7 +688,7 @@ try {
     [void](Send 2 'leave')
     Expect 'she cannot leave the scene' { Send 2 'state' } 'has=True .*cannot leave the city like this'
 
-    Write-Host '==> Searching is opening a holder' -ForegroundColor Cyan
+    Section 'Searching is opening a holder'
     [void](Send 1 'act|person.search')
     Expect 'he sees what she carries' { Send 1 'state' } 'open=\[Belongings: Identification card, Tokenx30, Water\] openworn=\[Flannel shirt, Cardigan, Jeans, Black boots\] '
     Expect 'and she is told' { Send 2 'state' } 'going through your belongings'
@@ -469,7 +705,7 @@ try {
     $state = Send 2 'state'
     Expect 'she stands where her body lay, her wounds still on her' "$(Near $state ([int[]] (($lying -split ',')[0..1] + 0))) $state" "^True .*held='' .*wounds=\[left leg, right arm\] limping=True breathing=True "
 
-    Write-Host '==> Wounds are treated by hand' -ForegroundColor Cyan
+    Section 'Wounds are treated by hand'
     [void](Send 0 'console|hexagon_give "John Doe" bandage 2')
     [void](Poll { Send 1 'state' } 'items=\[Identification card@0,0, Radio~101\.5@1,0, Pistol@3,0, Pistol roundx3@5,0, Zip tie@0,1, Tokenx50@1,1, Bandagex2@')
     [void](Send 1 'act|person.treat')
@@ -490,7 +726,7 @@ try {
     [void](Send 1 'equip|Pistol')
     [void](Poll { Send 1 'state' } "held='Pistol'")
 
-    Write-Host '==> Restraints' -ForegroundColor Cyan
+    Section 'Restraints'
     [void](Send 2 'act|person.restrain')
     Expect 'she has nothing to bind him with' { Send 2 'state' } 'nothing that lets you do that'
     [void](Send 1 'act|person.restrain')
@@ -500,7 +736,7 @@ try {
     [void](Send 1 'act|person.release')
     Expect 'released' { Send 2 'state' } 'restrained=False'
 
-    Write-Host '==> Death is a deliberate act, and it is final' -ForegroundColor Cyan
+    Section 'Death is a deliberate act, and it is final'
     [void](Send 1 'act|person.finish')
     Expect 'someone standing cannot be finished: the verb is not even offered' (Send 0 'journal') 'character\.death|verb\.person\.finish' -Not
     [void](Send 0 'console|hexagon_hurt "Jane Roe" 60')
@@ -523,7 +759,7 @@ try {
     Expect 'and the body is seen in it' (Send 1 'state') 'bodylooks=\[human02,hair_bobcut,flannel_shirt,jeans,black_boots\] '
     [void](Send 1 'close')
 
-    Write-Host '==> The next life waits; staff can undo a death' -ForegroundColor Cyan
+    Section 'The next life waits; staff can undo a death'
     [void](Send 2 "create|Max Muster|$description|citizen")
     [void](Send 2 'enter|Max Muster')
     $state = Poll { Send 2 'state' } 'Max Muster arrives in the city'
@@ -540,7 +776,7 @@ try {
     Expect 'and the body is gone for him too' { Send 1 'state' } 'bodies=0 '
     Expect 'the restore is on record' { Send 0 'journal' } '(?<!\S)operator\.restore=1(?!\S)'
 
-    Write-Host '==> Leaving does not end a scene' -ForegroundColor Cyan
+    Section 'Leaving does not end a scene'
     Teleport 2 'Jane Roe' $target
     [void](Send 0 'console|hexagon_give "John Doe" zip_tie')
     [void](Poll { Send 1 'state' } 'Zip tie@')
@@ -557,38 +793,55 @@ try {
     Expect 'freeing someone whose player has gone is on record like any other' { Send 0 'journal|verb.person.release' } "ok=True actor='John Doe' .*target=Sleeper"
     Expect 'both joins and every entry are on record' { Send 0 'journal' } 'connection\.join=2 .*city\.enter=3'
 
-    Write-Host '==> A copy taken while the server runs is a working backup' -ForegroundColor Cyan
-    $saved = Send 0 'roster'
-    $live = Split-Path -Parent $script:inbox
-    $copy = "$dataRoot-copy"
-    Copy-Item -LiteralPath $live -Destination (Join-Path (Split-Path -Parent $live) $copy) -Recurse
-    Expect 'the running server has both characters saved' $saved 'characters=\[Jane Roe:.*John Doe:.*\] holders=[1-9]'
-    foreach ($client in $clients) { if (-not $client.HasExited) { Stop-Process -Id $client.Id -Force } }
-    Stop-Process -Id $script:server.Id -Force
-    $script:server.WaitForExit()
-    Start-Server $copy
-    Expect 'a server started on the copy has every character, with all they had' (Send 0 'roster') "^$([regex]::Escape($saved))$"
+    Section 'A copy taken while the server runs is a working backup'
+    if ($Keep) { Write-Host '  -    left out with -Keep: it stops the server and the clients' -ForegroundColor DarkGray }
+    else {
+        $saved = Send 0 'roster'
+        $live = Split-Path -Parent $script:inbox
+        $copy = "$dataRoot-copy"
+        Copy-Item -LiteralPath $live -Destination (Join-Path (Split-Path -Parent $live) $copy) -Recurse
+        Expect 'the running server has both characters saved' $saved 'characters=\[Jane Roe:.*John Doe:.*\] holders=[1-9]'
+        foreach ($client in $clients) { if (-not $client.HasExited) { Stop-Process -Id $client.Id -Force } }
+        Stop-Process -Id $script:server.Id -Force
+        $script:server.WaitForExit()
+        Start-Server $copy
+        Expect 'a server started on the copy has every character, with all they had' (Send 0 'roster') "^$([regex]::Escape($saved))$"
+    }
 
-    $problems = @(Read-Log | Where-Object { $_ -match 'Exception|\[store\]|\[journal\]|\[scene\]|\[death\]|\[restore\]|Whitelist violation|Hexagon does not' -and $_ -notmatch 'Exception when loading' })
-    Expect 'the server logged no game warnings or errors' "$($problems.Count) problem lines: $($problems -join ' | ')" '^0 problem'
+    Test-Problems
 }
 catch {
-    # A run that gave up waiting failed too, and keeps what explains it.
-    $script:failures++
-    throw
+    if ($_.Exception.Message -notin $untilReached, $stoppedAtFailure) {
+        # A run that gave up waiting failed too, and keeps what explains it.
+        $script:failures++
+        throw
+    }
 }
 finally {
-    foreach ($client in $clients) { if (-not $client.HasExited) { Stop-Process -Id $client.Id -Force } }
-    if ($script:server -and -not $script:server.HasExited) { Stop-Process -Id $script:server.Id -Force }
-    # Their files are let go once they have exited.
-    foreach ($process in @($clients) + @($script:server)) { if ($process) { [void]$process.WaitForExit(10000) } }
-    # A failed run keeps its data, journal included: that is the evidence of what the host decided.
-    $kept = Get-ChildItem -LiteralPath (Join-Path $SboxRoot 'data') -Recurse -Directory -Filter "$dataRoot*" -ErrorAction SilentlyContinue
-    if ($script:failures -gt 0) { $kept | ForEach-Object { Write-Host "Data kept at $($_.FullName)" -ForegroundColor DarkGray } }
-    else { $kept | Remove-Item -Recurse -Force }
-    if ($script:failures -gt 0) { Write-Host "Server log kept at $log" -ForegroundColor DarkGray }
-    else { Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue }
+    $passed = $script:failures -eq 0
+    if ($Keep -and $script:server -and -not $script:server.HasExited) {
+        # Kept as it stands for the next run with -Keep, which starts the city over on it.
+        [pscustomobject] @{
+            Server = $script:server.Id
+            Clients = @($clients | ForEach-Object { if ($_ -and -not $_.HasExited) { $_.Id } else { 0 } })
+            Port = $localPort; Log = $script:log; Inbox = $script:inbox; Sent = $script:sent
+            # The city it plays is the one its inbox is in: a run that could not start it over left the last.
+            Data = if ($script:inbox) { Split-Path -Leaf (Split-Path -Parent $script:inbox) } else { $dataRoot }; Passed = $passed; Manifest = $manifest; Fingerprint = $fingerprint
+        } | ConvertTo-Json | Set-Content -LiteralPath $keptFile
+        Write-Host 'The server and clients are left running for the next run with -Keep; -Close closes them.' -ForegroundColor DarkGray
+        if (-not $passed) { Write-Host "Data is in $(Split-Path -Parent $script:inbox); the server's log is $($script:log)" -ForegroundColor DarkGray }
+    }
+    else {
+        foreach ($client in $clients) { if ($client -and -not $client.HasExited) { Stop-Process -Id $client.Id -Force } }
+        if ($script:server -and -not $script:server.HasExited) { Stop-Process -Id $script:server.Id -Force }
+        # Their files are let go once they have exited.
+        foreach ($process in @($clients) + @($script:server)) { if ($process) { [void]$process.WaitForExit(10000) } }
+        foreach ($reader in $script:readers) { $reader.Dispose() }
+        $script:readers = @()
+        Remove-RunFiles $dataRoot $passed $script:logs
+    }
+    foreach ($reader in $script:readers) { $reader.Dispose() }
 }
 
 if ($script:failures -gt 0) { throw "$($script:failures) play-test expectation(s) failed." }
-Write-Host 'Two-client play test passed on a dedicated server.' -ForegroundColor Green
+Write-Host "Two-client play test passed on a dedicated server$(if ($Until) { ", through '$Until'" })." -ForegroundColor Green

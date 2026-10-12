@@ -22,7 +22,7 @@ public static class Operators
 	public const string Help = "give \"<name>\" <item> [count] [pattern] | " +
 		"take \"<name>\" <item> [count] | move \"<from>\" \"<to>\" <item> [count] | " +
 		"teleport \"<name>\" <x> <y> <z> | bring \"<name>\" | goto \"<name>\" | hurt \"<name>\" <amount> [\"<place>\"] | revive \"<name>\" | release \"<name>\" | " +
-		"restore \"<name>\" | faction \"<name>\" <faction|none> | door [\"<door>\"] <open|close|lock|unlock|release|assign \"<name>\"> | door | who | journal [text] [count] [days]";
+		"restore \"<name>\" | faction \"<name>\" <faction|none> [\"<rank>\"] | door [\"<door>\"] <open|close|lock|unlock|release|assign \"<name>\"> | door | who | journal [text] [count] [days]";
 
 	[ConCmd( "hexagon_give" )] public static void Give( string characterName, string item, int count = 0, string pattern = "" ) => FromConsole( "give", characterName, item, Count( count ), pattern );
 	[ConCmd( "hexagon_take" )] public static void Take( string characterName, string item, int count = 0 ) => FromConsole( "take", characterName, item, Count( count ) );
@@ -32,7 +32,7 @@ public static class Operators
 	[ConCmd( "hexagon_revive" )] public static void Revive( string characterName ) => FromConsole( "revive", characterName );
 	[ConCmd( "hexagon_release" )] public static void Release( string characterName ) => FromConsole( "release", characterName );
 	[ConCmd( "hexagon_restore" )] public static void Restore( string characterName ) => FromConsole( "restore", characterName );
-	[ConCmd( "hexagon_faction" )] public static void SetFaction( string characterName, string faction ) => FromConsole( "faction", characterName, faction );
+	[ConCmd( "hexagon_faction" )] public static void SetFaction( string characterName, string faction, string rank = "" ) => FromConsole( "faction", characterName, faction, rank );
 	[ConCmd( "hexagon_door" )] public static void OperateDoor( string door, string action, string owner = "" ) => FromConsole( "door", door, action, owner );
 	[ConCmd( "hexagon_who" )] public static void Who() => FromConsole( "who" );
 	[ConCmd( "hexagon_journal" )] public static void Journal( string text = "", int count = 0, int days = 0 ) => FromConsole( "journal", text, Count( count ), Count( days ) );
@@ -185,17 +185,25 @@ public static class Operators
 			}
 			case "faction":
 			{
-				// Staff appoint; the faction's own people recruit. Nothing about the character changes but
-				// what it belongs to: a uniform is handed over and put on like anything else.
-				if ( Character( Word( 1 ) ) is not { } character ) return new[] { "Usage: faction \"<character name>\" <faction|none>." };
+				// Staff appoint a faction's head, at its highest rank unless another is named; the faction's
+				// own people enlist and promote everyone below. Nothing about the character changes but what
+				// it belongs to: a uniform and insignia are handed over and put on like anything else.
+				if ( Character( Word( 1 ) ) is not { } character ) return new[] { "Usage: faction \"<character name>\" <faction|none> [\"<rank>\"]." };
 				var none = Word( 2 ).Equals( "none", StringComparison.OrdinalIgnoreCase );
 				if ( !none && Faction( Word( 2 ) ) is null ) return new[] { NoFaction( Word( 2 ) ) };
 				var faction = none ? null : Faction( Word( 2 ) );
+				var rank = faction is null ? null : Word( 3 ).Length > 0 ? faction.Rank( Word( 3 ) ) : faction.Ranks.LastOrDefault();
+				if ( faction is not null && Word( 3 ).Length > 0 && rank is null )
+					return new[] { $"{faction.Title} has no rank '{Word( 3 )}'. Its ranks: {string.Join( ", ", faction.Ranks.Select( value => value.Title ) )}" };
 				var was = FactionDefinition.Find( character.Faction )?.ResourceName ?? (character.Faction.Length == 0 ? "none" : character.Faction);
+				var wasRank = character.Rank;
 				character.Faction = faction?.ResourcePath ?? string.Empty;
-				journal.Record( JournalKinds.OperatorFaction, by, character.HolderLabel, data: new[] { ("from", was), ("to", faction?.ResourceName ?? "none") } );
+				character.Rank = rank?.Title ?? string.Empty;
+				journal.Record( JournalKinds.OperatorFaction, by, character.HolderLabel,
+					data: new[] { ("from", was), ("to", faction?.ResourceName ?? "none"), ("fromrank", wasRank), ("rank", character.Rank) } );
 				Changed( game, character );
-				return new[] { faction is null ? $"{character.Name} belongs to no faction now." : $"{character.Name} is now {faction.Title}." };
+				return new[] { faction is null ? $"{character.Name} belongs to no faction now."
+					: rank is null ? $"{character.Name} is now {faction.Title}." : $"{character.Name} is now {faction.Title}, {rank.Title}." };
 			}
 			case "door":
 			{

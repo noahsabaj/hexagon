@@ -99,6 +99,11 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 		base.Dispose();
 	}
 
+	// The scene a game starts on is loaded into an empty one, so the scene keeps no note of where it came from.
+	private SceneFile? _startupScene;
+
+	void ISceneStartup.OnHostPreInitialize( SceneFile scene ) => _startupScene = scene;
+
 	void ISceneStartup.OnHostInitialize()
 	{
 		if ( Scene.IsEditor ) return;
@@ -111,6 +116,33 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 		LoadingScreen.Title = "Opening the city";
 		await GameTask.DelayRealtimeSeconds( 0.1f );
 		if ( !Networking.IsActive ) Networking.CreateLobby( new LobbyConfig() );
+	}
+
+	/// <summary>
+	/// Host, for a test that keeps its server and clients from one run to the next: the scene is loaded
+	/// again, so everyone connected joins it afresh, and the city opens on an empty data folder. The city
+	/// it leaves keeps what it had, saved as its scene emptied.
+	/// </summary>
+	public bool HostStartOver( string folder )
+	{
+		if ( !Networking.IsHost || (Scene.Source as SceneFile ?? _startupScene) is not { } source ) return false;
+		var options = new SceneLoadOptions();
+		if ( !options.SetScene( source ) || !Game.ChangeScene( options ) ) return false;
+		// The scene's systems outlive a load, so the city they kept is let go only once its pawns have gone.
+		Roster = null;
+		Store = null;
+		Journal = null;
+		Transfers = null;
+		Holders = null;
+		Characters = null;
+		World = new WorldData();
+		_accounts.Clear();
+		_budgets.Clear();
+		_eyes.Clear();
+		_worldRestored = false;
+		SandboxFileStore.Root = folder;
+		Open();
+		return true;
 	}
 
 	/// <summary>Host: loads what the city keeps, and starts its services.</summary>

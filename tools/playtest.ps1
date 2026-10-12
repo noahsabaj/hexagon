@@ -577,7 +577,7 @@ try {
     [void](Send 'open|Crate')
     [void](Send 'take|0')
     [void](Send 'open|Locker')
-    Expect 'the city keycard opens the locker, stocked as its author placed it' { Send 'state' } "open=\[Locker: Pistol, Pistol roundx30, Zip tiex2, Radio, Keycard#$cityCut, Key#$flatCut, Civil Protection mask, Civil Protection jacket, Civil Protection trousers, Black boots, Civil Authority stamp\]"
+    Expect 'the city keycard opens the locker, stocked as its author placed it' { Send 'state' } "open=\[Locker: Pistol, Pistol roundx30, Zip tiex2, Radio, Keycard#$cityCut, Key#$flatCut, Civil Protection mask, Civil Protection jacket, Civil Protection trousers, Black boots, Civil Authority stamp, Recruit's armband, Unit's armband, Officer's armband, Divisional Leader's armband\]"
     [void](Send 'take|Key')
     [void](Send 'door|Door 2|lock')
     [void](Send 'door|Door 2|use')
@@ -748,12 +748,12 @@ try {
     [void](Send 'enter|Officer Kane')
     [void](Poll { Send 'state' } "has=True name='Officer Kane'")
     Teleport 'Officer Kane' $door
-    # Staff appoint; a faction's own people recruit. Either way he is only told he belongs.
+    # Staff appoint a faction's head; its own people recruit the rest. Either way he is only told he belongs.
     [void](Send 'console|hexagon_faction "Officer Kane" civil_protection')
     [void](Send 'door|Door 1|lock')
     [void](Poll { Send 'journal' } '(?<!\S)verb\.door\.lock!=5(?!\S)')
     $state = Send 'state'
-    Expect 'staff appointed him to a faction' $state "name='Officer Kane' faction='Civil Protection'"
+    Expect 'staff appointed him to a faction, at its head' $state "name='Officer Kane' faction='Civil Protection' rank='Divisional Leader' "
     Expect 'which changed nothing about him: he wears what he arrived in' $state 'wearing=\[Flannel shirt, Jeans\] look=\[human01,hair_shortscruffy_brown,flannel_shirt,jeans\] '
     Expect 'he arrives with nothing but his papers, and his faction lets him lock nothing' $state 'items=\[Identification card@0,0\] .*Door 1:open=False,locked=False.*no key that fits'
     [void](Send 'open|Crate')
@@ -773,7 +773,7 @@ try {
     Expect 'the uniform is on him, over the shirt he came in' $state 'wearing=\[Flannel shirt, Civil Protection mask, Civil Protection jacket, Civil Protection trousers, Black boots\] '
     Expect 'and anyone can see it' $state 'look=\[human01,hair_shortscruffy_brown,flannel_shirt,gasmask,black_leather_jacket,jeans_black,black_boots\] '
     [void](Send 'put|Jeans')
-    Expect 'his own jeans stay in the locker' { Send 'state' } "open=\[Locker: Radio, Keycard#$cityCut, Civil Authority stamp, Jeans\]"
+    Expect 'his own jeans stay in the locker, with the armbands of every rank' { Send 'state' } "open=\[Locker: Radio, Keycard#$cityCut, Recruit's armband, Unit's armband, Officer's armband, Divisional Leader's armband, Civil Authority stamp, Jeans\]"
     [void](Send 'close')
     [void](Send 'door|Door 1|lock')
     $state = Poll { Send 'state' } 'Door 1:open=False,locked=True'
@@ -889,7 +889,7 @@ try {
 
     Section 'The journal'
     $journal = Send 'journal'
-    Expect 'every item came from a named source: staff, the scene as built, or what a character arrived in' $journal '(?<!\S)item\.issue=33(?!\S)'
+    Expect 'every item came from a named source: staff, the scene as built, or what a character arrived in' $journal '(?<!\S)item\.issue=37(?!\S)'
     Expect 'what was used up, or went with a retired or deleted character, went through a sink' $journal '(?<!\S)item\.destroy=19(?!\S)'
     Expect 'every hand-over is on record, bodies, restores, stripping and what a wounded arm let fall included' $journal '(?<!\S)item\.move=54(?!\S)'
     Expect 'putting on and taking off is on record' $journal '(?<!\S)verb\.item\.wear=8(?!\S)'

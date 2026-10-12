@@ -24,11 +24,12 @@
 		}
 		@if ( player.OfferText.Length > 0 )
 		{
-			<OfferPrompt Answering=@(!ChatOpen && player.MenuTarget is null && OfferingTo is null) />
+			<OfferPrompt Answering=@(!ChatOpen && player.MenuTarget is null && OfferingTo is null && RankingTo is null) />
 		}
 		@if ( player.MenuTarget is not null )
 		{
-			<VerbMenu OfferTo=@(( Player recipient ) => { OfferingTo = recipient; }) ShowTo=@(( Player reader ) => { ShowingTo = reader; }) />
+			<VerbMenu OfferTo=@(( Player recipient ) => { OfferingTo = recipient; }) ShowTo=@(( Player reader ) => { ShowingTo = reader; })
+				RankTo=@(( CharacterBody member ) => { RankingTo = member; }) />
 		}
 		@if ( OfferingTo is { } recipient )
 		{
@@ -37,6 +38,10 @@
 		@if ( ShowingTo is { } reader )
 		{
 			<OfferPicker Recipient=@reader Showing=@true Dismiss=@(() => { ShowingTo = null; }) />
+		}
+		@if ( RankingTo is { } member )
+		{
+			<RankPicker Member=@member Dismiss=@(() => { RankingTo = null; }) />
 		}
 		@if ( !Player.UiBusy )
 		{
@@ -72,6 +77,8 @@
 	private Player? OfferingTo { get; set; }
 	/// <summary>Whoever this character is choosing a paper to hold up for.</summary>
 	private Player? ShowingTo { get; set; }
+	/// <summary>Whoever this character is choosing a rank for.</summary>
+	private CharacterBody? RankingTo { get; set; }
 	private GameObject? _harmCues;
 
 	/// <summary>Opens one of the panels a key or a button opens, or closes them.</summary>
@@ -99,7 +106,7 @@
 	protected override void OnUpdate()
 	{
 		var local = Player.Local;
-		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || OfferingTo is not null || ShowingTo is not null || local?.OpenInventory is not null
+		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || OfferingTo is not null || ShowingTo is not null || RankingTo is not null || local?.OpenInventory is not null
 			|| local?.MenuTarget is not null || local?.Paper is not null || local?.LeaningOver is not null || local is not { HasCharacter: true };
 		if ( local is not { HasCharacter: true } )
 		{
@@ -107,10 +114,11 @@
 			InventoryOpen = false;
 			OfferingTo = null;
 			ShowingTo = null;
+			RankingTo = null;
 			return;
 		}
-		// A menu, a list of things to offer or show, a sheet being read or a map leant over has the keys until it is closed; each closes itself.
-		if ( local.MenuTarget is not null || OfferingTo is not null || ShowingTo is not null || local.Paper is not null || local.LeaningOver is not null ) return;
+		// A menu, a list of things to offer or show or ranks to give, a sheet being read or a map leant over has the keys until it is closed; each closes itself.
+		if ( local.MenuTarget is not null || OfferingTo is not null || ShowingTo is not null || RankingTo is not null || local.Paper is not null || local.LeaningOver is not null ) return;
 
 		if ( !ChatOpen && Input.Pressed( "Chat" ) )
 		{
@@ -131,6 +139,6 @@
 	protected override int BuildHash() => HashCode.Combine(
 		HashCode.Combine( Player.Local, Player.Local?.HasCharacter, Player.Local?.OfferText, Player.Local?.MenuTarget, Player.Local?.IsStaff ),
 		HashCode.Combine( Player.Local?.OpenInventory is null, Player.Local?.Inventory is null, Player.UiBusy ),
-		HashCode.Combine( ChatOpen, InventoryOpen, StaffOpen, OfferingTo, ShowingTo, Player.Local?.Paper is null, Player.Local?.LeaningOver ),
+		HashCode.Combine( ChatOpen, InventoryOpen, StaffOpen, OfferingTo, ShowingTo, RankingTo, Player.Local?.Paper is null, Player.Local?.LeaningOver ),
 		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.HoveredTooltip is null ) );
 }

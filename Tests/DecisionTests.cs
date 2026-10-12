@@ -78,7 +78,11 @@ public sealed class DecisionTests
 	public void WhatCanBeDoneToAPersonFollowsTheStateAnyoneCanSeeThemIn()
 	{
 		string[] Ids( bool down, bool restrained, string? finish = null ) => PersonVerbs.For( down, restrained, finish ).Select( verb => verb.Id ).ToArray();
-		CollectionAssert.AreEqual( new[] { VerbIds.PersonIntroduce, VerbIds.PersonOffer, VerbIds.PersonShow, VerbIds.PersonTreat, VerbIds.PersonRestrain }, Ids( false, false ) );
+		CollectionAssert.AreEqual( new[] { VerbIds.PersonIntroduce, VerbIds.PersonOffer, VerbIds.PersonShow, VerbIds.PersonTreat,
+			VerbIds.PersonEnlist, VerbIds.PersonRank, VerbIds.PersonDischarge, VerbIds.PersonRestrain }, Ids( false, false ) );
+		Assert.AreEqual( RankPower.Enlist, PersonVerbs.For( false, false ).Single( verb => verb.Id == VerbIds.PersonEnlist ).Rank, "only a superior is offered it" );
+		Assert.AreEqual( RankPower.Promote, PersonVerbs.For( false, false ).Single( verb => verb.Id == VerbIds.PersonRank ).Rank );
+		Assert.AreEqual( RankPower.Discharge, PersonVerbs.For( false, false ).Single( verb => verb.Id == VerbIds.PersonDischarge ).Rank );
 		CollectionAssert.AreEqual( new[] { VerbIds.PersonSearch, VerbIds.PersonTreat, VerbIds.PersonShow, VerbIds.PersonRelease }, Ids( false, true ) );
 		CollectionAssert.AreEqual( new[] { VerbIds.PersonRevive, VerbIds.PersonSearch, VerbIds.PersonFinish }, Ids( true, true ), "down outweighs bound" );
 
