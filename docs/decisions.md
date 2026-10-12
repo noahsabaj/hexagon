@@ -424,6 +424,52 @@ HL2RP's supply train comes at six in the morning and six in the evening with rat
 token blanks, its wagons locked to the city's keycard, and a scrap yard beside the line is worked
 with a crowbar from a toolbox there. A cutter beside it turns scrap into blanks for a press.
 
+## A truck is driven by whoever has its key, on fuel poured in by hand
+
+Inside the city, goods and people go by truck. A truck is driven by the host, as one body of the
+engine's physics with a spring for each wheel: each wheel traces down to the road under it, pushes up
+by how far it is pressed in, and holds the road along and across up to its grip, driving, braking or
+rolling as its driver asks. The engine's wheel joints were looked at and left: what a joint is set to
+is not sent to clients, and a vehicle made of several bodies is several objects on the network. One
+body is one transform, which the network already sends, and a truck can be no faster on one client
+than on another. A driver sends the pedal, the wheel and the brake, in quarters, whenever they change
+and every half second besides, on a budget of their own; nothing else a driver says about the truck
+is heard.
+
+Sitting is the engine's own: a seat is the engine's `ISitTarget`, the owner's client puts its pawn
+in the seat when the host says, and the engine poses it and carries it along. While someone sits,
+the host has them wherever their seat is, and their own claims count for nothing; a client that does
+not put its pawn in the seat is put out of it. A seat is part of its truck's network object, never
+one of its own: the engine lets a client put its pawn only under an object that is not a network
+object of its own, or one it controls, as with the engine's own chairs. Getting out is to the ground
+beside the seat, or on the other side, behind or in front, wherever there is room, and is on the
+record. Someone put down, killed, bound, moved by staff or leaving the city gets out first, so
+nobody lies inside a truck or is saved sitting in one.
+
+The host's truck goes through people: a person is moved by their own player, and against their body
+as the host has it, which only follows them, a truck would stop dead. Their own client still has
+them solid to it, so a truck pushes them aside there. A truck closing on someone faster than a walk
+strikes them, once in a while, by how fast: a bruise at first, and a broken leg once it is fast. It
+never kills by itself. The strike is on the record under whoever was at the wheel, and the harm is
+theirs, as a shot is the shooter's.
+
+The tank is filled by hand from a can of fuel held in it, a whole can or none, so nothing is spilled
+and nothing is lost; the can is used up, through the `consumed` sink. Driving under power burns fuel
+by the distance driven, and an empty tank stops a truck pulling, though it rolls on. A truck's bed is
+a holder, kind `bed`, that goes where the truck does, locked to the same key as its ignition. Where a
+truck was left, which way it faced and what is in its tank are kept with the world, when its driver
+gets out and at every autosave. A truck cannot be damaged, and cannot be started without its key:
+hot-wiring comes with stealth.
+
+A model from the cloud named in a scene is found only where the editor installed its package, so a
+dedicated server and its clients drew the error model where the truck stood. A `Hexagon Cloud Model`
+beside the renderer names the package and mounts it as the scene loads, through the engine's
+`Cloud.Load`; on the host that makes it a package every client installs as it joins, as the engine's
+own dresser does for clothing. The scene loads no further until it is mounted.
+
+HL2RP's Combine truck stands by the station, its ignition and bed cut to the city's keycard, with a
+crate holding a can of fuel beside it. The supply train brings two more cans each time it comes.
+
 ## The HUD shows what a character would know
 
 In the city the HUD shows prompts and chat. Health is not a number, because nobody knows their health
@@ -623,6 +669,13 @@ city it left wrong.
 - A ragdoll is announced with its model, the citizen or a human skin, to every client, before the
   reveal's hold. A client far away can learn which kind of body lies somewhere, though not whose.
 - Bodies cannot be dragged yet; that comes with stealth.
+- A truck is Facepunch's two development models, drawn in the engine's tintable white and squeezed
+  to a truck's size; the back is a tanker standing in for a bed. Its wheels are part of the model,
+  so they neither turn nor spin, and its cab has no inside.
+- A truck is driven on the host alone, so a driver feels the round trip to it in the wheel.
+- On a listen server, the host's own character is not solid to trucks as the host has them.
+- A truck strikes only people on their feet. Someone lying on the ground or left bound is a body,
+  pushed by it but not struck.
 - A body emptied of what it carried is removed, so someone who dies carrying nothing leaves no body.
 - The engine ships no weapon models, so HL2RP's pistol is a block held in a pistol stance.
 - A new character's body, hair and clothes are chosen from pictures; there is no preview of the
@@ -656,9 +709,8 @@ city it left wrong.
   s&box and stay local.
 - The play tests run both clients as one Steam account, so account-level rules are tested by one
   account, and the two-client test allows that account two lives at once.
-- Trucks inside the city, driven by players, and player offices are not built yet. Until they
-  are, things enter the world only from staff, from stocked containers, with new characters, by
-  train, from sites, and made from those.
+- Player offices are not built yet. Until they are, things enter the world only from staff, from
+  stocked containers, with new characters, by train, from sites, and made from those.
 
 HL2RP keeps what is about its setting: the scanner, civic records as a view of the journal,
 forcefields and ration dispensers.

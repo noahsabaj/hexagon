@@ -211,6 +211,9 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 		}
 		foreach ( var body in Holders!.OfKind( HolderKinds.Corpse ).ToArray() )
 			if ( Corpse.HostKeepPosition( body ) ) Holders.Save( body );
+		// Vehicles are kept where they were left, which driving changes all the time.
+		foreach ( var vehicle in Scene.Components.GetAll<Vehicle>( FindMode.EverythingInSelfAndDescendants ) ) vehicle.HostKeep();
+		SaveWorld();
 	}
 
 	void Component.INetworkListener.OnActive( Connection connection )

@@ -187,6 +187,7 @@ public sealed partial class Player
 	/// <summary>Host: the character stops being in the city. The pawn stays, back in the menu.</summary>
 	private void HostUnload()
 	{
+		HostLeaveSeat();
 		HostClose();
 		HostStopShown( close: true );
 		HostStopLeaning( tell: true );

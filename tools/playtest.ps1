@@ -737,6 +737,21 @@ try {
     [void](Send 'say|/r testing')
     Expect 'the dial belongs to the radio, and the speaker hears themselves on it' { Send 'state' } 'Radio~101\.5@0,1.*\[101\.5\] John Doe: "testing"'
 
+    Section 'A truck is driven from its seat'
+    Teleport 'John Doe' (Spot 'Combine truck' left 30)
+    [void](Send 'sit|Combine truck|drive')
+    Expect 'with the city''s key he takes the wheel' { Send 'state' } "seated='Combine truck:wheel'"
+    [void](Send 'drive|1|0|0')
+    Expect 'and drives off' (Poll { Send 'vehicles' } 'speed=([2-9]\d\d|\d{4}) ') 'speed=([2-9]\d\d|\d{4}) '
+    Snapshot 'driving'
+    [void](Send 'drive|0|0|1')
+    Expect 'and stops' (Poll { Send 'vehicles' } 'speed=[0-4] ') 'speed=[0-4] '
+    [void](Send 'drive|off')
+    [void](Send 'getout')
+    Expect 'he gets out beside it' { Send 'state' } "seated='' "
+    Wait-Landed
+    Teleport 'John Doe' $door
+
     Section 'What is left in a crate is anyone''s'
     [void](Send 'open|Crate')
     [void](Send 'put|Keycard')

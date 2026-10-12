@@ -236,20 +236,27 @@ function Wait-Landed([int] $Client) {
     } while ([DateTime]::UtcNow -lt $until)
 }
 
-# Client 1 shoots at a part of someone, from his own eyes, at where the host has it, as a player aims at
-# what they see. Each machine animates a body for itself, a few units apart, so aiming at his own copy
-# of an arm could miss hers on the host. A body still falling is waited for, until two looks agree.
-function Shoot([string] $Name, [string] $Bone) {
+# Where the host has a part of someone, as x, y and z. A body still falling is waited for, until two
+# looks agree.
+function Part([string] $Name, [string] $Bone) {
     $last = $null
     $until = [DateTime]::UtcNow.AddSeconds(10)
     do {
         $reply = Send 0 "part|$Name|$Bone"
-        if ($reply -notmatch '^(-?[\d.]+) (-?[\d.]+) (-?[\d.]+)') { throw "No part '$Bone' of $Name to shoot at: $reply" }
+        if ($reply -notmatch '^(-?[\d.]+) (-?[\d.]+) (-?[\d.]+)') { throw "No part '$Bone' of ${Name}: $reply" }
         $at = @($Matches[1], $Matches[2], $Matches[3])
         if ($null -ne $last -and ((0..2 | ForEach-Object { [Math]::Abs([double] $at[$_] - [double] $last[$_]) }) | Measure-Object -Sum).Sum -lt 2) { break }
         $last = $at
         Start-Sleep -Milliseconds 250
     } while ([DateTime]::UtcNow -lt $until)
+    return $at
+}
+
+# Client 1 shoots at a part of someone, from his own eyes, at where the host has it, as a player aims at
+# what they see. Each machine animates a body for itself, a few units apart, so aiming at his own copy
+# of an arm could miss hers on the host.
+function Shoot([string] $Name, [string] $Bone) {
+    $at = Part $Name $Bone
     [void](Send 1 "attack|$($at -join '|')")
 }
 
@@ -748,6 +755,19 @@ try {
     # A pistol is made to kill: a shot to the head kills outright, someone lying down as much as anyone.
     [void](Poll { Send 1 'sleepers' } ',down,limp')
     Start-Sleep -Milliseconds 550
+    # Someone lying down is finished from close by, from wherever their head can be seen: fallen against
+    # a wall, or round the end of one, it may be out of sight from across the room. He goes back after.
+    $across = if ((Send 1 'state') -match 'pos=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)') { [int[]] @([double] $Matches[1], [double] $Matches[2], ([double] $Matches[3] + 8)) }
+    # Stepping over there may brush the body, if it fell against him; then he looks again from where it lies.
+    for ($look = 0; $look -lt 3; $look++) {
+        $head = [double[]] (Part 'Jane Roe' head)
+        $over = Send 0 'vantage|Jane Roe|head|40|John Doe'
+        if ($over -notmatch '^(-?\d+) (-?\d+) (-?\d+)') { throw "Nowhere to finish her from: $over" }
+        Teleport 1 'John Doe' ([int[]] @($Matches[1], $Matches[2], ([int] $Matches[3] + 8)))
+        Wait-Landed 1
+        $now = [double[]] (Part 'Jane Roe' head)
+        if ([Math]::Abs($now[0] - $head[0]) + [Math]::Abs($now[1] - $head[1]) + [Math]::Abs($now[2] - $head[2]) -lt 4) { break }
+    }
     Shoot 'Jane Roe' head
     Expect 'a shot to her head as she lies there kills her, and her player is back at the list, where the dead are kept' { Send 2 'state' } 'has=False .*characters=\[John Doe, Jane Roe\(dead\)\].*Jane Roe has died\.'
     $journal = Poll { Send 0 'journal' } '(?<!\S)character\.death=1(?!\S)'
@@ -760,6 +780,8 @@ try {
     Expect 'what she carried is on her body, and what she wore' { Send 1 'state' } 'bodies=1 .*open=\[Body: Identification card, Water\] openworn=\[Flannel shirt, Jeans, Black boots\] '
     Expect 'and the body is seen in it' (Send 1 'state') 'bodylooks=\[human02,hair_bobcut,flannel_shirt,jeans,black_boots\] '
     [void](Send 1 'close')
+    Teleport 1 'John Doe' $across
+    Wait-Landed 1
 
     Section 'The next life waits; staff can undo a death'
     [void](Send 2 "create|Max Muster|$description|citizen")
@@ -781,7 +803,7 @@ try {
     Section 'Money is made by someone, from something'
     # The city's press stands locked; a forger keeps a crude one a little way off, with a die. He is put
     # back where he stands now afterwards, which is where the next section has him.
-    $stood = if ((Send 1 'state') -match 'pos=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)') { [int[]] @([double] $Matches[1], [double] $Matches[2], [double] $Matches[3] + 8) }
+    $stood = if ((Send 1 'state') -match 'pos=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)') { [int[]] @([double] $Matches[1], [double] $Matches[2], ([double] $Matches[3] + 8)) }
     $press = Spot 'Token press' front 20
     Teleport 1 'John Doe' $press
     [void](Send 1 'work|Token press')
@@ -865,26 +887,26 @@ try {
     Expect 'held by staff, the train is away' (Send 1 'trains') 'Supply train:phase=Away '
     [void](Send 0 'console|hexagon_train "Supply train" send')
     Expect 'sent, it rolls in to its station and stands there' (Poll { Send 1 'trains' } 'phase=Waiting at=400,-1050' 30) 'Supply train:phase=Waiting at=400,-1050'
-    Expect 'its arrival is on record, with what it brought' (Send 0 'journal|train.arrive') 'data=\[train=Supply train brings=Ration x16, Water x16, Token blank x40\]'
+    Expect 'its arrival is on record, with what it brought' (Send 0 'journal|train.arrive') 'data=\[train=Supply train brings=Ration x16, Water x16, Token blank x40, Fuel can x2\]'
     Teleport 1 'John Doe' (Spot 'Supply wagon' left 20)
     Teleport 2 'Jane Roe' (Spot 'Supply wagon' right 20)
     [void](Send 2 'open|Supply wagon')
     Expect 'its wagons are locked to whoever has no key' { Send 2 'state' } 'It is locked, and you have no key that fits\.'
     [void](Send 1 'open|Supply wagon')
-    Expect 'with the city''s key he opens it: what it brought, and a manifest of it' { Send 1 'state' } 'open=\[Supply wagon: (Rationx4, ){4}(Waterx4, ){4}Token blankx40, Manifest\] '
+    Expect 'with the city''s key he opens it: what it brought, and a manifest of it' { Send 1 'state' } 'open=\[Supply wagon: (Rationx4, ){4}(Waterx4, ){4}Token blankx40, Fuel can, Fuel can, Manifest\] '
     [void](Send 1 'take|Manifest')
     [void](Send 1 'take|Ration')
     [void](Send 1 'close')
     [void](Poll { Send 1 'state' } 'items=\[[^\]]*Manifest@[^\]]*Rationx4@')
     [void](Send 1 'read|Manifest')
-    Expect 'the manifest says what came, under the railway''s stamp' { Send 1 'state' } "paper='Manifest' .*lines=\[Supply train, \d+ \w+, \d\d:\d\d / Ration x16 / Water x16 / Token blank x40\] fields=\[\] stamps=\[Combine Overwatch Logistics@4\] "
+    Expect 'the manifest says what came, under the railway''s stamp' { Send 1 'state' } "paper='Manifest' .*lines=\[Supply train, \d+ \w+, \d\d:\d\d / Ration x16 / Water x16 / Token blank x40 / Fuel can x2\] fields=\[\] stamps=\[Combine Overwatch Logistics@5\] "
     Teleport 1 'John Doe' (Spot 'Outbound wagon' left 20)
     [void](Send 1 'open|Outbound wagon')
     [void](Send 1 'put|Ration')
     Expect 'he loads a ration pile on the outbound wagon' { Send 1 'state' } 'open=\[Outbound wagon: Rationx4\] '
     [void](Send 0 'console|hexagon_train "Supply train" away')
     Expect 'sent away, it shuts him out and rolls on' { Send 1 'state' } "open=\[: \] "
-    Expect 'taking what was loaded, and what nobody unloaded, out of the world' (Poll { Send 0 'journal|train.depart' } 'took=' 10) 'data=\[train=Supply train took=Ration x16, Water x16, Token blank x40\]'
+    Expect 'taking what was loaded, and what nobody unloaded, out of the world' (Poll { Send 0 'journal|train.depart' } 'took=' 10) 'data=\[train=Supply train took=Ration x16, Water x16, Token blank x40, Fuel can x2\]'
     Expect 'each of it on the record' (Send 0 'journal|item.destroy') 'data=\[sink=departed '
     Expect 'what he unloaded stays with him' (Send 1 'state') 'Manifest@'
     Expect 'it is gone from the line' (Poll { Send 1 'trains' } 'phase=Away' 30) 'Supply train:phase=Away '
@@ -913,6 +935,86 @@ try {
     [void](Send 2 'close')
     [void](Send 2 'work|Scrap cutter')
     Expect 'a cutter turns scrap into blanks for a press' (Poll { Send 2 'state' } 'Done: Token blank x5\.' 15) 'Done: Token blank x5\.'
+    Teleport 1 'John Doe' $stood
+    Wait-Landed 1
+
+    Section 'A truck goes where its driver takes it, on fuel poured in by hand'
+    # Where the truck stands, which way it faces, how fast it goes and what is in its tank, as the server has it.
+    function Truck {
+        $reply = Send 0 'vehicles'
+        if ($reply -notmatch 'Combine truck: at=(-?\d+),(-?\d+),(-?\d+) yaw=(-?\d+) speed=(\d+) fuel=([\d.]+)') { throw "No truck: $reply" }
+        return [pscustomobject] @{ X = [int] $Matches[1]; Y = [int] $Matches[2]; Yaw = [int] $Matches[4]; Speed = [int] $Matches[5]; Fuel = [double] $Matches[6]; Reply = $reply }
+    }
+    $parked = Truck
+    Expect 'a truck stands parked, its tank a third full' $parked.Reply 'speed=0 fuel=20 driver='''' riders=0'
+    Teleport 2 'Jane Roe' (Spot 'Combine truck' left 30)
+    [void](Send 2 'sit|Combine truck|drive')
+    Expect 'without its key, she cannot start it' { Send 2 'state' } 'It will not start without its key\.'
+    [void](Send 2 'sit|Combine truck|ride')
+    Expect 'but she can ride beside whoever drives' { Send 2 'state' } "seated='Combine truck:beside'"
+    Teleport 1 'John Doe' (Spot 'Combine truck' left 30)
+    [void](Send 1 'sit|Combine truck|drive')
+    Expect 'with the city''s key he sits at the wheel' { Send 1 'state' } "seated='Combine truck:wheel'"
+    Expect 'and the truck has both of them in it' (Send 0 'vehicles') "driver='John Doe' riders=2"
+    [void](Send 1 'drive|1|0|0')
+    Expect 'he drives it forward' (Poll { $t = Truck; if ([Math]::Abs($t.X - $parked.X) + [Math]::Abs($t.Y - $parked.Y) -gt 250) { 'moved' } else { $t.Reply } } '^moved$' 10) '^moved$'
+    [void](Send 1 'drive|0.5|-1|0')
+    Expect 'and turns it' (Poll { $t = Truck; if ([Math]::Abs((($t.Yaw - $parked.Yaw + 540) % 360) - 180) -gt 30) { 'turned' } else { $t.Reply } } '^turned$' 10) '^turned$'
+    [void](Send 1 'drive|0|0|1')
+    Expect 'and brakes it to a stop' (Poll { $t = Truck; if ($t.Speed -lt 5) { 'stopped' } else { $t.Reply } } '^stopped$' 10) '^stopped$'
+    $driven = Truck
+    Expect 'driving burned fuel by the distance' "$($driven.Fuel)" '^1\d(\.\d+)?$'
+    Expect 'Jane was carried along, as her client has it' "$(Near (Send 2 'state') @($driven.X, $driven.Y) 120)" '^True$'
+    $implausible = if ((Send 0 'journal') -match '(?<!\S)movement\.implausible!=(\d+)') { [int] $Matches[1] } else { 0 }
+    [void](Send 1 'drive|off')
+    [void](Send 1 'getout')
+    [void](Send 2 'getout')
+    Expect 'he gets out' { Send 1 'state' } "seated='' "
+    Expect 'and so does she' { Send 2 'state' } "seated='' "
+    Wait-Landed 1
+    Wait-Landed 2
+    Expect 'he stands beside the truck where it stopped' "$(Near (Send 1 'state') @($driven.X, $driven.Y) 200)" '^True$'
+    Expect 'getting out is on the record' { Send 0 'journal' } '(?<!\S)vehicle\.leave=2(?!\S)'
+    Expect 'riding and getting out was no implausible movement' (Send 0 'journal') "(?<!\S)movement\.implausible!=$implausible(?!\S)|^(?!.*movement\.implausible!)"
+    Teleport 2 'Jane Roe' (Spot 'Truck bed' right 20)
+    [void](Send 2 'open|Truck bed')
+    Expect 'its bed is locked to her' { Send 2 'state' } 'It is locked, and you have no key that fits\.'
+    Teleport 1 'John Doe' (Spot 'Truck bed' left 20)
+    [void](Send 1 'open|Truck bed')
+    Expect 'and opens with the truck''s key' { Send 1 'state' } 'open=\[Truck bed: \] '
+    [void](Send 1 'close')
+    Teleport 2 'Jane Roe' (Spot 'Fuel crate' front 20)
+    [void](Send 2 'open|Fuel crate')
+    [void](Poll { Send 2 'state' } 'open=\[Fuel crate: Fuel can\] ')
+    [void](Send 2 'take|Fuel can')
+    [void](Send 2 'close')
+    [void](Send 2 'equip|Fuel can')
+    [void](Poll { Send 2 'state' } "held='Fuel can'")
+    Teleport 2 'Jane Roe' (Spot 'Combine truck' right 30)
+    [void](Send 2 'refuel|Combine truck')
+    Expect 'she fills its tank from the can in her hand' { Send 2 'state' } 'You fill the tank\. The gauge reads 6\d%\.'
+    [void](Poll { Send 2 'state' } "held='' ")
+    Expect 'which is used up' (Send 2 'state') 'Fuel can@' -Not
+    Expect 'and is in the tank' (Truck).Reply "fuel=$([Math]::Round($driven.Fuel + 20, 2)) "
+    [void](Send 0 'console|hexagon_give "Jane Roe" keycard 1 city')
+    [void](Poll { Send 2 'state' } 'Keycard#')
+    [void](Send 2 'sit|Combine truck|drive')
+    Expect 'with a key of her own she takes the wheel' { Send 2 'state' } "seated='Combine truck:wheel'"
+    Teleport 1 'John Doe' (Spot 'Combine truck' front 150)
+    Wait-Landed 1
+    $health = if ((Send 1 'state') -match 'health=(\d+)') { $Matches[1] }
+    [void](Send 2 'drive|1|0|0')
+    Expect 'driven at him faster than a walk, it strikes him, on the record under her' (Poll { Send 0 'journal|vehicle.strike' } "actor='Jane Roe'" 10) "actor='Jane Roe' .*data=\[vehicle=Combine truck speed=\d+ place="
+    [void](Send 2 'drive|0|0|1')
+    Expect 'and hurts him, but does not put him down' { Send 1 'state' } "health=(?!$health )\d+ down=False"
+    [void](Poll { $t = Truck; if ($t.Speed -lt 5) { 'stopped' } else { $t.Reply } } '^stopped$' 10)
+    [void](Send 2 'drive|off')
+    [void](Send 2 'getout')
+    [void](Poll { Send 2 'state' } "seated='' ")
+    [void](Send 0 'tank|Combine truck|0')
+    [void](Send 2 'sit|Combine truck|drive')
+    Expect 'with its tank empty, it will not start' { Send 2 'state' } 'The tank is empty\.'
+    $truckLeft = Truck
     Teleport 1 'John Doe' $stood
     Wait-Landed 1
 
@@ -948,6 +1050,7 @@ try {
         $script:server.WaitForExit()
         Start-Server $copy
         Expect 'a server started on the copy has every character, with all they had' (Send 0 'roster') "^$([regex]::Escape($saved))$"
+        Expect 'and the truck stands where it was left, its tank as it was' "$(Near (Send 0 'vehicles') @($truckLeft.X, $truckLeft.Y) 20) $(Send 0 'vehicles')" '^True .*fuel=0 '
     }
 
     Test-Problems

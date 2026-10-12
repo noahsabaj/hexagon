@@ -97,6 +97,12 @@ itself to.
   with the key its lock is cut to. It brings what its asset lists, with a manifest of it under its
   railway's stamp, and takes away whatever is still aboard, loaded or never unloaded. A train missed
   while the server was down never comes; staff can send one, send it away, or hold it.
+- **Trucks.** A truck is driven by whoever sits at its wheel with a key cut to its lock, on the fuel
+  in its tank, which driving burns by the distance and which is poured in by hand, a whole can at a
+  time. The host drives it, as one body held up by its wheels; a driver sends only the pedals and the
+  wheel. Someone else can ride beside the driver, and the bed behind locks to the same key. A truck
+  that strikes someone faster than a walk hurts them, by how fast, on the record under its driver;
+  slower, it pushes them aside. It stays where it was left, with what is in its tank.
 - **Sites.** A place worked for what it yields, such as a scrap yard, is worked like a machine, with
   the right tool in hand, and gives a little each time. What is taken grows back slowly, up to what
   the site holds at most.
@@ -114,10 +120,11 @@ itself to.
   including restoring a character whose death broke the rules.
 - **Persistence.** Characters, what they know and wear, their health and state, what is written on
   papers and drawn on maps, holders, doors, the last serial each press printed, a train standing at
-  its station and what each site has left survive a restart. So does the journal. A change to two documents, such as a hand-over,
+  its station, what each site has left, and where each truck was left with what is in its tank
+  survive a restart. So does the journal. A change to two documents, such as a hand-over,
   is saved as one.
 - **A default HUD**: character menu, chat, inventory, the open holder, verbs, offers, the tools of a
-  map leant over, how far along some work is, staff panel.
+  map leant over, how far along some work is, the seat taken and the fuel gauge, staff panel.
   In the city it shows only prompts and chat; a prompt draws the key as the player has it bound.
   Items are dragged between cells, piles and holders, and out of the window to drop them. Being hurt shows through the engine's
   post-processing instead of a number: the edges of sight darken and the colour drains, and being
@@ -149,7 +156,9 @@ pwsh tools/verify.ps1
 2. Link this checkout into the game: a `Libraries/hexagon` junction pointing here.
 3. In the startup scene, add a `ScreenPanel` with the `Hud`, at least one `SpawnPoint`, and any
    `Hexagon Door` objects, which must be networked objects. The city's services come with the library;
-   their rules are under Hexagon in the project's Systems settings.
+   their rules are under Hexagon in the project's Systems settings. A model from the cloud needs a
+   `Hexagon Cloud Model` beside its renderer, naming its package, or a dedicated server and its
+   clients draw the error model.
 4. Author `.faction` and `.item` assets.
 
 ## How it is built

@@ -77,6 +77,10 @@ public static class JournalKinds
 	public const string TrainArrive = "train.arrive";
 	/// <summary>A train left its station, with what it took.</summary>
 	public const string TrainDepart = "train.depart";
+	/// <summary>Someone got out of a truck.</summary>
+	public const string VehicleLeave = "vehicle.leave";
+	/// <summary>A truck struck someone at speed, under whoever was at its wheel.</summary>
+	public const string VehicleStrike = "vehicle.strike";
 
 	/// <summary>Asked for faster than the budget allows.</summary>
 	public const string RequestLimited = "request.limited";
