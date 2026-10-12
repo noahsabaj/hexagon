@@ -50,7 +50,7 @@ $script:nonce = 0
 # the host for nothing.
 $requests = 'create', 'enter', 'leave', 'delete', 'retire', 'say', 'introduce', 'door', 'open', 'take', 'put', 'close',
     'pickup', 'drop', 'use', 'equip', 'move', 'split', 'merge', 'tune', 'act', 'attack', 'offer', 'offerdoor', 'answer', 'staff',
-    'wear', 'strip', 'item'
+    'wear', 'strip', 'item', 'read', 'write', 'fill', 'stamp', 'show', 'closepaper'
 $script:allowance = 10.0
 $script:counted = [DateTime]::UtcNow
 $script:lastProblem = 'none'
@@ -401,19 +401,19 @@ try {
     [void](Send 'say|//brb')
     $state = Poll { Send 'state' } '\[OOC\] [^:/]+: brb'
     Expect 'the owner was told its own name, and that he belongs to no faction' $state "has=True name='John Doe' faction='' "
-    Expect 'a new character arrives with nothing but its clothes' $state 'items=\[\] wearing=\[Flat cap, Shirt and waistcoat, Trousers, Black boots\] '
+    Expect 'a new character arrives with nothing but its clothes and its papers' $state 'items=\[Identification card@0,0\] wearing=\[Flat cap, Shirt and waistcoat, Trousers, Black boots\] '
     Expect 'and looks it: the cap he wears hides his hair' $state 'look=\[flatcap,waistcoat_and_shirt,trousers\.smart,black_boots\] '
     Expect 'speech, emote and out-of-character lines were delivered' $state 'John Doe says "Hello there" / \*\* John Doe waves / \[OOC\] [^:/]+: brb'
 
     Section 'Clothes are put on and taken off by hand'
     [void](Send 'wear|Flat cap')
-    $state = Poll { Send 'state' } 'items=\[Flat cap@0,0\]'
-    Expect 'taken off, the cap is carried' $state 'items=\[Flat cap@0,0\] wearing=\[Shirt and waistcoat, Trousers, Black boots\] '
+    $state = Poll { Send 'state' } 'items=\[Flat cap@1,0, Identification card@0,0\]'
+    Expect 'taken off, the cap is carried' $state 'items=\[Flat cap@1,0, Identification card@0,0\] wearing=\[Shirt and waistcoat, Trousers, Black boots\] '
     Expect 'and the hair it hid shows' $state 'look=\[hair_slickedback,waistcoat_and_shirt,trousers\.smart,black_boots\] '
     [void](Send 'item|drop|Black boots')
     Expect 'what is worn is taken off before it is dropped' { Send 'state' } 'wearing=\[Shirt and waistcoat, Trousers, Black boots\] .*Take it off first\.'
     [void](Send 'wear|Flat cap')
-    Expect 'put back on, it is worn again and takes no room' { Send 'state' } 'items=\[\] wearing=\[Shirt and waistcoat, Trousers, Black boots, Flat cap\] look=\[waistcoat_and_shirt,trousers\.smart,black_boots,flatcap\] '
+    Expect 'put back on, it is worn again and takes no room' { Send 'state' } 'items=\[Identification card@0,0\] wearing=\[Shirt and waistcoat, Trousers, Black boots, Flat cap\] look=\[waistcoat_and_shirt,trousers\.smart,black_boots,flatcap\] '
     [void](Send 'panel|inventory')
     Snapshot 'dressed'
     [void](Send 'panel|none')
@@ -459,7 +459,7 @@ try {
     [void](Send 'console|hexagon_give "John Doe" keycard 1 city')
     [void](Send 'door|Door 1|lock')
     $state = Poll { Send 'state' } 'Door 1:open=False,locked=True'
-    Expect 'an operator issued a keycard cut to the city''s locks, and its holder sees its cut' $state "items=\[Keycard#$cityCut@0,0\]"
+    Expect 'an operator issued a keycard cut to the city''s locks, and its holder sees its cut' $state "items=\[Identification card@0,0, Keycard#$cityCut@1,0\]"
     Expect 'never the pattern, which would say what it opens' "$($state -notmatch '#city') $state" '^True '
     Expect 'holding the keycard let a citizen lock the door' $state 'Door 1:open=False,locked=True'
     # A closed door is a wall. One step through it is no faster than walking, and is still refused. Locking
@@ -469,30 +469,30 @@ try {
     Expect 'stepping through the locked door did not get past it' { State-Near $door } '^near=True'
     Expect 'and the host recorded it as a wall' { Send 'journal|movement.implausible' } "ok=False .*claimed=$($through -join ',') reason=wall"
     [void](Send 'door|Door 1|lock')
-    [void](Send 'drop|0')
+    [void](Send 'drop|Keycard')
     [void](Send 'door|Door 1|lock')
     [void](Poll { Send 'journal' } '(?<!\S)verb\.door\.lock!=2(?!\S)')
     $state = Send 'state'
-    Expect 'the dropped keycard left the inventory' $state 'items=\[\] '
+    Expect 'the dropped keycard left the inventory' $state 'items=\[Identification card@0,0\] '
     Expect 'and lies in the world' $state 'ground=\[Keycard\]'
     Expect 'without the keycard the door stayed unlocked' $state 'Door 1:open=False,locked=False.*no key that fits'
 
     Section 'Holders: the ground, a stocked crate'
     [void](Send 'pickup|Keycard')
-    Expect 'picking it up is the same transfer in reverse' { Send 'state' } "Keycard#$cityCut@0,0.*ground=\[\]"
+    Expect 'picking it up is the same transfer in reverse' { Send 'state' } "Keycard#$cityCut@1,0.*ground=\[\]"
     [void](Send 'open|Crate')
     Expect 'the crate holds what its author stocked it with, placed the first time it is opened' { Send 'state' } 'open=\[Crate: Rationx4, Waterx2, Bandagex2, Tokenx40\]'
     foreach ($pile in 1..4) { [void](Send 'take|0') }
-    Expect 'whole piles are taken whole, money with the rest' { Send 'state' } "items=\[Keycard#$cityCut@0,0, Rationx4@1,0, Waterx2@2,0, Bandagex2@3,0, Tokenx40@4,0\] .*open=\[Crate: \]"
-    [void](Send 'put|0')
+    Expect 'whole piles are taken whole, money with the rest' { Send 'state' } "items=\[Identification card@0,0, Keycard#$cityCut@1,0, Rationx4@2,0, Waterx2@3,0, Bandagex2@4,0, Tokenx40@5,0\] .*open=\[Crate: \]"
+    [void](Send 'put|Keycard')
     [void](Send 'door|Door 1|lock')
     [void](Poll { Send 'journal' } '(?<!\S)verb\.door\.lock!=3(?!\S)')
     $state = Send 'state'
     Expect 'the crate shows its contents to whoever opened it' $state "open=\[Crate: Keycard#$cityCut\]"
     Expect 'a keycard in a crate opens nothing' "$($state -notmatch 'items=\[[^\]]*Keycard') $state" '^True .*Door 1:open=False,locked=False'
-    [void](Send 'use|1')
-    Expect 'drinking used one water up, in view of anyone nearby' { Send 'state' } 'Water@2,0.*John Doe drinks from a can of water'
-    [void](Send 'move|0|4|3')
+    [void](Send 'use|Water')
+    Expect 'drinking used one water up, in view of anyone nearby' { Send 'state' } 'Water@3,0.*John Doe drinks from a can of water'
+    [void](Send 'move|Ration|4|3')
     Expect 'an item moved to the requested cell' { Send 'state' } 'Rationx4@4,3'
     [void](Send 'close')
     Expect 'the crate closed' { Send 'state' } 'open=\[: \]'
@@ -512,24 +512,24 @@ try {
     Expect 'and the wound to his leg stays: he walks on it, slowly, and cannot run' $state 'wounds=\[left leg\] limping=True breathing=False speed=60 '
     Expect 'he is told where he was hit' $state 'You are hit in the left leg\.'
     Snapshot 'hurt' 0.6
-    [void](Send 'use|2')
-    Expect 'a bandage treated the wound, healed a little, and was used up' { Send 'state' } 'Bandage@3,0.*health=90 .*wounds=\[\] limping=False breathing=False speed=320 .*Your left leg is treated\. / \*\* John Doe binds a wound'
+    [void](Send 'use|Bandage')
+    Expect 'a bandage treated the wound, healed a little, and was used up' { Send 'state' } 'Bandage@4,0.*health=90 .*wounds=\[\] limping=False breathing=False speed=320 .*Your left leg is treated\. / \*\* John Doe binds a wound'
     # A wound to an arm drops what is in hand, and the hand takes nothing until the wound is treated.
     [void](Send 'console|hexagon_give "John Doe" zip_tie')
     [void](Poll { Send 'state' } 'Zip tie@')
-    [void](Send 'equip|4')
+    [void](Send 'equip|Zip tie')
     [void](Poll { Send 'state' } "held='Zip tie'")
     [void](Send 'console|hexagon_hurt "John Doe" 10 "right arm"')
     $state = Poll { Send 'state' } 'wounds=\[right arm\]'
-    Expect 'a wound to his arm dropped what he held' $state "items=\[Rationx4@4,3, Water@2,0, Bandage@3,0, Tokenx40@4,0\] .*health=80 down=False restrained=False held='' .*wounds=\[right arm\] .*ground=\[Zip tie\]"
-    [void](Send 'equip|0')
+    Expect 'a wound to his arm dropped what he held' $state "items=\[Identification card@0,0, Rationx4@4,3, Water@3,0, Bandage@4,0, Tokenx40@5,0\] .*health=80 down=False restrained=False held='' .*wounds=\[right arm\] .*ground=\[Zip tie\]"
+    [void](Send 'equip|Ration')
     Expect 'and that hand takes nothing' { Send 'state' } "held='' .*Your arm will not hold anything until the wound is treated\."
     [void](Send 'pickup|Zip tie')
     [void](Send 'console|hexagon_give "John Doe" bandage')
-    [void](Poll { Send 'state' } 'Bandagex2@3,0.*Zip tie@')
-    [void](Send 'use|2')
-    Expect 'treated, the arm is whole again' { Send 'state' } 'Bandage@3,0.*health=100 .*wounds=\[\] .*Your right arm is treated\.'
-    [void](Send 'equip|0')
+    [void](Poll { Send 'state' } 'Bandagex2@4,0.*Zip tie@')
+    [void](Send 'use|Bandage')
+    Expect 'treated, the arm is whole again' { Send 'state' } 'Bandage@4,0.*health=100 .*wounds=\[\] .*Your right arm is treated\.'
+    [void](Send 'equip|Ration')
     Expect 'and holds what it is given' { Send 'state' } "held='Ration'"
     # Bound, his hands are behind his back, where anyone sees them. A test has one client, so he binds himself.
     Expect 'bound with the tie he picked up' (Send 'bind|John Doe') '^bound$'
@@ -576,15 +576,65 @@ try {
     [void](Send 'open|Crate')
     [void](Send 'take|0')
     [void](Send 'open|Locker')
-    Expect 'the city keycard opens the locker, stocked as its author placed it' { Send 'state' } "open=\[Locker: Pistol, Pistol roundx30, Zip tiex2, Radio, Keycard#$cityCut, Key#$flatCut, Civil Protection mask, Civil Protection jacket, Civil Protection trousers, Black boots\]"
-    [void](Send 'take|5')
+    Expect 'the city keycard opens the locker, stocked as its author placed it' { Send 'state' } "open=\[Locker: Pistol, Pistol roundx30, Zip tiex2, Radio, Keycard#$cityCut, Key#$flatCut, Civil Protection mask, Civil Protection jacket, Civil Protection trousers, Black boots, Civil Authority stamp\]"
+    [void](Send 'take|Key')
     [void](Send 'door|Door 2|lock')
     [void](Send 'door|Door 2|use')
-    Expect 'the spare key from the locker turned the flat''s lock' { Send 'state' } "Key#$flatCut@1,0.*Door 2:open=True,locked=False.*owned=\[Door 2\]"
+    Expect 'the spare key from the locker turned the flat''s lock' { Send 'state' } "Key#$flatCut@2,0.*Door 2:open=True,locked=False.*owned=\[Door 2\]"
     Snapshot 'locker'
     [void](Send 'close')
     [void](Send 'console|hexagon_door "Door 2" release')
     Expect 'staff can take a title back' { Send 'state' } 'owned=\[\]'
+
+    Section 'Papers: ink stays, and a stamp makes them official'
+    [void](Send 'read|Identification card')
+    $state = Poll { Send 'state' } "paper='Identification card'"
+    Expect 'he arrived with his card: his name in its blank, and the city office''s stamp on it' $state "paper='Identification card' shownby='' lines=\[\] fields=\[Name=John Doe\] stamps=\[Combine Civil Authority@0\] "
+    Snapshot 'papers'
+    [void](Send 'fill|Occupation|Dock worker')
+    Expect 'without a pen, nothing is written' { Send 'state' } 'fields=\[Name=John Doe\] .*You have nothing to write with\.'
+    [void](Send 'closepaper')
+    $byStationery = Spot 'Stationery' front 20 8
+    Teleport 'John Doe' $byStationery
+    [void](Send 'open|Stationery')
+    Expect 'a box of paper and pens stands open to anyone' { Send 'state' } 'open=\[Stationery box: Paperx10, Penx2\]'
+    [void](Send 'take|Pen')
+    [void](Send 'take|Paper')
+    [void](Send 'close')
+    [void](Send 'read|Identification card')
+    [void](Send 'fill|Occupation|Dock worker')
+    [void](Send 'fill|occupation|Smuggler')
+    Expect 'with a pen he fills in a blank, once: ink stays' { Send 'state' } 'fields=\[Name=John Doe, Occupation=Dock worker\] .*The Occupation is already filled in\.'
+    [void](Send 'read|Paper')
+    # Nothing written takes nothing off the pile: the next check finds the pile one sheet short, not two.
+    [void](Send 'write|')
+    Expect 'with nothing to write, nothing is written' { Send 'state' } 'Paperx10@1,1\] .*Write something\.'
+    [void](Send 'write|Meet me at the docks at nine.')
+    $state = Poll { Send 'state' } 'lines=\[Meet me'
+    Expect 'written on, a pile of paper gives up one sheet' $state "Penx2@0,1, Paperx9@1,1, Paper@2,1\] .*paper='Paper' shownby='' lines=\[Meet me at the docks at nine\.\] "
+    [void](Send 'write|Come alone.')
+    Expect 'the next line goes below it' { Send 'state' } 'lines=\[Meet me at the docks at nine\. / Come alone\.\] '
+    # The office's stamp is in the locker his keycard opens. Whoever holds it can make a paper official.
+    [void](Send 'open|Locker')
+    [void](Send 'take|Civil Authority stamp')
+    [void](Send 'close')
+    [void](Send 'stamp|Civil Authority stamp')
+    [void](Send 'write|By order of the Civil Authority.')
+    $state = Poll { Send 'state' } 'Civil Authority\.\]'
+    Expect 'the stamp goes on over what was written by then, and a line written after it lies below it' $state 'lines=\[Meet me at the docks at nine\. / Come alone\. / By order of the Civil Authority\.\] fields=\[\] stamps=\[Combine Civil Authority@2\] '
+    Snapshot 'letter'
+    Expect 'the paper does not say whose hand it was; the journal does' { Send 'journal|paper.write' } "ok=True actor='John Doe' .*text=By order of the Civil Authority\."
+    Expect 'and whose hand stamped it' (Send 'journal|paper.stamp') "ok=True actor='John Doe' .*stamp=items/ca_stamp\.item"
+    [void](Send 'closepaper')
+    [void](Send 'open|Locker')
+    [void](Send 'put|Civil Authority stamp')
+    [void](Send 'close')
+    [void](Send 'open|Stationery')
+    [void](Send 'put|Pen')
+    [void](Send 'put|Paper@1,1')
+    Expect 'he puts back the pens and the blank paper, and keeps his letter' { Send 'state' } 'Paper@2,1.*open=\[Stationery box: Penx2, Paperx9\]'
+    [void](Send 'close')
+    Teleport 'John Doe' $door
 
     Section 'Staff work in game, on the record'
     $steamId = Send 'steamid'
@@ -609,16 +659,16 @@ try {
     Section 'Radio'
     [void](Send 'say|/r hello')
     Expect 'an untuned radio carries nothing' { Send 'state' } 'no radio tuned to anything'
-    [void](Send 'tune|6|55')
+    [void](Send 'tune|Radio|55')
     Expect 'a frequency outside the band is refused' { Send 'state' } 'A frequency is between'
-    [void](Send 'tune|6|101.50')
+    [void](Send 'tune|Radio|101.50')
     [void](Send 'say|/r testing')
     Expect 'the dial belongs to the radio, and the speaker hears themselves on it' { Send 'state' } 'Radio~101\.5@0,1.*\[101\.5\] John Doe: "testing"'
 
     Section 'What is left in a crate is anyone''s'
     [void](Send 'open|Crate')
-    [void](Send 'put|4')
-    [void](Send 'put|2')
+    [void](Send 'put|Keycard')
+    [void](Send 'put|Bandage')
     Expect 'he left the keycard and a bandage in the crate' { Send 'state' } "open=\[Crate: Keycard#$cityCut, Bandage\]"
     [void](Send 'close')
 
@@ -635,7 +685,7 @@ try {
     $state = Send 'state'
     Expect 'staff appointed him to a faction' $state "name='Officer Kane' faction='Civil Protection'"
     Expect 'which changed nothing about him: he wears what he arrived in' $state 'wearing=\[Flannel shirt, Jeans\] look=\[human01,hair_shortscruffy_brown,flannel_shirt,jeans\] '
-    Expect 'he arrives with nothing, and his faction lets him lock nothing' $state 'items=\[\] .*Door 1:open=False,locked=False.*no key that fits'
+    Expect 'he arrives with nothing but his papers, and his faction lets him lock nothing' $state 'items=\[Identification card@0,0\] .*Door 1:open=False,locked=False.*no key that fits'
     [void](Send 'open|Crate')
     [void](Send 'take|0')
     [void](Send 'open|Locker')
@@ -652,18 +702,18 @@ try {
     $state = Poll { Send 'state' } 'trousers, Black boots\] '
     Expect 'the uniform is on him, over the shirt he came in' $state 'wearing=\[Flannel shirt, Civil Protection mask, Civil Protection jacket, Civil Protection trousers, Black boots\] '
     Expect 'and anyone can see it' $state 'look=\[human01,hair_shortscruffy_brown,flannel_shirt,gasmask,black_leather_jacket,jeans_black,black_boots\] '
-    [void](Send 'put|0')
-    Expect 'his own jeans stay in the locker' { Send 'state' } "open=\[Locker: Radio, Keycard#$cityCut, Jeans\]"
+    [void](Send 'put|Jeans')
+    Expect 'his own jeans stay in the locker' { Send 'state' } "open=\[Locker: Radio, Keycard#$cityCut, Civil Authority stamp, Jeans\]"
     [void](Send 'close')
     [void](Send 'door|Door 1|lock')
     $state = Poll { Send 'state' } 'Door 1:open=False,locked=True'
     Expect 'with the keycard from the crate he locked the door, which also shut it' $state 'Door 1:open=False,locked=True'
     Expect 'a character put in the air comes down: a driven client still has a body' { Send 'state' } 'pos=[-\d.]+,[-\d.]+,[0-4]\.'
-    Expect 'a pistol and thirty rounds from the locker' $state "items=\[Keycard#$cityCut@0,0, Pistol@1,0, Pistol roundx30@3,0, Zip tiex2@4,0\]"
-    [void](Send 'split|2|10')
-    Expect 'part of a pile can be set aside' { Send 'state' } 'Pistol roundx20@3,0.*Pistol roundx10@5,0'
-    [void](Send 'merge|4|2')
-    [void](Send 'equip|1')
+    Expect 'a pistol and thirty rounds from the locker' $state "items=\[Identification card@0,0, Keycard#$cityCut@1,0, Pistol@2,0, Pistol roundx30@4,0, Zip tiex2@5,0\]"
+    [void](Send 'split|Pistol round|10')
+    Expect 'part of a pile can be set aside' { Send 'state' } 'Pistol roundx20@4,0.*Pistol roundx10@0,1'
+    [void](Send 'merge|Pistol round@0,1|Pistol round@4,0')
+    [void](Send 'equip|Pistol')
     Expect 'what is in hand is appearance: everyone is sent it' { Send 'state' } "held='Pistol'"
     [void](Send 'thirdperson|1')
     [void](Send 'face|Locker')
@@ -705,7 +755,7 @@ try {
     [void](Send 'enter|John Doe')
     # What someone left lying looks like is sent only once the network has stopped sending it to those too far away.
     $state = Poll { Send 'state' } 'sleepers=1 '
-    Expect 'what he carried survived the restart, keys cut as they were' $state "items=\[Rationx4@4,3, Water@2,0, Tokenx40@4,0, Key#$flatCut@1,0, Radio~101\.5@0,1\] wearing=\[Shirt and waistcoat, Trousers, Black boots, Flat cap\] "
+    Expect 'what he carried survived the restart, keys cut as they were' $state "items=\[Identification card@0,0, Rationx4@4,3, Water@3,0, Tokenx40@5,0, Key#$flatCut@2,0, Paper@2,1, Radio~101\.5@0,1\] wearing=\[Shirt and waistcoat, Trousers, Black boots, Flat cap\] "
     Expect 'the title staff took back is still nobody''s' $state 'owned=\[\]'
     Expect 'whoever was down when the city closed is still lying there' $state 'sleepers=1 '
     $sleepers = Send 'sleepers'
@@ -718,6 +768,9 @@ try {
     [void](Send 'open|Crate')
     Expect 'what was left in the crate survived the restart' { Send 'state' } 'open=\[Crate: Bandage\]'
     [void](Send 'close')
+    [void](Send 'read|Paper')
+    Expect 'and so did what was written and stamped on his letter' { Send 'state' } "paper='Paper' .*lines=\[Meet me at the docks at nine\. / Come alone\. / By order of the Civil Authority\.\] fields=\[\] stamps=\[Combine Civil Authority@2\] "
+    [void](Send 'closepaper')
 
     Section 'Death is final'
     [void](Send 'act|person.finish')
@@ -728,9 +781,9 @@ try {
     [void](Send 'camera')
     [void](Send 'act|corpse.search')
     $state = Poll { Send 'state' } 'open=\[Body: '
-    Expect 'what he carried is on the body' $state "open=\[Body: Keycard#$cityCut, Pistol, Pistol roundx30, Zip tiex2\]"
+    Expect 'what he carried is on the body' $state "open=\[Body: Identification card, Keycard#$cityCut, Pistol, Pistol roundx30, Zip tiex2\]"
     Expect 'and what he wore is still on it' $state 'openworn=\[Flannel shirt, Civil Protection mask, Civil Protection jacket, Civil Protection trousers, Black boots\] '
-    [void](Send 'take|1')
+    [void](Send 'take|Pistol')
     [void](Send 'strip|Civil Protection mask')
     Expect 'what is taken off a body is gone from it, for anyone to see' { Send 'state' } 'bodylooks=\[human01,hair_shortscruffy_brown,flannel_shirt,black_leather_jacket,jeans_black,black_boots\] '
     [void](Send 'wear|Civil Protection mask')
@@ -760,14 +813,14 @@ try {
     [void](Send "console|hexagon_staff $steamId 0")
     [void](Send 'enter|Officer Kane')
     $state = Poll { Send 'state' } 'health=25 down=False .*bodies=0 '
-    Expect 'he gets up barely, with what was still on the body: what was taken stays taken' $state "items=\[Keycard#$cityCut@0,0, Pistol roundx30@3,0, Zip tiex2@4,0\] wearing=\[Flannel shirt, Civil Protection jacket, Civil Protection trousers, Black boots\] .*health=25 down=False .*bodies=0 "
+    Expect 'he gets up barely, with what was still on the body: what was taken stays taken' $state "items=\[Identification card@0,0, Keycard#$cityCut@1,0, Pistol roundx30@4,0, Zip tiex2@5,0\] wearing=\[Flannel shirt, Civil Protection jacket, Civil Protection trousers, Black boots\] .*health=25 down=False .*bodies=0 "
     Expect 'where the body lay' "near=$(Near $state $byLocker) $state" '^near=True'
 
     Section 'The journal'
     $journal = Send 'journal'
-    Expect 'every item came from a named source: staff, the scene as built, or what a character arrived in' $journal '(?<!\S)item\.issue=25(?!\S)'
-    Expect 'what was used up, or went with a retired or deleted character, went through a sink' $journal '(?<!\S)item\.destroy=16(?!\S)'
-    Expect 'every hand-over is on record, bodies, restores, stripping and what a wounded arm let fall included' $journal '(?<!\S)item\.move=40(?!\S)'
+    Expect 'every item came from a named source: staff, the scene as built, or what a character arrived in' $journal '(?<!\S)item\.issue=31(?!\S)'
+    Expect 'what was used up, or went with a retired or deleted character, went through a sink' $journal '(?<!\S)item\.destroy=19(?!\S)'
+    Expect 'every hand-over is on record, bodies, restores, stripping and what a wounded arm let fall included' $journal '(?<!\S)item\.move=48(?!\S)'
     Expect 'putting on and taking off is on record' $journal '(?<!\S)verb\.item\.wear=8(?!\S)'
     Expect 'and the refused clash' $journal '(?<!\S)verb\.item\.wear!=1(?!\S)'
     Expect 'something worn is not dropped' $journal '(?<!\S)verb\.item\.drop!=1(?!\S)'
@@ -784,7 +837,11 @@ try {
     Expect 'the dead and the waiting were turned away at the gate' $journal '(?<!\S)city\.enter!=2(?!\S)'
     Expect 'speech is on record' $journal '(?<!\S)chat\.say=1(?!\S).*(?<!\S)chat\.me=4(?!\S).*(?<!\S)chat\.ooc=1(?!\S)'
     Expect 'every wound, and every one treated' $journal '(?<!\S)character\.wounded=2(?!\S).*(?<!\S)character\.treated=2(?!\S)'
-    Expect 'and the rearranging of piles' $journal '(?<!\S)item\.split=1(?!\S).*(?<!\S)item\.merge=1(?!\S)'
+    Expect 'and the rearranging of piles, a sheet taken off a pile to write on included' $journal '(?<!\S)item\.split=2(?!\S).*(?<!\S)item\.merge=1(?!\S)'
+    Expect 'every line written, and the blank filled in' $journal '(?<!\S)paper\.write=3(?!\S).*(?<!\S)paper\.fill=1(?!\S)|(?<!\S)paper\.fill=1(?!\S).*(?<!\S)paper\.write=3(?!\S)'
+    Expect 'the blank written without a pen and the one written twice, refused' $journal '(?<!\S)paper\.fill!=2(?!\S)'
+    Expect 'and the line with nothing in it' $journal '(?<!\S)paper\.write!=1(?!\S)'
+    Expect 'and the stamp' $journal '(?<!\S)paper\.stamp=1(?!\S)'
     Expect 'this client was told no other name' (Send 'proxies') '^[^A-Za-z]*$'
 
     Complete-Session

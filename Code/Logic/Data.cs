@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Serialization;
 
 namespace Hexagon.Logic;
@@ -73,6 +74,39 @@ public sealed class ItemStack
 	public string? Pattern { get; set; }
 	/// <summary>Worn rather than carried: it takes no room in the grid, and anyone can see it. See <see cref="Wearing"/>.</summary>
 	public bool Worn { get; set; }
+	/// <summary>What is written on it, if it is paper or a printed form, and the stamps on it. It goes wherever the sheet goes. See <see cref="Papers"/>.</summary>
+	public PaperData? Paper { get; set; }
+}
+
+/// <summary>
+/// What is on a sheet of paper or a printed form. Ink stays: lines are only ever added below, each
+/// blank on a form is filled in once, and a stamp goes on top of whatever is written by then.
+/// </summary>
+public sealed class PaperData
+{
+	/// <summary>What has been written, line by line, in the order it was put down.</summary>
+	public List<string> Lines { get; set; } = new();
+	/// <summary>The blanks of a printed form that have been filled in, by the label printed beside each.</summary>
+	public Dictionary<string, string> Fields { get; set; } = new();
+	/// <summary>The stamps on it, in the order they went on.</summary>
+	public List<StampMark> Stamps { get; set; } = new();
+
+	public PaperData Copy() => new()
+	{
+		Lines = new List<string>( Lines ),
+		Fields = new Dictionary<string, string>( Fields ),
+		Stamps = Stamps.Select( value => new StampMark { Stamp = value.Stamp, AfterLine = value.AfterLine } ).ToList()
+	};
+}
+
+/// <summary>
+/// A stamp's mark on a sheet: which kind of stamp made it, by its item, and how many lines were written
+/// when it went on. A line below a stamp was written after it.
+/// </summary>
+public sealed class StampMark
+{
+	public string Stamp { get; set; } = string.Empty;
+	public int AfterLine { get; set; }
 }
 
 public sealed class AccountData

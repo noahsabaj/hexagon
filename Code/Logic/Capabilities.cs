@@ -10,6 +10,8 @@ namespace Hexagon.Logic;
 public static class Capability
 {
 	public const string Restrain = "person.restrain";
+	/// <summary>Writing on paper, or filling in a form: a pen or a pencil gives it.</summary>
+	public const string Write = "paper.write";
 }
 
 /// <summary>

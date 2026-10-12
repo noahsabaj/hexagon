@@ -28,11 +28,15 @@
 		}
 		@if ( player.MenuTarget is not null )
 		{
-			<VerbMenu OfferTo=@(( Player recipient ) => { OfferingTo = recipient; }) />
+			<VerbMenu OfferTo=@(( Player recipient ) => { OfferingTo = recipient; }) ShowTo=@(( Player reader ) => { ShowingTo = reader; }) />
 		}
 		@if ( OfferingTo is { } recipient )
 		{
 			<OfferPicker Recipient=@recipient Dismiss=@(() => { OfferingTo = null; }) />
+		}
+		@if ( ShowingTo is { } reader )
+		{
+			<OfferPicker Recipient=@reader Showing=@true Dismiss=@(() => { ShowingTo = null; }) />
 		}
 		@if ( !Player.UiBusy )
 		{
@@ -47,6 +51,10 @@
 		{
 			<InventoryWindow />
 		}
+		@if ( player.Paper is not null )
+		{
+			<PaperWindow />
+		}
 	}
 </root>
 
@@ -58,6 +66,8 @@
 	private static bool StaffOpen { get; set; }
 	/// <summary>Whoever this character is choosing something to offer to.</summary>
 	private Player? OfferingTo { get; set; }
+	/// <summary>Whoever this character is choosing a paper to hold up for.</summary>
+	private Player? ShowingTo { get; set; }
 	private GameObject? _harmCues;
 
 	/// <summary>Opens one of the panels a key or a button opens, or closes them.</summary>
@@ -85,16 +95,18 @@
 	protected override void OnUpdate()
 	{
 		var local = Player.Local;
-		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || OfferingTo is not null || local?.OpenInventory is not null || local?.MenuTarget is not null || local is not { HasCharacter: true };
+		Player.UiBusy = ChatOpen || InventoryOpen || StaffOpen || OfferingTo is not null || ShowingTo is not null || local?.OpenInventory is not null
+			|| local?.MenuTarget is not null || local?.Paper is not null || local is not { HasCharacter: true };
 		if ( local is not { HasCharacter: true } )
 		{
 			ChatOpen = false;
 			InventoryOpen = false;
 			OfferingTo = null;
+			ShowingTo = null;
 			return;
 		}
-		// A menu or a list of things to offer has the keys until it is closed; each closes itself.
-		if ( local.MenuTarget is not null || OfferingTo is not null ) return;
+		// A menu, a list of things to offer or show, or a sheet being read has the keys until it is closed; each closes itself.
+		if ( local.MenuTarget is not null || OfferingTo is not null || ShowingTo is not null || local.Paper is not null ) return;
 
 		if ( !ChatOpen && Input.Pressed( "Chat" ) )
 		{
@@ -115,6 +127,6 @@
 	protected override int BuildHash() => HashCode.Combine(
 		HashCode.Combine( Player.Local, Player.Local?.HasCharacter, Player.Local?.OfferText, Player.Local?.MenuTarget, Player.Local?.IsStaff ),
 		HashCode.Combine( Player.Local?.OpenInventory is null, Player.Local?.Inventory is null, Player.UiBusy ),
-		HashCode.Combine( ChatOpen, InventoryOpen, StaffOpen, OfferingTo ),
+		HashCode.Combine( ChatOpen, InventoryOpen, StaffOpen, OfferingTo, ShowingTo, Player.Local?.Paper is null ),
 		HashCode.Combine( Player.Local?.HoveredTarget, Player.Local?.HoveredTooltip is null ) );
 }

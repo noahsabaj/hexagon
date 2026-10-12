@@ -229,6 +229,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		if ( _character is null || Controller is not { } controller || HexagonServices.Current is not { } game ) return;
 		if ( _open is not null && !HostOpenIsValid() ) HostClose();
 		HostOfferTick();
+		HostPaperTick();
 		HostAuditMovement( controller );
 	}
 
@@ -558,7 +559,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		var doors = Scene.GetAllComponents<Door>().Where( value => value.HostOwner == _character.Id )
 			.Select( value => new OwnedDoor( value.GameObject.Id, value.GameObject.Name ) ).ToArray();
 		using ( Rpc.FilterInclude( owner ) )
-			ReceivePrivateState( _character.Name, _character.Faction, JsonSerializer.Serialize( Keys.AsSeen( _character.Inventory ) ),
+			ReceivePrivateState( _character.Name, _character.Faction, JsonSerializer.Serialize( Seen.Inventory( _character.Inventory ) ),
 				JsonSerializer.Serialize( _character.Known ), _character.Health, JsonSerializer.Serialize( doors ), string.Join( ';', _character.Wounds ) );
 	}
 

@@ -98,8 +98,9 @@ public sealed class CharacterBody : Component, Component.IPressable, Component.I
 			case VerbIds.PersonTreat: return actor.HostTreat( character );
 			case VerbIds.PersonRestrain: return characters.Restrain( character, other );
 			case VerbIds.PersonRelease: return characters.Release( character );
-			// What is offered is chosen from the inventory, and sent with RequestOffer.
+			// What is offered, or held up to read, is chosen from the inventory, and sent with RequestOffer or RequestShow.
 			case VerbIds.PersonOffer: return Result.Fail( ErrorCode.Invalid, "Choose what to offer from your inventory." );
+			case VerbIds.PersonShow: return Result.Fail( ErrorCode.Invalid, "Choose a paper to show from your inventory." );
 			case VerbIds.PersonFinish:
 				var can = Vitals.CanFinish( character );
 				if ( can.Ok ) characters.Die( character, Embodiment!.HostPosition, "finished", other );

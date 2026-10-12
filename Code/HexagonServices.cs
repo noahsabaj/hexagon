@@ -62,6 +62,13 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 	[Property, Group( "Characters" )] public bool OffersCitizen { get; set; } = true;
 	/// <summary>Hair and facial hair a new character may be made with. It is part of the body, not clothing: nobody takes it off.</summary>
 	[Property, Group( "Characters" )] public List<Clothing> Hair { get; set; } = new();
+	/// <summary>
+	/// The papers a new character carries when it arrives, as it carries the clothes it arrives in: a
+	/// printed form, its bearer's blank filled in with the character's name. None arrives with none.
+	/// </summary>
+	[Property, Group( "Characters" )] public ItemDefinition? ArrivalPapers { get; set; }
+	/// <summary>The stamp of the office that issued the papers new characters arrive with. The stamp itself is somewhere in the world.</summary>
+	[Property, Group( "Characters" )] public ItemDefinition? ArrivalStamp { get; set; }
 
 	/// <summary>The hard breathing of someone badly hurt or down, heard by them and by anyone close. Hexagon ships none; a game gives its own.</summary>
 	[Property, Group( "Bodies" )] public SoundEvent? BreathingSound { get; set; }

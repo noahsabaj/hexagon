@@ -53,19 +53,4 @@ public static class Keys
 		}
 		return string.Join( "-", depths );
 	}
-
-	/// <summary>
-	/// An inventory as a player may be shown it: each key carries its cut in place of its pattern. The
-	/// host never sends a pattern, so no client can read off one which door a key opens.
-	/// </summary>
-	public static InventoryData AsSeen( InventoryData inventory ) => new()
-	{
-		Width = inventory.Width,
-		Height = inventory.Height,
-		Items = inventory.Items.Select( item => item.Pattern is not { } pattern ? item : new ItemStack
-		{
-			Id = item.Id, Definition = item.Definition, X = item.X, Y = item.Y, Width = item.Width, Height = item.Height,
-			Count = item.Count, Max = item.Max, Frequency = item.Frequency, Pattern = Cut( pattern ), Worn = item.Worn
-		} ).ToList()
-	};
 }

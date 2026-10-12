@@ -104,7 +104,7 @@ public sealed class WearingTests
 
 		var tag = transfers.Issue( Sources.Operator, alice, "items/key.item", 1, 1, Actor.Console, pattern: "city" ).Value;
 		Assert.IsTrue( Wearing.PutOn( alice.Inventory, tag.Id ).Ok );
-		var seen = Keys.AsSeen( alice.Inventory ).Items.Single( item => item.Id == tag.Id );
+		var seen = Seen.Inventory( alice.Inventory ).Items.Single( item => item.Id == tag.Id );
 		Assert.IsTrue( seen.Worn, "she sees it on her" );
 		Assert.AreNotEqual( "city", seen.Pattern, "and only its cut" );
 	}

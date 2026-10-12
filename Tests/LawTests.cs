@@ -139,7 +139,7 @@ public sealed class LawTests
 		Assert.IsFalse( Keys.Opens( alice.Inventory, "city" ) );
 		Assert.IsTrue( Keys.Opens( bob.Inventory, "city" ), "the cut goes with the key" );
 
-		var seen = Keys.AsSeen( bob.Inventory ).Items.Single();
+		var seen = Seen.Inventory( bob.Inventory ).Items.Single();
 		Assert.AreEqual( Keys.Cut( "city" ), seen.Pattern, "a player is shown the cut" );
 		Assert.AreEqual( "city", bob.Inventory.Items.Single().Pattern, "and showing it changes nothing" );
 		Assert.IsTrue( Regex.IsMatch( seen.Pattern!, "^[1-7](-[1-7]){4}$" ), seen.Pattern );

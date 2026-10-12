@@ -22,6 +22,8 @@ public static class VerbIds
 	public const string PersonFinish = "person.finish";
 	/// <summary>Treating someone's wounds with what is in hand.</summary>
 	public const string PersonTreat = "person.treat";
+	/// <summary>Holding a paper up for someone to read, without letting go of it.</summary>
+	public const string PersonShow = "person.show";
 
 	public const string DoorUse = "door.use";
 	public const string DoorLock = "door.lock";
@@ -43,8 +45,9 @@ public static class VerbIds
 /// <summary>
 /// What can be done to a person, by the state anyone can see them in, whether their player is there or
 /// left them lying. Someone down can be helped up, searched or finished; someone bound searched,
-/// treated or released; anyone else is met, offered something, treated, or bound by whoever has the
-/// means. Treating takes something in hand that treats; someone down is helped up first.
+/// treated, shown a paper or released; anyone else is met, offered something, shown a paper, treated,
+/// or bound by whoever has the means. Treating takes something in hand that treats; someone down is
+/// helped up first.
 /// </summary>
 public static class PersonVerbs
 {
@@ -54,7 +57,8 @@ public static class PersonVerbs
 		if ( down )
 			return new[] { new Verb( VerbIds.PersonRevive, "Help up" ), new Verb( VerbIds.PersonSearch, "Search" ), new Verb( VerbIds.PersonFinish, "Finish", string.IsNullOrEmpty( finishRequires ) ? null : finishRequires ) };
 		var treat = new Verb( VerbIds.PersonTreat, "Treat" );
-		if ( restrained ) return new[] { new Verb( VerbIds.PersonSearch, "Search" ), treat, new Verb( VerbIds.PersonRelease, "Release" ) };
-		return new[] { new Verb( VerbIds.PersonIntroduce, "Introduce yourself" ), new Verb( VerbIds.PersonOffer, "Offer something" ), treat, new Verb( VerbIds.PersonRestrain, "Restrain", Capability.Restrain ) };
+		var show = new Verb( VerbIds.PersonShow, "Show a paper" );
+		if ( restrained ) return new[] { new Verb( VerbIds.PersonSearch, "Search" ), treat, show, new Verb( VerbIds.PersonRelease, "Release" ) };
+		return new[] { new Verb( VerbIds.PersonIntroduce, "Introduce yourself" ), new Verb( VerbIds.PersonOffer, "Offer something" ), show, treat, new Verb( VerbIds.PersonRestrain, "Restrain", Capability.Restrain ) };
 	}
 }

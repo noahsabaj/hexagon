@@ -26,6 +26,9 @@
 	/// <summary>Called when offering something to someone was chosen, which is picked from what this character has.</summary>
 	public Action<Player>? OfferTo { get; set; }
 
+	/// <summary>Called when showing someone a paper was chosen, which is picked from the papers this character has.</summary>
+	public Action<Player>? ShowTo { get; set; }
+
 	public override void Tick()
 	{
 		if ( Player.Local is not { MenuTarget: { } menu } player ) return;
@@ -53,10 +56,15 @@
 	{
 		if ( Player.Local is not { MenuTarget: { } target } player ) return;
 		player.MenuTarget = null;
-		// What to offer is chosen from what this character has, so it opens a list instead of asking the host.
+		// What to offer or show is chosen from what this character has, so it opens a list instead of asking the host.
 		if ( verb.Id == VerbIds.PersonOffer && target.GetComponent<Player>() is { } recipient )
 		{
 			OfferTo?.Invoke( recipient );
+			return;
+		}
+		if ( verb.Id == VerbIds.PersonShow && target.GetComponent<Player>() is { } reader )
+		{
+			ShowTo?.Invoke( reader );
 			return;
 		}
 		player.RequestAct( target, verb.Id );
