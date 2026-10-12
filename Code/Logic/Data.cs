@@ -80,6 +80,23 @@ public sealed class ItemStack
 	public PaperData? Paper { get; set; }
 	/// <summary>What is drawn on it, if it is a planning map, and where its counters stand. It goes wherever the map goes. See <see cref="Maps"/>.</summary>
 	public MapData? Map { get; set; }
+	/// <summary>
+	/// For things made with a mark, such as tokens off a press or banknotes: one mark for each in the
+	/// pile, the top last, saying what made it and the serial printed on it, if any. Each goes wherever
+	/// the thing it is on goes. See <see cref="Making"/>.
+	/// </summary>
+	public List<MadeMark>? Made { get; set; }
+}
+
+/// <summary>What made one thing, by the mark it left, and the serial printed on it, if it has one.</summary>
+public sealed class MadeMark
+{
+	/// <summary>The mark of the press or die that made it. Never shown: only compared, by a trained eye.</summary>
+	public string By { get; set; } = string.Empty;
+	/// <summary>The serial printed on it, which anyone can read, or empty.</summary>
+	public string Serial { get; set; } = string.Empty;
+
+	public MadeMark Copy() => new() { By = By, Serial = Serial };
 }
 
 /// <summary>
@@ -164,6 +181,14 @@ public sealed class AccountData
 public sealed class WorldData
 {
 	public Dictionary<Guid, DoorData> Doors { get; set; } = new();
+	public Dictionary<Guid, MachineData> Machines { get; set; } = new();
+}
+
+/// <summary>What a machine remembers between one piece of work and the next.</summary>
+public sealed class MachineData
+{
+	/// <summary>The number of the next serial it prints. No two things it numbers share one.</summary>
+	public long NextSerial { get; set; } = 1;
 }
 
 public sealed class DoorData

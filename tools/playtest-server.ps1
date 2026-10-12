@@ -776,6 +776,91 @@ try {
     Expect 'and the body is gone for him too' { Send 1 'state' } 'bodies=0 '
     Expect 'the restore is on record' { Send 0 'journal' } '(?<!\S)operator\.restore=1(?!\S)'
 
+    Section 'Money is made by someone, from something'
+    # The city's press stands locked; a forger keeps a crude one a little way off, with a die. He is put
+    # back where he stands now afterwards, which is where the next section has him.
+    $stood = if ((Send 1 'state') -match 'pos=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)') { [int[]] @([double] $Matches[1], [double] $Matches[2], [double] $Matches[3] + 8) }
+    $press = Spot 'Token press' front 20
+    Teleport 1 'John Doe' $press
+    [void](Send 1 'work|Token press')
+    Expect 'the city''s press is locked to whoever has no key' { Send 1 'state' } 'It is locked, and you have no key that fits\.'
+    [void](Send 0 'console|hexagon_give "John Doe" keycard 1 city')
+    [void](Poll { Send 1 'state' } 'Keycard#')
+    [void](Send 1 'work|Token press')
+    Expect 'with a key it works, but makes nothing from nothing' { Send 1 'state' } 'There is nothing here to make anything from\.'
+    [void](Send 0 'console|hexagon_give "John Doe" token_blank 10')
+    [void](Poll { Send 1 'state' } 'Token blankx10@')
+    [void](Send 1 'open|Token press')
+    [void](Send 1 'put|Token blank')
+    Expect 'he loads it like a crate' { Send 1 'state' } 'open=\[Token press: Token blankx10\] '
+    [void](Send 1 'close')
+    [void](Send 1 'work|Token press')
+    Expect 'and works it, holding Use, and sees what he is at' { Send 1 'state' } "working='Strike tokens'"
+    [void](Send 1 'stopwork')
+    Expect 'letting go stops it' { Send 1 'state' } "working='' "
+    [void](Send 1 'work|Token press')
+    [void](Poll { Send 1 'state' } "working='Strike tokens'")
+    Teleport 1 'John Doe' (Spot 'Token press' front 200)
+    Expect 'and so does walking away' { Send 1 'state' } "working='' .*You stop working: you walked away\."
+    Teleport 1 'John Doe' $press
+    [void](Send 1 'open|Token press')
+    Expect 'either way, nothing was made, and nothing used up' { Send 1 'state' } 'open=\[Token press: Token blankx10\] '
+    [void](Send 1 'close')
+    [void](Send 1 'work|Token press')
+    Expect 'kept at, it strikes ten tokens from ten blanks' (Poll { Send 1 'state' } 'Done: Token x10\.' 20) "working='' .*Done: Token x10\."
+    [void](Send 1 'open|Token press')
+    Expect 'and keeps them for whoever opens it' { Send 1 'state' } 'open=\[Token press: Tokenx10\] '
+    [void](Send 1 'take|Token')
+    Expect 'he takes them, onto the pile staff gave him' { Send 1 'state' } 'Tokenx60@1,1'
+    [void](Send 1 'close')
+    Teleport 2 'Jane Roe' (Spot "Forger's crate" front 20)
+    [void](Send 2 "open|Forger's crate")
+    Expect 'the forger keeps blanks, a die and a loupe, locked to nobody' { Send 2 'state' } "open=\[Forger's crate: Token blankx10, Token die, Loupe\] "
+    foreach ($thing in 'Token blank', 'Token die', 'Loupe') { [void](Send 2 "take|$thing") }
+    [void](Poll { Send 2 'state' } "open=\[Forger's crate: \] ")
+    [void](Send 2 'close')
+    [void](Send 2 'make|Token die')
+    Expect 'a die strikes nothing unless it is in hand' { Send 2 'state' } 'Hold the token die to work with it\.'
+    [void](Send 2 'equip|Token die')
+    [void](Poll { Send 2 'state' } "held='Token die'")
+    [void](Send 2 'make|Token die')
+    Expect 'in hand, it strikes a token from a blank she carries' (Poll { Send 2 'state' } 'Done: Token x1\.' 15) "working='' .*Done: Token x1\."
+    [void](Send 2 'make|Token die')
+    [void](Poll { Send 2 'state' } "working='Strike a token'")
+    Teleport 2 'Jane Roe' (Spot 'Crude press' back 20)
+    Expect 'moving off stops a tool''s work' { Send 2 'state' } "working='' .*You stop working\."
+    Expect 'and nothing more was made, or used up' (Send 2 'state') '^(?=.*Token blankx9@)(?=.*, Token@)'
+    [void](Send 2 'open|Crude press')
+    [void](Send 2 'put|Token blank')
+    [void](Poll { Send 2 'state' } 'open=\[Crude press: Token blankx9\] ')
+    [void](Send 2 'close')
+    [void](Send 2 'work|Crude press')
+    Expect 'a press anyone can work strikes five at a time' (Poll { Send 2 'state' } 'Done: Token x5\.' 20) "working='' .*Done: Token x5\."
+    [void](Send 2 'open|Crude press')
+    Expect 'from what it was loaded with' { Send 2 'state' } 'open=\[Crude press: Token blankx4, Tokenx5\] '
+    [void](Send 2 'take|Token')
+    Expect 'she takes them onto the token her die struck' { Send 2 'state' } ', Tokenx6@'
+    [void](Send 2 'close')
+    Expect 'what was made is on record, with what made it' (Send 0 'journal|item.issue') "actor='Jane Roe' .*data=\[source=made .*count=5 maker=machine:"
+    Expect 'and what it was made from' (Send 0 'journal|item.destroy') "actor='Jane Roe' .*data=\[sink=made .*count=5 maker=machine:"
+    [void](Send 2 'compare|Token')
+    Expect 'under her loupe, she can tell what her die struck from what her press did' { Send 2 'state' } 'They were made 2 ways: 1 one way; 5 another\.'
+    Teleport 2 'Jane Roe' (Spot 'Token press' left 20)
+    [void](Send 2 'offer|Token|6')
+    [void](Poll { Send 1 'state' } "offer='[^']*offers you 6 Token\.'")
+    [void](Send 1 'answer|1')
+    Expect 'he takes her tokens onto his pile' { Send 1 'state' } 'Tokenx66@1,1'
+    Expect 'and nothing he was sent says how any of them was made' (Send 1 'marks') '^(?=.*Tokenx66:made=0,by=0)(?!.*by=[1-9])'
+    [void](Send 1 'compare|Token')
+    Expect 'to his bare eye, one token is like another' { Send 1 'state' } 'You have nothing to tell them apart with\.'
+    [void](Send 0 'console|hexagon_give "John Doe" loupe')
+    [void](Poll { Send 1 'state' } 'Loupe@')
+    [void](Send 1 'compare|Token')
+    Expect 'under a loupe he tells the four kinds apart, but not whose each is' { Send 1 'state' } 'They were made 4 ways: 50 one way; 10 another; 1 a third; 5 a fourth\.'
+    Expect 'the locked press and the empty one were refused on the record' (Send 0 'journal') '(?<!\S)verb\.machine\.work!=2(?!\S)'
+    Teleport 1 'John Doe' $stood
+    Wait-Landed 1
+
     Section 'Leaving does not end a scene'
     Teleport 2 'Jane Roe' $target
     [void](Send 0 'console|hexagon_give "John Doe" zip_tie')
@@ -783,8 +868,10 @@ try {
     [void](Poll { Send 1 'proxies' } 'down=False restrained=False .*has=True')
     [void](Send 1 'act|person.restrain')
     Expect 'he binds her again' { Send 2 'state' } 'restrained=True'
+    # A client started again because its first connection dropped has left once already.
+    $left = if ((Send 0 'journal') -match '(?<!\S)connection\.leave=(\d+)') { [int] $Matches[1] } else { 0 }
     Stop-Process -Id $clients[1].Id -Force
-    Wait-Until 'the server to notice the disconnect' { (Send 0 'journal') -match 'connection\.leave=1' }
+    Wait-Until 'the server to notice the disconnect' { (Send 0 'journal') -match "(?<!\S)connection\.leave=$($left + 1)(?!\S)" }
     Expect 'the player who left is gone from the other client' { Send 1 'proxies' } '^[^A-Za-z]*$'
     # What someone left behind looks like is sent once the network has stopped sending it to those too far away.
     Expect 'but the character she left bound is still standing there, and he is sent it' { Send 1 'sleepers' } '^-?\d+,-?\d+,bound,standing$'

@@ -47,6 +47,10 @@ public static class VerbIds
 	public const string DoorLock = "door.lock";
 
 	public const string ContainerOpen = "container.open";
+	/// <summary>Working a machine, such as a press, for as long as its work takes. See <see cref="Making"/>.</summary>
+	public const string MachineWork = "machine.work";
+	/// <summary>Opening a machine, to load it or take out what it made.</summary>
+	public const string MachineOpen = "machine.open";
 	public const string CorpseSearch = "corpse.search";
 	/// <summary>Leaning over a map laid out on a table, to mark it up.</summary>
 	public const string MapLean = "map.lean";
@@ -62,6 +66,10 @@ public static class VerbIds
 	public const string ItemWear = "item.wear";
 	/// <summary>Laying a map out flat on the table in front of you.</summary>
 	public const string ItemLayOut = "item.layout";
+	/// <summary>Working with a tool in hand, such as a die, to make something from what is carried.</summary>
+	public const string ItemMake = "item.make";
+	/// <summary>Telling whether the things in a pile were made alike, with the right tool.</summary>
+	public const string ItemCompare = "item.compare";
 }
 
 /// <summary>

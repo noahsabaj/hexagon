@@ -12,6 +12,8 @@ public static class Capability
 	public const string Restrain = "person.restrain";
 	/// <summary>Writing on paper, or filling in a form: a pen or a pencil gives it.</summary>
 	public const string Write = "paper.write";
+	/// <summary>Telling whether things were made alike, such as two banknotes: a loupe gives it. See <see cref="Making"/>.</summary>
+	public const string Compare = "item.compare";
 }
 
 /// <summary>

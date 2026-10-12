@@ -259,6 +259,44 @@ Hud {
 	}
 }
 
+// At work: a bar above the foot of the screen, filling as the work goes on.
+.working {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 160px;
+	justify-content: center;
+	pointer-events: none;
+
+	.bar {
+		width: 420px;
+		padding: 14px 18px;
+		pointer-events: all;
+
+		h1 {
+			margin-bottom: 8px;
+		}
+
+		.muted {
+			flex-grow: 1;
+			margin-right: 8px;
+		}
+	}
+
+	.track {
+		height: 10px;
+		margin-bottom: 10px;
+		border-radius: 5px;
+		background-color: rgba( 255, 255, 255, 0.08 );
+	}
+
+	.fill {
+		height: 100%;
+		border-radius: 5px;
+		background-color: #2f7fa8;
+	}
+}
+
 // A key as the player has it bound, drawn by the engine: a keyboard key or a controller button.
 .prompt {
 	flex-direction: row;

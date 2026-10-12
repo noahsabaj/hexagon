@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace Hexagon.Logic;
@@ -21,6 +22,8 @@ public static class Sources
 	public const string Operator = "operator";
 	/// <summary>Placed by a scene's author: what the world as built holds, such as a stocked crate. It is placed once and never refills.</summary>
 	public const string Scene = "scene";
+	/// <summary>Made by someone, from something that was used up making it. See <see cref="Making"/>.</summary>
+	public const string Made = "made";
 	/// <summary>What a new character arrives wearing, chosen as it is made: the one thing a character has that nobody gave it.</summary>
 	public const string Arrival = "arrival";
 }
@@ -30,6 +33,8 @@ public static class Sinks
 {
 	/// <summary>Eaten, drunk, fired, used up.</summary>
 	public const string Consumed = "consumed";
+	/// <summary>Used up making something else: a blank struck into a coin.</summary>
+	public const string Made = "made";
 	/// <summary>Carried by a character deleted before it ever entered the city.</summary>
 	public const string CharacterDeleted = "character.deleted";
 	/// <summary>Carried by a character its player retired, which leaves for good taking what it carries.</summary>
@@ -84,8 +89,10 @@ public sealed class Transfers
 		if ( item is null ) return Result.Fail( ErrorCode.NotFound, "That item is not there." );
 		if ( count == 0 ) count = item.Count;
 		if ( count < 1 || count > item.Count ) return Result.Fail( ErrorCode.Invalid, "There are not that many." );
-		// Place first: if it does not all fit, nothing has changed.
-		var placed = Add( to.Inventory, Like( item, count == item.Count ? item.Id : Guid.NewGuid() ), count );
+		// Place first: if it does not all fit, nothing has changed. What goes is the top of the pile.
+		var moving = Like( item, count == item.Count ? item.Id : Guid.NewGuid() );
+		moving.Made = Making.Top( item, count );
+		var placed = Add( to.Inventory, moving, count );
 		if ( placed.Ok ) Take( from, item, count );
 		_journal.Record( JournalKinds.ItemMove, by, to.HolderLabel, placed.Ok,
 			data: new[] { ("from", from.HolderLabel), ("item", itemId.ToString( "N" )), ("definition", item.Definition), ("count", count.ToString()),
@@ -113,6 +120,7 @@ public sealed class Transfers
 			}
 			var kept = Like( item, item.Id );
 			kept.Count = item.Count;
+			kept.Made = item.Made?.Select( mark => mark.Copy() ).ToList();
 			kept.X = item.X;
 			kept.Y = item.Y;
 			kept.Worn = item.Worn;
@@ -147,8 +155,13 @@ public sealed class Transfers
 		if ( item.Worn ) return Result<ItemStack>.Fail( ErrorCode.Conflict, Wearing.TakeOffFirst );
 		var part = Like( item, Guid.NewGuid() );
 		part.Count = count;
+		part.Made = Making.Top( item, count );
 		var placed = Place( holder.Inventory, part );
-		if ( placed.Ok ) item.Count -= count;
+		if ( placed.Ok )
+		{
+			Making.TakeTop( item, count );
+			item.Count -= count;
+		}
 		_journal.Record( JournalKinds.ItemSplit, by, holder.HolderLabel, placed.Ok,
 			data: new[] { ("item", itemId.ToString( "N" )), ("definition", item.Definition), ("count", count.ToString()), ("into", part.Id.ToString( "N" )) } );
 		return placed;
@@ -163,6 +176,7 @@ public sealed class Transfers
 		if ( item.Worn || into.Worn ) return Result.Fail( ErrorCode.Conflict, Wearing.TakeOffFirst );
 		var count = Alike( item, into ) ? Math.Min( item.Count, into.Max - into.Count ) : 0;
 		if ( count < 1 ) return Result.Fail( ErrorCode.Conflict, "Those do not go together." );
+		Making.PutOnTop( into, Making.Top( item, count ), count );
 		into.Count += count;
 		Take( holder, item, count );
 		_journal.Record( JournalKinds.ItemMerge, by, holder.HolderLabel,
@@ -176,6 +190,72 @@ public sealed class Transfers
 		foreach ( var item in from.Inventory.Items.ToArray() ) Destroy( sink, from, item.Id, by );
 	}
 
+	/// <summary>
+	/// Something is made. What it is made from is used up, out of <paramref name="from"/>, top of each
+	/// pile first; what it makes enters the world in <paramref name="to"/>, each with its mark, from the
+	/// made source; <paramref name="maker"/> names what made it, for the record. All of it happens or
+	/// none does: there must be enough to make it from, and room for what it makes.
+	/// </summary>
+	public Result<ItemStack> Make( IHolder from, IHolder to, IReadOnlyList<(string Definition, int Count)> inputs, ItemStack made, int count,
+		IReadOnlyList<MadeMark> marks, string maker, Actor by )
+	{
+		if ( inputs.Any( input => Making.Has( from.Inventory, input.Definition ) < input.Count ) )
+			return Result<ItemStack>.Fail( ErrorCode.NotFound, Making.NothingToMakeFrom );
+		var fromWas = Copy( from.Inventory );
+		var heldWas = (from as CharacterData)?.Equipped;
+		var toWas = ReferenceEquals( from, to ) ? null : Copy( to.Inventory );
+		var used = new List<(ItemStack Pile, int Count)>();
+		foreach ( var (definition, wanted) in inputs )
+		{
+			var left = wanted;
+			// The last pile of a thing first, as a hand takes from what is on top.
+			foreach ( var pile in from.Inventory.Items.Where( item => !item.Worn && item.Definition == definition ).Reverse().ToArray() )
+			{
+				if ( left == 0 ) break;
+				var taken = Math.Min( left, pile.Count );
+				used.Add( (pile, taken) );
+				Take( from, pile, taken );
+				left -= taken;
+			}
+		}
+		var template = Like( made, Guid.NewGuid() );
+		template.Made = marks.Select( mark => mark.Copy() ).ToList();
+		var placed = Add( to.Inventory, template, count );
+		if ( !placed.Ok )
+		{
+			from.Inventory.Items.Clear();
+			from.Inventory.Items.AddRange( fromWas );
+			if ( from is CharacterData character ) character.Equipped = heldWas;
+			if ( toWas is not null )
+			{
+				to.Inventory.Items.Clear();
+				to.Inventory.Items.AddRange( toWas );
+			}
+			return Result<ItemStack>.Fail( ErrorCode.Conflict, Making.NoRoom );
+		}
+		foreach ( var (pile, taken) in used )
+			_journal.Record( JournalKinds.ItemDestroy, by, from.HolderLabel,
+				data: new[] { ("sink", Sinks.Made), ("item", pile.Id.ToString( "N" )), ("definition", pile.Definition), ("count", taken.ToString()), ("maker", maker) } );
+		var serials = marks.Where( mark => mark.Serial.Length > 0 ).Select( mark => mark.Serial ).ToArray();
+		var data = new List<(string, string)> { ("source", Sources.Made), ("item", placed.Value.Id.ToString( "N" )), ("definition", made.Definition), ("count", count.ToString()), ("maker", maker) };
+		if ( serials.Length > 0 ) data.Add( ("serials", serials.Length == 1 ? serials[0] : $"{serials[0]}-{serials[^1]}") );
+		_journal.Record( JournalKinds.ItemIssue, by, to.HolderLabel, data: data.ToArray() );
+		return placed;
+	}
+
+	// What an inventory held, as it was, to put back if a change cannot be finished.
+	private static List<ItemStack> Copy( InventoryData inventory ) =>
+		inventory.Items.Select( item =>
+		{
+			var copy = Like( item, item.Id );
+			copy.Count = item.Count;
+			copy.X = item.X;
+			copy.Y = item.Y;
+			copy.Worn = item.Worn;
+			copy.Made = item.Made?.Select( mark => mark.Copy() ).ToList();
+			return copy;
+		} ).ToList();
+
 	private static ItemStack Like( ItemStack item, Guid id ) =>
 		new() { Id = id, Definition = item.Definition, Width = item.Width, Height = item.Height, Max = item.Max, Frequency = item.Frequency, Pattern = item.Pattern, Paper = item.Paper?.Copy(), Map = item.Map?.Copy() };
 
@@ -185,6 +265,7 @@ public sealed class Transfers
 
 	private static void Take( IHolder holder, ItemStack item, int count )
 	{
+		Making.TakeTop( item, count );
 		item.Count -= count;
 		if ( item.Count <= 0 ) holder.Inventory.Items.Remove( item );
 		LetGo( holder );
@@ -202,14 +283,20 @@ public sealed class Transfers
 	/// </summary>
 	private static Result<ItemStack> Add( InventoryData inventory, ItemStack template, int count )
 	{
-		var topped = new System.Collections.Generic.List<(ItemStack Pile, int Was)>();
+		var topped = new System.Collections.Generic.List<(ItemStack Pile, int Was, System.Collections.Generic.List<MadeMark>? Marks)>();
 		var started = new System.Collections.Generic.List<ItemStack>();
 		ItemStack? last = null;
+		// The marks of what arrives, in order, each going with one of them.
+		var marks = template.Made;
+		var used = 0;
+		System.Collections.Generic.List<MadeMark>? Next( int how ) => marks?.Skip( used ).Take( how ).ToList();
 		foreach ( var pile in inventory.Items.Where( value => !value.Worn && Alike( value, template ) && value.Count < value.Max ) )
 		{
 			if ( count == 0 ) break;
 			var room = Math.Min( count, pile.Max - pile.Count );
-			topped.Add( (pile, pile.Count) );
+			topped.Add( (pile, pile.Count, pile.Made) );
+			Making.PutOnTop( pile, Next( room ), room );
+			used += room;
 			pile.Count += room;
 			count -= room;
 			last = pile;
@@ -218,9 +305,15 @@ public sealed class Transfers
 		{
 			var pile = Like( template, started.Count == 0 ? template.Id : Guid.NewGuid() );
 			pile.Count = Math.Min( count, pile.Max );
+			pile.Made = Next( pile.Count );
+			used += pile.Count;
 			if ( !Place( inventory, pile ).Ok )
 			{
-				foreach ( var (was, amount) in topped ) was.Count = amount;
+				foreach ( var (was, amount, wasMarked) in topped )
+				{
+					was.Count = amount;
+					was.Made = wasMarked;
+				}
 				foreach ( var added in started ) inventory.Items.Remove( added );
 				return Result<ItemStack>.Fail( ErrorCode.Conflict, "There is no room for that." );
 			}
