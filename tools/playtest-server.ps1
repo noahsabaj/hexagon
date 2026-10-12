@@ -260,6 +260,37 @@ function Shoot([string] $Name, [string] $Bone) {
     [void](Send 1 "attack|$($at -join '|')")
 }
 
+# Where a client's character stands, as it has it: x, y and z.
+function Pos([int] $Client) {
+    if ((Send $Client 'state') -notmatch 'pos=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)') { throw "Client $Client says nothing of where it stands." }
+    return [double[]] @($Matches[1], $Matches[2], $Matches[3])
+}
+
+# How far apart two places are along the ground, to the unit.
+function Apart([double[]] $A, [double[]] $B) { [int] [Math]::Sqrt([Math]::Pow($A[0] - $B[0], 2) + [Math]::Pow($A[1] - $B[1], 2)) }
+
+# A place a way past another along the line in front of the crate, which runs out of the building
+# across open ground: someone standing there facing back at it walks away from it backward, onto open
+# ground. The hall itself is too small, and too full, to drag or lead anyone far.
+function Past([double[]] $At, [double] $Distance) {
+    $near = Spot 'Crate' front 150
+    $far = Spot 'Crate' front 1150
+    $length = [Math]::Sqrt([Math]::Pow($far[0] - $near[0], 2) + [Math]::Pow($far[1] - $near[1], 2))
+    return [int[]] @(($At[0] + ($far[0] - $near[0]) / $length * $Distance), ($At[1] + ($far[1] - $near[1]) / $length * $Distance), ($At[2] + 8))
+}
+
+# Where the host has a body, as what it says of every body names it: x, y and z on the ground.
+function Lying([string] $Pattern) {
+    $reply = Send 0 'bodies'
+    if ($reply -notmatch "$Pattern@(-?\d+),(-?\d+),(-?\d+)") { throw "No body like '$Pattern': $reply" }
+    return [double[]] @($Matches[1], $Matches[2], $Matches[3])
+}
+
+# Asks a client where it sees from until that is within range of a place: 'near', or what it last said.
+function Eye([int] $Client, [double[]] $At, [double] $Range) {
+    Poll { $reply = Send $Client 'state'; if ($reply -match 'eye=(-?\d+),(-?\d+),' -and (Apart ([double[]] @($Matches[1], $Matches[2])) $At) -lt $Range) { 'near' } else { $reply } } '^near$'
+}
+
 # Checks a reply. Given the question instead, in braces, it asks until the answer is the one wanted.
 # That something did not happen is checked once, after something sent later has arrived. The first
 # check that fails ends the run: what follows it was played on a city it left wrong.
@@ -654,10 +685,11 @@ try {
     [void](Poll { Send 2 'state' } 'items=\[Identification card@0,0, Water@1,0, Tokenx30@2,0\] ')
 
     Section 'Violence is slow, visible and on the record'
-    # Out on the open floor past the crate, where she has room to fall. Places are measured from the
-    # crate, which never moves: a door turns as it opens, and its back once faced a wall. He stands in
-    # front of her, the way her body faces, so nothing of her is in the way of the part he shoots at.
-    $target = Spot 'Crate' front 150
+    # Out on the open ground east of the building, where she has room to fall, and to be dragged and
+    # carried off after. Places are measured from the crate, which never moves: a door turns as it
+    # opens, and its back once faced a wall. He stands in front of her, the way her body faces, so
+    # nothing of her is in the way of the part he shoots at.
+    $target = Spot 'Crate' front 700
     Teleport 2 'Jane Roe' $target
     Wait-Landed 2
     Teleport 1 'John Doe' (Spot 'Jane Roe' front 60)
@@ -700,6 +732,51 @@ try {
     Expect 'each shot used up a round' (Send 1 'state') 'Pistol roundx3@'
     [void](Send 2 'leave')
     Expect 'she cannot leave the scene' { Send 2 'state' } 'has=True .*cannot leave the city like this'
+
+    Section 'Someone down is dragged by what is taken hold of, or carried over the shoulder'
+    # He stands past her on the open ground, facing her: walking backward draws her after him.
+    $lies = [double[]] (Part 'Jane Roe' pelvis)
+    Teleport 1 'John Doe' (Past $lies 70)
+    Wait-Landed 1
+    [void](Send 1 "face|$($lies -join '|')|level")
+    [void](Send 1 'act|body.drag')
+    Expect 'he takes hold of her where he looks, with the hand his pistol leaves free, and goes no faster than a limp' { Send 1 'state' } "held='Pistol' .*speed=60 .*holding=Drag led=False "
+    Expect 'she sees his hand on her' { Send 2 'proxies' } 'holding=Drag led=False'
+    Expect 'and the host has him holding her' (Send 0 'bodies') 'hold:John Doe=drag:Jane Roe(\s|$)'
+    [void](Send 1 'walk|-1|0')
+    Start-Sleep -Seconds 3
+    [void](Send 1 'walk|off')
+    $dragged = [double[]] (Part 'Jane Roe' pelvis)
+    Expect 'her body comes along the floor after him, slowly' "$(Apart $lies $dragged)" '^([6-9]\d|1\d\d|2[0-4]\d)$'
+    Expect 'and she sees from her body, wherever it is dragged' (Eye 2 $dragged 100) '^near$'
+    [void](Send 1 'letgo')
+    Expect 'Use lets go of her' { Send 1 'state' } 'holding=None led=False '
+    Expect 'which is on record, with how far she came' { Send 0 'journal|hold.letgo' } "actor='John Doe' .*data=\[hold=drag reason=let go moved=\d+\]"
+    [void](Send 1 'act|body.carry')
+    Expect 'carrying her takes both hands, and his pistol is in one' { Send 1 'state' } 'You need both hands free to carry them\.'
+    [void](Send 1 'equip|Pistol')
+    [void](Poll { Send 1 'state' } "held='' ")
+    [void](Send 1 'act|body.carry')
+    Expect 'with both hands free, he lifts her over his shoulder, and goes at a walk' { Send 1 'state' } 'speed=110 .*holding=Carry led=False '
+    Start-Sleep -Seconds 1
+    $shoulder = [double[]] (Part 'Jane Roe' pelvis)
+    Expect 'her middle on his shoulder' "$([int] ($shoulder[2] - (Pos 1)[2]))" '^[4-7]\d$'
+    [void](Send 1 'walk|-1|0')
+    Start-Sleep -Seconds 2
+    [void](Send 1 'walk|off')
+    $carried = [double[]] (Part 'Jane Roe' pelvis)
+    Expect 'she goes where he carries her' "$(Apart $shoulder $carried)" '^([89]\d|1\d\d|2[0-4]\d)$'
+    Expect 'and sees from where she is carried' (Eye 2 $carried 100) '^near$'
+    [void](Send 1 'letgo')
+    [void](Poll { Send 1 'state' } 'holding=None ')
+    $journal = Send 0 'journal'
+    Expect 'taking hold of her is on record' $journal '(?<!\S)verb\.body\.drag=1(?!\S).*(?<!\S)verb\.body\.carry=1(?!\S)|(?<!\S)verb\.body\.carry=1(?!\S).*(?<!\S)verb\.body\.drag=1(?!\S)'
+    Expect 'and so is being refused, without a free hand' $journal '(?<!\S)verb\.body\.carry!=1(?!\S)'
+    [void](Send 1 'equip|Pistol')
+    [void](Poll { Send 1 'state' } "held='Pistol'")
+    # Where she lies now, once she has settled, for helping her up where she lies.
+    [void](Part 'Jane Roe' pelvis)
+    $lying = Poll { Send 1 'sleepers' } ',down,limp'
 
     Section 'Searching is opening a holder'
     [void](Send 1 'act|person.search')
@@ -746,6 +823,31 @@ try {
     Expect 'his zip tie bound her, and was used up' { "$(Send 2 'state') $(Send 1 'state')" } 'restrained=True .*Your hands are bound.*items=\[(?![^\]]*Zip tie)'
     [void](Send 2 'drop|Water')
     Expect 'bound hands do nothing' { Send 2 'state' } 'items=\[Identification card@0,0, Water@.*cannot do that now'
+    # Bound, she is led by the arm, at his left hand, wherever he walks, and her own legs do not take her off.
+    Teleport 2 'Jane Roe' $target
+    Teleport 1 'John Doe' (Past $target 50)
+    Wait-Landed 1
+    Wait-Landed 2
+    [void](Send 1 'face|Crate|level')
+    [void](Send 1 'act|person.lead')
+    Expect 'he takes her by the arm, and goes at a walk' { Send 1 'state' } 'speed=110 .*holding=Lead led=False '
+    Expect 'she feels it' { Send 2 'state' } 'holding=None led=True '
+    Expect 'and he is seen holding her' { Send 2 'proxies' } 'holding=Lead '
+    $start = Pos 1
+    [void](Send 1 'walk|-1|0')
+    Start-Sleep -Seconds 2
+    [void](Send 1 'walk|off')
+    Start-Sleep -Milliseconds 500
+    $led = Pos 1
+    Expect 'he walks her off' "$(Apart $start $led)" '^([89]\d|1\d\d|2[0-4]\d)$'
+    Expect 'and she keeps at his side' (Poll { if ((Apart (Pos 2) $led) -lt 80) { 'beside' } else { Send 2 'state' } } '^beside$') '^beside$'
+    [void](Send 2 'walk|0|1')
+    Start-Sleep -Seconds 1
+    Expect 'her own legs do not take her off' "$(Apart (Pos 2) $led)" '^\d{1,2}$'
+    [void](Send 2 'walk|off')
+    [void](Send 1 'letgo')
+    Expect 'he lets go of her arm' { Send 2 'state' } 'led=False '
+    Expect 'which is on record' { Send 0 'journal|hold.letgo' } "actor='John Doe' .*data=\[hold=lead reason=let go moved=\d+\]"
     [void](Send 1 'act|person.release')
     Expect 'released' { Send 2 'state' } 'restrained=False'
 
@@ -784,6 +886,19 @@ try {
     Expect 'what she carried is on her body, and what she wore' { Send 1 'state' } 'bodies=1 .*open=\[Body: Identification card, Water\] openworn=\[Flannel shirt, Jeans, Black boots\] '
     Expect 'and the body is seen in it' (Send 1 'state') 'bodylooks=\[human02,hair_bobcut,flannel_shirt,jeans,black_boots\] '
     [void](Send 1 'close')
+    # Her body is dragged off like anyone down, and lies where he leaves it.
+    $dead = Lying 'dead:Jane Roe'
+    Teleport 1 'John Doe' (Past $dead 70)
+    Wait-Landed 1
+    [void](Send 1 "face|$($dead -join '|')|level")
+    [void](Send 1 'act|body.drag|corpse')
+    Expect 'he drags her body by what he takes hold of' { Send 0 'bodies' } 'hold:John Doe=drag:Jane Roe\(dead\)'
+    [void](Send 1 'walk|-1|0')
+    Start-Sleep -Seconds 2
+    [void](Send 1 'walk|off')
+    [void](Send 1 'letgo')
+    [void](Poll { Send 1 'state' } 'holding=None ')
+    Expect 'it lies where he left it' (Poll { if ((Apart (Lying 'dead:Jane Roe') $dead) -gt 50) { 'moved' } else { Send 0 'bodies' } } '^moved$') '^moved$'
     Teleport 1 'John Doe' $across
     Wait-Landed 1
 
@@ -1015,6 +1130,49 @@ try {
     [void](Send 2 'drive|off')
     [void](Send 2 'getout')
     [void](Poll { Send 2 'state' } "seated='' ")
+    # Someone down is laid in its bed, out of sight, and goes wherever it goes until taken out behind it.
+    Teleport 2 'Jane Roe' (Spot 'Truck bed' back 50)
+    Wait-Landed 2
+    [void](Send 0 'console|hexagon_hurt "Jane Roe" 200')
+    [void](Poll { Send 2 'state' } 'down=True ')
+    $down = [double[]] (Part 'Jane Roe' pelvis)
+    Teleport 1 'John Doe' (Spot 'Truck bed' back 120)
+    Wait-Landed 1
+    [void](Send 1 "face|$($down -join '|')|level")
+    [void](Send 1 'act|body.drag')
+    [void](Poll { Send 1 'state' } 'holding=Drag ')
+    [void](Send 1 'lay|Truck bed')
+    Expect 'he lays her in the back of the truck' { Send 0 'bodies' } 'lying:Jane Roe@in:Truck bed'
+    Expect 'and lets go of her there' (Send 1 'state') 'holding=None '
+    Expect 'she is out of sight' { Send 1 'state' } 'sleepers=0 '
+    Expect 'and lies in the dark of it' { Send 2 'state' } "lyingin='Truck bed' "
+    [void](Send 1 'open|Truck bed')
+    Expect 'whoever opens it sees her lying there' { Send 1 'state' } 'open=\[Truck bed, with someone lying in it: \] '
+    [void](Send 1 'close')
+    $loaded = Truck
+    Teleport 1 'John Doe' (Spot 'Combine truck' left 30)
+    [void](Send 1 'sit|Combine truck|drive')
+    [void](Poll { Send 1 'state' } "seated='Combine truck:wheel'")
+    [void](Send 1 'drive|-1|0|0')
+    Expect 'he backs it up with her in it' (Poll { $t = Truck; if ([Math]::Abs($t.X - $loaded.X) + [Math]::Abs($t.Y - $loaded.Y) -gt 120) { 'moved' } else { $t.Reply } } '^moved$' 10) '^moved$'
+    [void](Send 1 'drive|0|0|1')
+    [void](Poll { $t = Truck; if ($t.Speed -lt 5) { 'stopped' } else { $t.Reply } } '^stopped$' 10)
+    $moved = Truck
+    Expect 'and she goes with it, looking out from its floor' (Eye 2 ([double[]] @($moved.X, $moved.Y)) 250) '^near$'
+    [void](Send 1 'drive|off')
+    [void](Send 1 'getout')
+    [void](Poll { Send 1 'state' } "seated='' ")
+    Teleport 1 'John Doe' (Spot 'Truck bed' back 40)
+    Wait-Landed 1
+    [void](Send 1 'unload|Truck bed')
+    Expect 'he takes her out, onto the ground behind it' { Send 0 'bodies' } 'lying:Jane Roe@-?\d+,'
+    Expect 'where she lies in the open again' { Send 2 'state' } "lyingin='' "
+    $journal = Send 0 'journal'
+    Expect 'laying her in is on record' $journal '(?<!\S)verb\.bed\.lay=1(?!\S)'
+    Expect 'and so is taking her out' $journal '(?<!\S)verb\.bed\.unload=1(?!\S)'
+    [void](Send 0 'console|hexagon_revive "Jane Roe"')
+    [void](Poll { Send 2 'state' } 'down=False ')
+    Wait-Landed 2
     [void](Send 0 'tank|Combine truck|0')
     [void](Send 2 'sit|Combine truck|drive')
     Expect 'with its tank empty, it will not start' { Send 2 'state' } 'The tank is empty\.'
@@ -1113,6 +1271,10 @@ try {
 
     Section 'Leaving does not end a scene'
     Teleport 2 'Jane Roe' $target
+    # He stands past her on the open ground, facing back at her, to lead off what she leaves.
+    Teleport 1 'John Doe' (Past $target 80)
+    Wait-Landed 1
+    [void](Send 1 'face|Crate|level')
     [void](Send 0 'console|hexagon_give "John Doe" zip_tie')
     [void](Poll { Send 1 'state' } 'Zip tie@')
     [void](Poll { Send 1 'proxies' } 'down=False restrained=False .*has=True')
@@ -1124,7 +1286,18 @@ try {
     Wait-Until 'the server to notice the disconnect' { (Send 0 'journal') -match "(?<!\S)connection\.leave=$($left + 1)(?!\S)" }
     Expect 'the player who left is gone from the other client' { Send 1 'proxies' } '^[^A-Za-z]*$'
     # What someone left behind looks like is sent once the network has stopped sending it to those too far away.
-    Expect 'but the character she left bound is still standing there, and he is sent it' { Send 1 'sleepers' } '^-?\d+,-?\d+,bound,standing$'
+    $abandoned = Poll { Send 1 'sleepers' } '^-?\d+,-?\d+,bound,standing$'
+    Expect 'but the character she left bound is still standing there, and he is sent it' $abandoned '^-?\d+,-?\d+,bound,standing$'
+    # Led by the arm, the body she left walks where he takes it, and stays where he lets go of it.
+    $stands = [double[]] ($abandoned -split ',')[0..1]
+    [void](Send 1 'act|person.lead')
+    Expect 'he takes it by the arm' { Send 0 'bodies' } 'hold:John Doe=lead:Jane Roe(\s|$)'
+    [void](Send 1 'walk|-1|0')
+    Start-Sleep -Seconds 2
+    [void](Send 1 'walk|off')
+    Expect 'and walks it off with him' (Poll { $s = Send 1 'sleepers'; if ($s -match '^(-?\d+),(-?\d+),bound,standing$' -and (Apart ([double[]] @($Matches[1], $Matches[2])) $stands) -gt 100) { 'walked' } else { $s } } '^walked$') '^walked$'
+    [void](Send 1 'letgo')
+    [void](Poll { Send 1 'state' } 'holding=None ')
     Expect 'he can free her' (Send 1 'act|person.release') '^sent person\.release$'
     Expect 'and then nobody is left there' { Send 1 'state' } 'sleepers=0 '
     Expect 'freeing someone whose player has gone is on record like any other' { Send 0 'journal|verb.person.release' } "ok=True actor='John Doe' .*target=Sleeper"

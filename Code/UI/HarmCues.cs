@@ -11,9 +11,10 @@ namespace Hexagon.UI;
 /// How harm shows on this client's own screen, drawn by the engine's post-processing rather than by a
 /// panel. As the character is hurt, the edges of sight darken and the world pales and softens;
 /// while it is down, sight narrows, dims and blurs, but the world can still be made out, since
-/// whoever comes near is part of the scene. Each is a global <see cref="PostProcessVolume"/>
-/// whose weight follows the character, so the engine blends it over whatever the game's camera already
-/// does. Nothing here is networked: it is how one client's character feels.
+/// whoever comes near is part of the scene. Lying down in a truck's closed bed, it is dark. Each is a
+/// global <see cref="PostProcessVolume"/> whose weight follows the character, so the engine blends it
+/// over whatever the game's camera already does. Nothing here is networked: it is how one client's
+/// character feels.
 /// </summary>
 public sealed class HarmCues : Component
 {
@@ -24,6 +25,7 @@ public sealed class HarmCues : Component
 
 	private PostProcessVolume? _hurt;
 	private PostProcessVolume? _down;
+	private PostProcessVolume? _shut;
 
 	protected override void OnStart()
 	{
@@ -52,6 +54,20 @@ public sealed class HarmCues : Component
 			value.Brightness = 0.65f;
 		} );
 		Add<Blur>( _down, value => value.Size = 0.4f );
+
+		_shut = Volume( "Shut in" );
+		Add<Vignette>( _shut, value =>
+		{
+			value.Color = Color.Black;
+			value.Intensity = 1f;
+			value.Smoothness = 0.9f;
+			value.Roundness = 1f;
+		} );
+		Add<ColorAdjustments>( _shut, value =>
+		{
+			value.Saturation = 0.1f;
+			value.Brightness = 0.2f;
+		} );
 	}
 
 	protected override void OnUpdate()
@@ -60,6 +76,7 @@ public sealed class HarmCues : Component
 		var down = character is { IsDown: true };
 		Follow( _hurt, character is null || down ? 0f : Math.Clamp( (Vitals.Full - character.Health) / Worst, 0f, 1f ) );
 		Follow( _down, down ? 1f : 0f );
+		Follow( _shut, character is { LyingIn: { } bed } && bed.IsValid() ? 1f : 0f );
 	}
 
 	/// <summary>A volume everywhere, on an object of its own: a volume applies the effects on its object and below.</summary>

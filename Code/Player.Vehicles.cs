@@ -29,6 +29,15 @@ public sealed partial class Player
 	/// <summary>Host: the seat this character sits in.</summary>
 	public Seat? HostSeat => Networking.IsHost ? _seat : null;
 
+	/// <summary>Owner: the truck bed this character lies in, down, which it looks out from. Nobody else is told.</summary>
+	public Bed? LyingIn { get; private set; }
+
+	// Host-side: the bed its owner was last told it lies in.
+	private Bed? _toldLyingIn;
+
+	/// <summary>Host: the truck bed this character lies in, down, while it is in the city.</summary>
+	internal Bed? HostLyingIn => _character?.LyingIn is { } id ? Bed.HostFind( id ) : null;
+
 	/// <summary>Host: this character sits in a seat that is free. Whatever it was doing stops, and its owner puts it there.</summary>
 	internal Result HostSit( Seat seat )
 	{
@@ -41,7 +50,7 @@ public sealed partial class Player
 		_seat = seat;
 		seat.HostOccupant = this;
 		_sinceSat = 0;
-		HostFollowSeat();
+		HostFollow( seat.WorldPosition );
 		using ( Rpc.FilterInclude( owner ) ) ReceiveSit( seat );
 		return Result.Success();
 	}
@@ -80,14 +89,30 @@ public sealed partial class Player
 			HostLeaveSeat();
 			return;
 		}
-		HostFollowSeat();
+		HostFollow( seat.WorldPosition );
 	}
 
-	/// <summary>Host: where a character sitting is believed to be is wherever its seat has been carried.</summary>
-	private void HostFollowSeat()
+	/// <summary>Host: where a character carried by something, a seat or a truck bed, is believed to be is wherever it has been carried.</summary>
+	private void HostFollow( Vector3 position )
 	{
-		_movement.Reset( _seat!.WorldPosition, Time.Now, settleSeconds: 0 );
+		_movement.Reset( position, Time.Now, settleSeconds: 0 );
 		_lastClaim = null;
+	}
+
+	/// <summary>Host: tells the owner which truck bed it lies in, whenever that changes.</summary>
+	private void HostTellLyingIn()
+	{
+		var bed = HostLyingIn;
+		if ( bed == _toldLyingIn || Network.Owner is not { } owner ) return;
+		_toldLyingIn = bed;
+		using ( Rpc.FilterInclude( owner ) ) ReceiveLyingIn( bed );
+	}
+
+	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
+	private void ReceiveLyingIn( Bed? bed )
+	{
+		LyingIn = bed;
+		PrivateVersion++;
 	}
 
 	/// <summary>Owner: gets out of the seat.</summary>

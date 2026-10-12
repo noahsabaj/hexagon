@@ -188,11 +188,23 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 		foreach ( var ground in Holders!.OfKind( HolderKinds.Ground ) )
 			if ( ground.Inventory.Items.Count == 0 ) Holders.Delete( ground.Id );
 			else WorldItem.Spawn( ground );
+		// Whoever lay in a truck's bed that the city no longer has lies where it was last kept.
+		foreach ( var body in Holders.OfKind( HolderKinds.Corpse ).Where( value => value.LyingIn is { } bed && Bed.HostFind( bed ) is null ) )
+		{
+			body.LyingIn = null;
+			Holders.Save( body );
+		}
+		foreach ( var character in Roster!.All.Where( value => value.LyingIn is { } bed && Bed.HostFind( bed ) is null ).ToArray() )
+		{
+			character.LyingIn = null;
+			Roster.Save( character );
+		}
 		foreach ( var body in Holders.OfKind( HolderKinds.Corpse ) )
 			if ( body.Inventory.Items.Count == 0 ) Holders.Delete( body.Id );
-			else Corpse.Spawn( body );
+			// One in a truck's bed is out of the world until it is taken out.
+			else if ( body.LyingIn is null ) Corpse.Spawn( body );
 		// Whoever was down or bound when it stopped is still lying, or standing, where they were.
-		foreach ( var character in Roster!.All.Where( value => value.IsDown || value.IsRestrained ).ToArray() )
+		foreach ( var character in Roster.All.Where( value => value.IsDown || value.IsRestrained ).ToArray() )
 			Sleeper.HostLeave( character, character.Position is { Length: 3 } at ? new Transform( new Vector3( at[0], at[1], at[2] ) ) : FindSpawn() );
 		Property.HostAdopt( this );
 	}
@@ -204,8 +216,8 @@ public sealed class HexagonServices : GameObjectSystem<HexagonServices>, ISceneS
 		// Walked rather than looked up: a closing scene empties its index before it destroys anything,
 		// and this manager is destroyed before the pawns, which are added after it.
 		foreach ( var player in Scene.Components.GetAll<Player>( FindMode.EverythingInSelfAndDescendants ) ) player.HostSave();
-		// The down are kept where their bodies lie, which a push may have moved since.
-		foreach ( var character in Roster.All.Where( value => value.IsDown ).ToArray() )
+		// The down are kept where their bodies lie, and the bound where they stand, which a push or a lead may have moved since.
+		foreach ( var character in Roster.All.Where( value => value.IsDown || value.IsRestrained ).ToArray() )
 		{
 			Sleeper.Find( character.Id )?.HostKeepPosition( character );
 			Roster.Save( character );

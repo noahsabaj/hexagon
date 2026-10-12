@@ -59,10 +59,11 @@ public sealed class Sleeper : Component, Component.INetworkVisible, IEmbodiment
 
 	/// <summary>
 	/// Host: whether the character needs a body here, and which: limp while it is down, standing while
-	/// it is bound and its player is away. Null while its pawn carries it, or once nothing should.
+	/// it is bound and its player is away. Null while its pawn carries it, while it lies in a truck's bed,
+	/// out of the world, or once nothing should.
 	/// </summary>
 	private static bool? WantsLimp( CharacterData character ) =>
-		HexagonServices.Current?.Roster?.Contains( character ) != true || character.IsDead ? null
+		HexagonServices.Current?.Roster?.Contains( character ) != true || character.IsDead || character.LyingIn is not null ? null
 		: character.IsDown ? true
 		: character.IsRestrained && Player.HostLoaded( character.Id ) is null ? false
 		: null;
@@ -168,10 +169,9 @@ public sealed class Sleeper : Component, Component.INetworkVisible, IEmbodiment
 		ShownLook = LookOf( character );
 	}
 
-	/// <summary>Host: keeps where a limp body lies with its character, so a restart finds it there.</summary>
+	/// <summary>Host: keeps where the body lies, or stands, with its character, so a restart finds it there.</summary>
 	public void HostKeepPosition( CharacterData character )
 	{
-		if ( !IsLimp ) return;
 		var at = HostGroundPoint;
 		character.Position = new[] { at.x, at.y, at.z };
 	}

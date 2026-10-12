@@ -73,7 +73,14 @@ public sealed class CharacterBody : Component, Component.IPressable, Component.I
 			characters.Bleed( character, Time.Delta, Embodiment!.HostPosition );
 	}
 
-	bool IPressable.CanPress( IPressable.Event e ) => Embodiment?.IsShownHere == true;
+	// Whoever has hold of them lets go with Use.
+	bool IPressable.CanPress( IPressable.Event e ) => Embodiment?.IsShownHere == true && !HeldHere;
+
+	/// <summary>Whether this client's own character has hold of them.</summary>
+	private bool HeldHere => Player.Local?.HoldingBody is { } held && held == Embodiment?.Renderer;
+
+	/// <summary>What is taken hold of to move them: the body they were left in, or their pawn.</summary>
+	private Component HoldTarget => (Component?)GetComponent<Sleeper>() ?? GetComponent<Player>()!;
 
 	bool IPressable.Press( IPressable.Event e )
 	{
@@ -115,6 +122,9 @@ public sealed class CharacterBody : Component, Component.IPressable, Component.I
 			// The rank to give is chosen from those the superior's own allows, and sent with RequestSetRank.
 			case VerbIds.PersonRank: return Result.Fail( ErrorCode.Invalid, "Choose the rank to give them." );
 			case VerbIds.PersonDischarge: return characters.Discharge( character, other );
+			case VerbIds.BodyDrag: return actor.HostTakeHold( HoldTarget, HoldKind.Drag );
+			case VerbIds.BodyCarry: return actor.HostTakeHold( HoldTarget, HoldKind.Carry );
+			case VerbIds.PersonLead: return actor.HostTakeHold( HoldTarget, HoldKind.Lead );
 			case VerbIds.PersonFinish:
 				var can = Vitals.CanFinish( character );
 				if ( can.Ok ) characters.Die( character, Embodiment!.HostPosition, "finished", other );

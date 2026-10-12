@@ -26,6 +26,8 @@ public sealed class HolderData : IHolder
 	public string? Look { get; set; }
 	/// <summary>For a body: whose it was, so a character staff restore gets up here with what is still on it.</summary>
 	public Guid? Character { get; set; }
+	/// <summary>For a body: the truck bed it lies in, by the bed's id, going wherever the truck goes until it is taken out.</summary>
+	public Guid? LyingIn { get; set; }
 
 	[JsonIgnore] public Guid HolderId => Id;
 	[JsonIgnore] public string HolderLabel => $"{Kind}:{Id:N}";

@@ -63,6 +63,7 @@ public sealed partial class Player
 		// The body and what is worn on it: it changes only when someone puts something on or takes it off.
 		var look = _character is null ? string.Empty : Looks.Of( _character );
 		if ( Look != look ) Look = look;
+		HostTellLyingIn();
 	}
 
 	[Rpc.Host]
@@ -73,6 +74,13 @@ public sealed partial class Player
 		if ( IsIncapable )
 		{
 			HostRecord( JournalKinds.CombatAttack, ok: false, data: ("reason", IsDown ? "down" : "restrained") );
+			return;
+		}
+		// Both hands are under someone carried over the shoulder.
+		if ( !Holds.LeavesAHand( HostHolding ) )
+		{
+			HostRecord( JournalKinds.CombatAttack, ok: false, data: ("reason", "hands") );
+			Chat.Tell( caller, Holds.HandsFull );
 			return;
 		}
 		// An aim that is not a number would poison every trace and position it touched.
@@ -149,6 +157,7 @@ public sealed partial class Player
 	/// </summary>
 	internal void HostDied( CharacterData character, bool permanent )
 	{
+		HostLetGo( "died" );
 		var owner = Network.Owner;
 		if ( permanent )
 		{

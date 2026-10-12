@@ -45,6 +45,8 @@ public sealed class CharacterData : IHolder
 	public Guid? Equipped { get; set; }
 	/// <summary>The characters who have introduced themselves to this one, and the name each gave.</summary>
 	public Dictionary<Guid, string> Known { get; set; } = new();
+	/// <summary>The truck bed it lies in, down, by the bed's id: it goes wherever the truck goes, until it is taken out. See <see cref="Holds"/>.</summary>
+	public Guid? LyingIn { get; set; }
 
 	[JsonIgnore] public Guid HolderId => Id;
 	[JsonIgnore] public string HolderLabel => $"character:{Id:N}";

@@ -117,8 +117,9 @@ public sealed class Container : Component, Component.IPressable, IVerbTarget, IL
 /// What a character carried, left where it fell, on its body lying limp (see <see cref="Bodies"/>). It
 /// is a holder like a crate, put into the world at run time like a dropped item, and it goes once it
 /// has been emptied, or once staff restore the character, who gets up here with whatever is still on
-/// it. It is sent only to clients near enough to see it, and what it looks like only as
-/// <see cref="Reveal"/> allows.
+/// it. It can be dragged or carried off (see <see cref="Holds"/>), and laid in a truck's bed. It is
+/// sent only to clients near enough to see it, and what it looks like only as <see cref="Reveal"/>
+/// allows.
 /// </summary>
 [Title( "Hexagon Corpse" ), Category( "Hexagon" ), Icon( "airline_seat_flat" )]
 public sealed class Corpse : Component, Component.IPressable, Component.INetworkVisible, IVerbTarget
@@ -126,7 +127,7 @@ public sealed class Corpse : Component, Component.IPressable, Component.INetwork
 	private static readonly Verb Search = new( VerbIds.CorpseSearch, "Search" );
 
 	public Guid HolderId { get; private set; }
-	public IReadOnlyList<Verb> Verbs { get; } = new[] { Search };
+	public IReadOnlyList<Verb> Verbs { get; } = new[] { Search, BodyVerbs.Drag, BodyVerbs.Carry };
 
 	// What it looks like, sent to all it is sent to once the reveal's hold is over.
 	[Sync( SyncFlags.FromHost )] public bool IsShown { get; set; }
@@ -169,7 +170,7 @@ public sealed class Corpse : Component, Component.IPressable, Component.INetwork
 		var body = new GameObject( true, "Body" );
 		body.Tags.Add( "corpse" );
 		var look = HexagonServices.Current?.Characters?.LookOf( holder ) ?? holder.Look ?? string.Empty;
-		body.WorldTransform = from.IsValid() ? from.WorldTransform : Bodies.Lying( Looks.ModelOf( look ), new Vector3( at[0], at[1], at[2] ), 0f );
+		body.WorldTransform = from.IsValid() ? from.WorldTransform : Bodies.Lying( Looks.ModelOf( look ), new Vector3( at[0], at[1], at[2] ), holder.Yaw );
 		Bodies.MakeLimp( body, look, from, impact ).Enabled = false;
 		var corpse = body.AddComponent<Corpse>();
 		corpse.HolderId = holder.Id;
@@ -180,15 +181,18 @@ public sealed class Corpse : Component, Component.IPressable, Component.INetwork
 	}
 
 	/// <summary>
-	/// Host: keeps where the body lies with its holder, so a restart, or staff restoring the character,
-	/// finds it there. True when it had moved.
+	/// Host: keeps where the body lies, and which way, with its holder, so a restart, or staff restoring
+	/// the character, finds it there. True when it had moved.
 	/// </summary>
 	public static bool HostKeepPosition( HolderData holder )
 	{
 		if ( Game.ActiveScene?.GetAllComponents<Corpse>().FirstOrDefault( value => value.HolderId == holder.Id ) is not { } corpse ) return false;
 		var at = Bodies.GroundPoint( corpse.GameObject );
-		if ( holder.Position is { Length: 3 } was && new Vector3( was[0], was[1], was[2] ).Distance( at ) < 4f ) return false;
+		var yaw = Bodies.LyingYaw( corpse.GameObject );
+		var turned = MathF.Abs( ((holder.Yaw - yaw) % 360f + 540f) % 360f - 180f );
+		if ( holder.Position is { Length: 3 } was && new Vector3( was[0], was[1], was[2] ).Distance( at ) < 4f && turned < 10f ) return false;
 		holder.Position = new[] { at.x, at.y, at.z };
+		holder.Yaw = yaw;
 		return true;
 	}
 
@@ -222,7 +226,11 @@ public sealed class Corpse : Component, Component.IPressable, Component.INetwork
 			corpse.GameObject.Destroy();
 	}
 
-	bool IPressable.CanPress( IPressable.Event e ) => IsRevealed;
+	// Whoever has hold of it lets go with Use.
+	bool IPressable.CanPress( IPressable.Event e ) => IsRevealed && !HeldHere;
+
+	/// <summary>Whether this client's own character has hold of it.</summary>
+	private bool HeldHere => Player.Local?.HoldingBody is { } held && held == GetComponent<SkinnedModelRenderer>( includeDisabled: true );
 
 	bool IPressable.Press( IPressable.Event e )
 	{
@@ -236,8 +244,14 @@ public sealed class Corpse : Component, Component.IPressable, Component.INetwork
 	Result IVerbTarget.Perform( Player actor, Verb verb )
 	{
 		if ( HexagonServices.Current!.Holders!.Find( HolderId ) is not { } holder ) return Result.Fail( ErrorCode.NotFound, "There is nothing left." );
-		actor.HostOpen( this, holder, holder.Title );
-		return Result.Success();
+		switch ( verb.Id )
+		{
+			case VerbIds.BodyDrag: return actor.HostTakeHold( this, HoldKind.Drag );
+			case VerbIds.BodyCarry: return actor.HostTakeHold( this, HoldKind.Carry );
+			default:
+				actor.HostOpen( this, holder, holder.Title );
+				return Result.Success();
+		}
 	}
 }
 
