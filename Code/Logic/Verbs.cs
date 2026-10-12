@@ -55,6 +55,13 @@ public static class VerbIds
 	public const string WagonOpen = "wagon.open";
 	/// <summary>Working a site, such as a mine or a scrap yard, for what it yields. See <see cref="Sites"/>.</summary>
 	public const string SiteWork = "site.work";
+	/// <summary>Sitting at a truck's wheel. Driving it takes a key cut to its lock.</summary>
+	public const string VehicleDrive = "vehicle.drive";
+	/// <summary>Sitting in a truck beside whoever drives it.</summary>
+	public const string VehicleRide = "vehicle.ride";
+	/// <summary>Pouring the fuel in hand into a truck's tank.</summary>
+	public const string VehicleFuel = "vehicle.fuel";
+	public const string BedOpen = "bed.open";
 	public const string CorpseSearch = "corpse.search";
 	/// <summary>Leaning over a map laid out on a table, to mark it up.</summary>
 	public const string MapLean = "map.lean";

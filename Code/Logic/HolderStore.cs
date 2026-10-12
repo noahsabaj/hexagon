@@ -40,6 +40,8 @@ public static class HolderKinds
 	public const string Machine = "machine";
 	/// <summary>What a train's wagon carries while it stands at the station.</summary>
 	public const string Wagon = "wagon";
+	/// <summary>The back of a truck, which goes where the truck does.</summary>
+	public const string Bed = "bed";
 }
 
 /// <summary>Every holder that is not a character, in memory and written through, like the roster.</summary>

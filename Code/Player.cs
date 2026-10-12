@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using Hexagon.Logic;
 using Sandbox;
+using Sandbox.Movement;
 
 namespace Hexagon;
 
@@ -161,6 +162,8 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		controller.ColliderObject?.Tags.SetFrom( controller.BodyCollisionTags );
 		// Linked explicitly: the automatic link runs when the controller enables, before the child exists.
 		controller.Renderer = renderer;
+		// The controller only adds walking for itself. Sitting is chosen whenever the pawn is put in a seat.
+		pawn.AddComponent<SitMoveMode>();
 		pawn.AddComponent<Player>();
 		pawn.AddComponent<CharacterBody>();
 		pawn.AddComponent<BodyCues>();
@@ -200,6 +203,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		ApplyPresence();
 		ApplyAppearance();
 		if ( IsProxy || !HasCharacter ) return;
+		DriveTick();
 		// "Use" reaches a target's first verb through IPressable. Everything else it offers is chosen
 		// from a menu, by name: nothing that hands something over or binds someone hangs off a bare key.
 		if ( UiBusy ) return;
@@ -234,7 +238,9 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		HostPaperTick();
 		HostLeanTick();
 		HostWorkTick();
-		HostAuditMovement( controller );
+		// Sitting, it goes where its seat goes, and its owner has no say in it.
+		if ( _seat is not null ) HostSeatTick();
+		else HostAuditMovement( controller );
 	}
 
 	/// <summary>
@@ -288,6 +294,8 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	public void HostTeleport( Vector3 position )
 	{
 		if ( !Networking.IsHost ) return;
+		// Put somewhere, it is not sitting anywhere.
+		HostLeaveSeat();
 		// The host's belief moves whether or not there is anyone to tell.
 		_movement.Reset( position, Time.Now );
 		_lastClaim = null;
@@ -383,11 +391,15 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	{
 		if ( Controller is not { } controller ) return;
 		var standing = IsPresent && !IsDown;
+		var seated = IsSeated;
 		if ( controller.Renderer.IsValid() ) controller.Renderer.GameObject.Enabled = standing;
 		// Another's body is moved by the network, not by physics, so it can lose its colliders safely.
-		// The owner's own holds still while they are down, so it can lose them too.
-		if ( controller.ColliderObject.IsValid() ) controller.ColliderObject.Enabled = IsProxy ? standing : !IsDown;
+		// The owner's own holds still while they are down, so it can lose them too. Sitting, a body is
+		// carried by its seat, and would only push against what carries it.
+		if ( controller.ColliderObject.IsValid() ) controller.ColliderObject.Enabled = !seated && (IsProxy ? standing : !IsDown);
 		if ( IsProxy ) return;
+		// Sitting, Use gets out, and nothing in reach is pressed.
+		controller.EnablePressing = !seated;
 		if ( controller.Body.IsValid() ) controller.Body.MotionEnabled = !IsDown;
 		// Leaning over a map, the hands and eyes are on the map.
 		var leaning = LeaningOver.IsValid();
@@ -404,7 +416,7 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		controller.WalkSpeed = IsLimping ? MathF.Min( LimpSpeed, _speeds.Walk ) : _speeds.Walk;
 		controller.RunSpeed = IsLimping ? controller.WalkSpeed : _speeds.Run;
 		controller.DuckedSpeed = IsLimping ? MathF.Min( controller.WalkSpeed, _speeds.Ducked ) : _speeds.Ducked;
-		controller.JumpSpeed = IsLimping ? 0f : _speeds.Jump;
+		controller.JumpSpeed = IsLimping || seated ? 0f : _speeds.Jump;
 	}
 
 	// After the controller's own view, before anything that holds the camera for a test.
@@ -498,7 +510,8 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 		if ( _character.IsDown && Sleeper.Find( _character.Id ) is { IsLimp: true } body ) body.HostKeepPosition( _character );
 		else
 		{
-			var at = HostPosition;
+			// Someone sitting in a vehicle is kept beside it: a restart does not keep their seat.
+			var at = _seat.IsValid() ? _seat!.HostExitPoint() : HostPosition;
 			_character.Position = new[] { at.x, at.y, at.z };
 		}
 		roster.Save( _character );
@@ -615,7 +628,10 @@ public sealed partial class Player : Component, Component.INetworkVisible, IEmbo
 	}
 
 	[Rpc.Owner( NetFlags.HostOnly | NetFlags.Reliable )]
-	private void ReceiveTeleport( Vector3 position )
+	private void ReceiveTeleport( Vector3 position ) => Arrive( position );
+
+	/// <summary>Owner: the pawn is where the host put it, at rest.</summary>
+	private void Arrive( Vector3 position )
 	{
 		WorldPosition = position;
 		if ( Controller is not { } controller || controller.Body is not { } body || !body.IsValid() ) return;

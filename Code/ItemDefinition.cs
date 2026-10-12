@@ -51,6 +51,9 @@ public sealed class ItemDefinition : GameResource
 	/// <summary>The item each attack uses up, or none for a weapon that needs no ammunition.</summary>
 	[Property] public ItemDefinition? Ammo { get; set; }
 
+	/// <summary>The fuel it holds, poured whole into a vehicle's tank from the hand, which uses it up. Zero means it is not fuel.</summary>
+	[Property, Range( 0f, 500f )] public float Fuel { get; set; }
+
 	/// <summary>
 	/// It is clothing, worn as this engine clothing piece: put on, it is on the body rather than in
 	/// the grid, and anyone can see it. Nothing is worn by itself: a uniform is handed over and put on.

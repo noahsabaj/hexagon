@@ -74,6 +74,8 @@ public sealed class CharacterService
 		var body = BodyOf( character );
 		if ( struck.Harm == Harm.Downed )
 		{
+			// Someone sitting falls out first, beside the vehicle, rather than lying inside it.
+			loaded?.HostLeaveSeat();
 			loaded?.HostClose();
 			Player.HostRecordAt( JournalKinds.CharacterDowned, Actor.Of( character ), at, by?.HolderLabel, data: new[] { ("cause", cause), ("place", blow.Place) } );
 			Tell( character, "You are down. Someone may help you up, or not." );
@@ -272,6 +274,8 @@ public sealed class CharacterService
 	public void Die( CharacterData character, Vector3 at, string cause, CharacterData? by, string? place = null, Impact? impact = null )
 	{
 		var loaded = Loaded( character );
+		// Someone dying in a vehicle falls out of it, and lies beside it.
+		if ( loaded?.HostLeaveSeat() is { } outside ) at = outside;
 		// The body it dies in is the one that falls, before anything is taken from it.
 		var from = BodyOf( character )?.Renderer;
 		loaded?.HostClose();

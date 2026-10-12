@@ -257,17 +257,41 @@ public static class DevCommands
 			// part|<character>|<bone>: the middle of that part of someone's body as the host has it, standing
 			// or on the ground, as x y z. A part's shape is its model's hitbox on that bone.
 			if ( !Networking.IsHost ) return "refused: not the host";
-			if ( Drawn( args[1] ) is not { Model: { } model } drawn || model.Bones.GetBone( args[2] ) is not { } named
-				|| !drawn.TryGetBoneTransform( named, out var bone ) ) return $"no part '{args[2]}' of '{args[1]}'";
-			var middle = model.HitboxSet.All.FirstOrDefault( value => value.Bone?.Name == named.Name )?.Shape switch
-			{
-				Capsule capsule => (capsule.CenterA + capsule.CenterB) / 2f,
-				Sphere sphere => sphere.Center,
-				BBox box => box.Center,
-				_ => Vector3.Zero
-			};
-			var at = bone.PointToWorld( middle );
+			if ( PartAt( args[1], args[2] ) is not { } at ) return $"no part '{args[2]}' of '{args[1]}'";
 			return $"{at.x.ToString( "0.#", Invariant )} {at.y.ToString( "0.#", Invariant )} {at.z.ToString( "0.#", Invariant )}";
+		}
+		if ( args[0] == "vantage" )
+		{
+			// vantage|<character>|<bone>|<distance>|<shooter>: where the shooter can stand, about that far from
+			// that part of someone's body, for a shot from the eyes to meet that part before anything else, as
+			// x y z on the floor; the nearest such place to where the shooter is. Someone fallen against a wall,
+			// or round the end of one, is shot from where they can be seen, and nobody is stood on top of them.
+			if ( !Networking.IsHost ) return "refused: not the host";
+			if ( PartAt( args[1], args[2] ) is not { } at ) return $"no part '{args[2]}' of '{args[1]}'";
+			var shooter = HexagonServices.Current?.Roster?.All.FirstOrDefault( value => value.Name == args[4] && !value.IsDead ) is { } who
+				? Player.HostLoaded( who.Id )?.HostPosition : null;
+			if ( shooter is not { } from ) return $"no shooter '{args[4]}'";
+			var scene = Game.ActiveScene;
+			var away = float.Parse( args[3], Invariant );
+			foreach ( var distance in new[] { away, away * 1.5f, away * 0.75f } )
+			{
+				var places = Enumerable.Range( 0, 16 ).Select( turn => at + Rotation.FromYaw( turn * 22.5f ).Forward * distance )
+					.OrderBy( place => place.WithZ( from.z ).Distance( from ) );
+				foreach ( var foot in places )
+				{
+					var floor = scene.Trace.Ray( foot.WithZ( at.z + 64f ), foot.WithZ( at.z - 64f ) ).WithoutTags( "player", "item", "corpse", "sleeper", "capsule" ).Run();
+					if ( !floor.Hit || floor.StartedSolid ) continue;
+					// Room to stand there, clear of walls and of the body lying beside it.
+					var room = scene.Trace.Box( new BBox( new Vector3( -16f, -16f, 2f ), new Vector3( 16f, 16f, 72f ) ), floor.HitPosition, floor.HitPosition + Vector3.Up ).WithoutTags( "player" ).Run();
+					if ( room.Hit || room.StartedSolid ) continue;
+					var eye = floor.HitPosition + Vector3.Up * 64f;
+					var sight = scene.Trace.Ray( eye, at + (at - eye).Normal * 8f ).UseHitboxes().WithoutTags( "capsule" ).Run();
+					if ( sight.GameObject?.GetComponentInParent<CharacterBody>()?.HostCharacter?.Name == args[1]
+						&& (sight.Hitbox?.Bone?.Name ?? sight.GameObject.Name) == args[2] )
+						return $"{floor.HitPosition.x:0} {floor.HitPosition.y:0} {floor.HitPosition.z:0}";
+				}
+			}
+			return "nowhere";
 		}
 		if ( args[0] == "floor" )
 		{
@@ -282,6 +306,21 @@ public static class DevCommands
 			// What this machine has of each train: where it is on its way, and where it stands.
 			return string.Join( ", ", Game.ActiveScene.GetAllComponents<Train>().Select( value =>
 				$"{value.GameObject.Name}:phase={value.Phase} at={value.WorldPosition.x:0},{value.WorldPosition.y:0}" ) );
+		}
+		if ( args[0] == "vehicles" )
+		{
+			// What this machine has of each vehicle: where it is and its gauge, and on the host who is in it and what is in its tank.
+			return string.Join( ", ", Game.ActiveScene.GetAllComponents<Vehicle>().Select( value => Networking.IsHost
+				? value.HostDescribe()
+				: $"{value.GameObject.Name}: at={value.WorldPosition.x:0},{value.WorldPosition.y:0},{value.WorldPosition.z:0} yaw={value.WorldRotation.Yaw():0} gauge={value.Gauge:0.##}" ) );
+		}
+		if ( args[0] == "tank" )
+		{
+			// tank|<vehicle>|<fuel>: on the host, fills or drains a vehicle's tank to that much.
+			if ( !Networking.IsHost ) return "refused: not the host";
+			if ( Game.ActiveScene.GetAllComponents<Vehicle>().FirstOrDefault( value => value.GameObject.Name == args[1] ) is not { } tanked ) return "no such vehicle";
+			tanked.HostSetFuel( double.Parse( args[2], Invariant ) );
+			return "set";
 		}
 		if ( args[0] == "hostid" ) return $"local={Connection.Local?.SteamId.ValueUnsigned} host={Connection.Host?.SteamId.ValueUnsigned} address={Connection.Local?.Address} name={Connection.Local?.DisplayName}";
 		if ( args[0] == "convar" ) return ConsoleSystem.GetValue( args[1] ) ?? "unset";
@@ -429,6 +468,7 @@ public static class DevCommands
 					if ( container is not null ) player.RequestAct( container, ((IVerbTarget)container).Verbs[0].Id );
 					else if ( Machine( args[1] ) is { } loaded ) player.RequestAct( loaded, VerbIds.MachineOpen );
 					else if ( Game.ActiveScene.GetAllComponents<Wagon>().FirstOrDefault( value => value.GameObject.Name == args[1] ) is { } wagon ) player.RequestAct( wagon, VerbIds.WagonOpen );
+					else if ( Game.ActiveScene.GetAllComponents<Bed>().FirstOrDefault( value => value.GameObject.Name == args[1] ) is { } bed ) player.RequestAct( bed, VerbIds.BedOpen );
 					else return "no such container";
 					return "sent open";
 				case "work":
@@ -440,6 +480,20 @@ public static class DevCommands
 				case "stopwork":
 					player.RequestStopWork();
 					return "sent stopwork";
+				case "sit":
+				case "refuel":
+					// sit|<vehicle>|drive or ride gets in, at the wheel or beside it; refuel|<vehicle> pours in the fuel in hand.
+					if ( Game.ActiveScene.GetAllComponents<Vehicle>().FirstOrDefault( value => value.GameObject.Name == args[1] ) is not { } vehicle ) return "no such vehicle";
+					player.RequestAct( vehicle, args[0] == "refuel" ? VerbIds.VehicleFuel : args.ElementAtOrDefault( 2 ) == "ride" ? VerbIds.VehicleRide : VerbIds.VehicleDrive );
+					return $"sent {args[0]}";
+				case "getout":
+					player.LeaveSeat();
+					return "sent getout";
+				case "drive":
+					// drive|<pedal>|<wheel>|<brake> works the controls, -1 to 1, left positive, brake 0 or 1, until drive|off.
+					player.DriveOverride = args[1] == "off" ? null
+						: (float.Parse( args[1], Invariant ), float.Parse( args[2], Invariant ), args.ElementAtOrDefault( 3 ) == "1");
+					return "driving";
 				case "make":
 				case "compare":
 					// make|<tool> works with the tool in hand; compare|<pile> looks hard at a pile, with a loupe.
@@ -598,6 +652,27 @@ public static class DevCommands
 					FileSystem.Data.CreateDirectory( "maps" );
 					FileSystem.Data.WriteAllBytes( "maps/plan.jpg", plan.ToJpg( 90 ) );
 					return $"saved {FileSystem.Data.GetFullPath( "maps/plan.jpg" )}";
+				case "viewshot":
+					// viewshot|<object>|<side>|<distance>|<height>|<looked at>|<height>|<pixels>: what an eye placed as
+					// camera places it sees, rendered by the engine and saved in the game's data as maps/view.jpg.
+					if ( Spot( args ) is not { } from || Middle( args[5] ) is not { } toward ) return "nothing named so";
+					var eyeObject = new GameObject( true, "View camera" ) { NetworkMode = NetworkMode.Never };
+					eyeObject.WorldPosition = from;
+					eyeObject.WorldRotation = Rotation.LookAt( toward.WithZ( toward.z + float.Parse( args[6], Invariant ) ) - from );
+					var viewing = eyeObject.AddComponent<CameraComponent>();
+					viewing.IsMainCamera = false;
+					viewing.FieldOfView = 70f;
+					var size = int.Parse( args[7] );
+					var view = new Bitmap( size, size * 2 / 3 );
+					viewing.RenderToBitmap( view, false );
+					eyeObject.Destroy();
+					FileSystem.Data.CreateDirectory( "maps" );
+					FileSystem.Data.WriteAllBytes( "maps/view.jpg", view.ToJpg( 90 ) );
+					return $"saved {FileSystem.Data.GetFullPath( "maps/view.jpg" )}";
+				case "renderers":
+					// renderers|<object>: each model drawn under something named, with its model, whether it loaded, and its bounds.
+					return Named( args[1] ) is not { } drawnObject ? "nothing named so" : string.Join( " ; ", drawnObject.Components.GetAll<ModelRenderer>( FindMode.EverythingInSelfAndDescendants ).Select( value =>
+						$"{value.GameObject.Name}: model={value.Model?.ResourcePath} error={value.Model?.IsError} local={value.Model?.Bounds} world={value.Bounds} scale={value.WorldScale}" ) );
 				case "offer":
 					// offer|<item>|<count> offers some of a pile to the nearest other character.
 					var gift = Pick( Carried( player.Inventory ), args[1] );
@@ -685,6 +760,7 @@ public static class DevCommands
 						$"fields=[{string.Join( ", ", player.Paper?.Paper.Fields.Select( pair => $"{pair.Key}={pair.Value}" ) ?? Enumerable.Empty<string>() )}] " +
 						$"stamps=[{string.Join( ", ", player.Paper?.Paper.Stamps.Select( value => $"{ItemDefinition.Find( value.Stamp )?.StampMark}@{value.AfterLine}" ) ?? Enumerable.Empty<string>() )}] " +
 						$"leaning='{player.LeaningOver?.Definition?.Title}' working='{player.WorkTitle}' " +
+						$"seated='{player.Seat?.Vehicle?.GameObject.Name}{(player.Seat is { Driver: true } ? ":wheel" : player.Seat is not null ? ":beside" : string.Empty)}' " +
 						$"sleepers={Game.ActiveScene.GetAllComponents<Sleeper>().Count( value => value.IsRevealed )} pos={player.WorldPosition} chat=[{string.Join( " / ", Chat.Lines.TakeLast( 4 ).Select( value => value.Text ) )}]";
 				default:
 					return $"unknown command '{args[0]}'";
@@ -719,6 +795,21 @@ public static class DevCommands
 		HexagonServices.Current?.Roster?.All.FirstOrDefault( value => value.Name == name && !value.IsDead ) is { } character
 			? Sleeper.Find( character.Id )?.Renderer ?? (Player.HostLoaded( character.Id ) as IEmbodiment)?.Renderer
 			: null;
+
+	/// <summary>The middle of a part of someone's body as the host has it, standing or limp: its model's hitbox on that bone.</summary>
+	private static Vector3? PartAt( string name, string boneName )
+	{
+		if ( Drawn( name ) is not { Model: { } model } drawn || model.Bones.GetBone( boneName ) is not { } named
+			|| !drawn.TryGetBoneTransform( named, out var bone ) ) return null;
+		var middle = model.HitboxSet.All.FirstOrDefault( value => value.Bone?.Name == named.Name )?.Shape switch
+		{
+			Capsule capsule => (capsule.CenterA + capsule.CenterB) / 2f,
+			Sphere sphere => sphere.Center,
+			BBox box => box.Center,
+			_ => Vector3.Zero
+		};
+		return bone.PointToWorld( middle );
+	}
 
 	/// <summary>The middle of something named, as its bounds have it.</summary>
 	private static Vector3? Middle( string name ) => Named( name )?.GetBounds().Center;

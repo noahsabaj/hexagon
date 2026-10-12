@@ -184,6 +184,15 @@ public sealed class WorldData
 	public Dictionary<Guid, MachineData> Machines { get; set; } = new();
 	public Dictionary<Guid, TrainData> Trains { get; set; } = new();
 	public Dictionary<Guid, SiteData> Sites { get; set; } = new();
+	public Dictionary<Guid, VehicleData> Vehicles { get; set; } = new();
+}
+
+/// <summary>What a truck keeps across a restart: where it was left, which way it faced, and what is in its tank.</summary>
+public sealed class VehicleData
+{
+	public float[]? Position { get; set; }
+	public float Yaw { get; set; }
+	public double Fuel { get; set; }
 }
 
 /// <summary>What a train remembers: whether staff are holding it, and when it leaves the station it stands at.</summary>

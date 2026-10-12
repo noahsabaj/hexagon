@@ -47,7 +47,8 @@ public sealed partial class Player
 
 	private RealTimeSince _sinceAttack;
 
-	private ItemStack? HostHeld => _character?.Equipped is { } id ? _character.Inventory.Items.FirstOrDefault( value => value.Id == id ) : null;
+	/// <summary>Host: what this character holds in hand.</summary>
+	internal ItemStack? HostHeld => _character?.Equipped is { } id ? _character.Inventory.Items.FirstOrDefault( value => value.Id == id ) : null;
 
 	/// <summary>Host: brings what everyone can see in line with the character's document.</summary>
 	private void HostSyncVitals()
